@@ -37,6 +37,22 @@ async function ensureDatabase() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS plaintext_password_demo (
+      id BIGSERIAL PRIMARY KEY,
+      account_name VARCHAR(120) NOT NULL UNIQUE,
+      password VARCHAR(255) NOT NULL,
+      warning TEXT NOT NULL DEFAULT 'School demonstration only — never store real passwords this way.'
+    )
+  `);
+  await pool.query(`
+    INSERT INTO plaintext_password_demo (account_name, password)
+    VALUES
+      ('dummy_student_1', 'Password123'),
+      ('dummy_student_2', 'facebook2026'),
+      ('dummy_student_3', 'qwerty123')
+    ON CONFLICT (account_name) DO NOTHING
+  `);
   databaseReady = true;
 }
 

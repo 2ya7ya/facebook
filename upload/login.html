@@ -7,25 +7,25 @@
   <style>
     *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
     html,body{margin:0;min-height:100%;background:#fff;color:#0b0b0b;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
-    button,input{font:inherit}.page{width:100%;max-width:480px;min-height:100svh;margin:auto;padding:48px 20px 34px;display:flex;flex-direction:column}
-    .back{align-self:flex-start;border:0;background:none;color:#1684e8;font-size:32px;line-height:1;padding:4px 0;cursor:pointer;visibility:hidden}
-    .language{text-align:center;color:#666;font-size:17px;margin:15px 0 31px}
-    .logo{width:74px;height:74px;margin:0 auto 47px;border-radius:50%;background:#1877f2;color:#fff;display:flex;align-items:flex-end;justify-content:center;font-family:Arial,sans-serif;font-size:65px;font-weight:700;line-height:65px;overflow:hidden}
+    button,input{font:inherit}.page{position:relative;width:100%;max-width:480px;min-height:100svh;margin:auto;padding:0 17px 30px;display:flex;flex-direction:column}
+    .back{position:absolute;top:24px;left:17px;border:0;background:none;color:#1684e8;font-size:31px;font-weight:400;line-height:1;padding:0;cursor:pointer;visibility:visible}
+    .language{text-align:center;color:#666;font-size:17px;margin:59px 0 28px}
+    .logo{width:70px;height:70px;margin:0 auto 43px;border-radius:50%;background:#1877f2;color:#fff;display:flex;align-items:flex-end;justify-content:center;font-family:Arial,sans-serif;font-size:62px;font-weight:700;line-height:62px;overflow:hidden}
     .logo span{transform:translateY(7px)}form{display:flex;flex-direction:column;gap:16px}
-    input{width:100%;height:58px;padding:0 20px;border:1px solid #c7c7c7;border-radius:29px;background:#fff;font-size:18px;outline:0}
+    input{width:100%;height:52px;padding:0 18px;border:1px solid #c7c7c7;border-radius:27px;background:#fff;font-size:18px;outline:0}
     input:focus{border:1.5px solid #1877f2}input::placeholder{color:#777;opacity:1}
-    .primary{height:56px;border:0;border-radius:28px;background:#0866e5;color:#fff;font-size:20px;font-weight:700;cursor:pointer}.primary:disabled{opacity:.55}
-    .forgot{border:0;background:none;margin:24px auto 33px;font-size:17px;cursor:pointer}.divider{height:1px;background:#ddd;width:100%;margin-bottom:29px}
-    .create{height:56px;border:1.5px solid #1684e8;border-radius:28px;background:#fff;color:#1684e8;font-size:18px;font-weight:700;cursor:pointer}
-    .meta{margin:auto auto 0;padding-top:54px;display:flex;align-items:center;justify-content:center;gap:9px;color:#666;font-size:18px;font-weight:600}
-    .meta-logo{font-family:Arial,sans-serif;color:#1098e8;font-size:31px;font-weight:700;letter-spacing:-8px;padding-right:7px;transform:rotate(90deg)}
+    .primary{height:51px;border:0;border-radius:27px;background:#0866e5;color:#fff;font-size:20px;font-weight:700;cursor:pointer}.primary:disabled{opacity:.55}
+    .forgot{border:0;background:none;margin:22px auto 31px;font-size:17px;cursor:pointer}.divider{height:1px;background:#ddd;width:100%;margin-bottom:26px}
+    .create{height:52px;border:1.5px solid #1684e8;border-radius:27px;background:#fff;color:#1684e8;font-size:18px;font-weight:700;cursor:pointer}
+    .meta{margin:61px auto 0;display:flex;align-items:center;justify-content:center;gap:9px;color:#666;font-size:18px;font-weight:600}
+    .meta-logo{font-family:Arial,sans-serif;color:#1098e8;font-size:36px;font-weight:500;line-height:20px}
     .error{min-height:20px;color:#d93025;font-size:14px;text-align:center;margin:-3px 12px 0}.screen[hidden]{display:none}
     .signup-title{text-align:center;font-size:24px;margin:18px 0 7px}.signup-copy{text-align:center;color:#65676b;font-size:15px;margin:0 20px 31px}
     .signup-logo{margin-bottom:18px}.signup-form{gap:13px}.signup-form .primary{margin-top:3px}
     .login-link{border:0;background:none;color:#0866e5;font-weight:650;margin:22px auto 0;cursor:pointer}
     .spinner{width:20px;height:20px;border:2px solid rgba(255,255,255,.5);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:inline-block;vertical-align:-4px}
     @keyframes spin{to{transform:rotate(360deg)}}
-    @media(max-height:700px){.page{padding-top:22px}.language{margin-top:4px;margin-bottom:20px}.logo{margin-bottom:28px}.meta{padding-top:34px}}
+    @media(max-height:700px){.language{margin-top:45px;margin-bottom:20px}.logo{margin-bottom:28px}.meta{margin-top:38px}}
   </style>
 </head>
 <body>
@@ -56,7 +56,7 @@
   </main>
   <script>
     const loginScreen=document.getElementById('loginScreen'),signupScreen=document.getElementById('signupScreen'),backButton=document.getElementById('backButton');
-    function show(screen){const signup=screen==='signup';loginScreen.hidden=signup;signupScreen.hidden=!signup;backButton.style.visibility=signup?'visible':'hidden';history.replaceState({screen},'',signup?'#create-account':'#login')}
+    function show(screen){const signup=screen==='signup';loginScreen.hidden=signup;signupScreen.hidden=!signup;backButton.style.visibility='visible';history.replaceState({screen},'',signup?'#create-account':'#login')}
     function setBusy(button,busy,label){button.disabled=busy;button.innerHTML=busy?'<span class="spinner" aria-label="Loading"></span>':label}
     async function submit(url,data,errorElement,button,label){errorElement.textContent='';setBusy(button,true,label);try{const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const result=await response.json().catch(()=>({}));if(!response.ok)throw new Error(result.error||'Something went wrong. Try again.');location.href=result.redirect||'/app'}catch(error){errorElement.textContent=error.message;setBusy(button,false,label)}}
     document.getElementById('showSignup').onclick=()=>show('signup');document.getElementById('showLogin').onclick=()=>show('login');backButton.onclick=()=>show('login');
