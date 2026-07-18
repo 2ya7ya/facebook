@@ -648,6 +648,9 @@
       const freshProfile = await api('/api/profile');
       profile = freshProfile;
       cacheProfile();
+      if (typeof window.__finishFacebookPrepaintProfile === 'function') {
+        window.__finishFacebookPrepaintProfile();
+      }
       applyName();
       applyPhotos();
       installPhotoControls();
