@@ -907,15 +907,22 @@
     const timelineFilmstrip = document.createElement('div');
     const timelineAudio = document.createElement('div');
     const timelinePlayhead = document.createElement('div');
+    const timelineSelection = document.createElement('div');
+    const trimStartHandle = document.createElement('button');
+    const trimEndHandle = document.createElement('button');
+    const trimDurationLabel = document.createElement('span');
     const timelineAdd = timeline.querySelector('.reel-timeline-add');
-    const pixelsPerSecond = 58;
+    const pixelsPerSecond = 82;
     let timelineDuration = 0;
     let timelineSyncing = false;
     let timelineBuildKey = '';
     let timelineAnimationFrame = 0;
+    let timelineVideoFrameCallback = 0;
+    let timelineLastTextUpdate = 0;
     let timelineDragging = false;
     let timelinePointerDown = false;
     let timelineSettleTimer = 0;
+    let timelineSelected = false;
     timelineScroll.className = 'reel-timeline-scroll';
     timelineContent.className = 'reel-timeline-content';
     timelineTicks.className = 'reel-timeline-ticks';
@@ -923,10 +930,20 @@
     timelineAudio.className = 'reel-timeline-audio';
     timelineAudio.innerHTML = '<span>♪&nbsp; Add sound</span>';
     timelinePlayhead.className = 'reel-timeline-playhead';
-    timelineContent.append(timelineTicks, timelineFilmstrip, timelineAudio);
-    if (timelineAdd) timelineContent.appendChild(timelineAdd);
+    timelineSelection.className = 'reel-timeline-selection';
+    trimStartHandle.className = 'reel-trim-handle reel-trim-start';
+    trimEndHandle.className = 'reel-trim-handle reel-trim-end';
+    trimStartHandle.type = trimEndHandle.type = 'button';
+    trimStartHandle.setAttribute('aria-label', 'Trim video start');
+    trimEndHandle.setAttribute('aria-label', 'Trim video end');
+    trimStartHandle.textContent = '‹';
+    trimEndHandle.textContent = '›';
+    trimDurationLabel.className = 'reel-trim-duration';
+    timelineSelection.append(trimStartHandle, trimDurationLabel, trimEndHandle);
+    timelineContent.append(timelineTicks, timelineFilmstrip, timelineAudio, timelineSelection);
     timelineScroll.appendChild(timelineContent);
     timeline.replaceChildren(timelineScroll, timelinePlayhead);
+    if (timelineAdd) timeline.appendChild(timelineAdd);
     const effectOrder = ['none', 'warm', 'cool', 'mono', 'vivid'];
     const stickers = ['', '✨', '❤️', '🔥', '😊'];
     const effectFilters = { none: '', warm: 'sepia(.22) hue-rotate(-8deg)', cool: 'hue-rotate(18deg) saturate(.9)', mono: 'grayscale(1)', vivid: 'saturate(1.45) contrast(1.08)' };
@@ -1007,6 +1024,58 @@
       value = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
       return String(Math.floor(value / 60)).padStart(2, '0') + ':' + String(value % 60).padStart(2, '0');
     }
+    function updateTrimSelection() {
+      if (!timelineDuration) return;
+      const start = Math.min(timelineDuration, Math.max(0, Number(editState.trimStart) || 0));
+      const end = Math.min(timelineDuration, Math.max(start + .1, Number(editState.trimEnd) || timelineDuration));
+      editState.trimStart = start;
+      editState.trimEnd = end;
+      timelineSelection.style.left = (start * pixelsPerSecond) + 'px';
+      timelineSelection.style.width = Math.max(2, (end - start) * pixelsPerSecond) + 'px';
+      trimDurationLabel.textContent = (end - start).toFixed(1).replace(/\.0$/, '') + 's';
+      timelineSelection.classList.toggle('is-active', timelineSelected);
+    }
+    function setTimelineSelected(selected) {
+      timelineSelected = Boolean(selected);
+      timeline.classList.toggle('is-selected', timelineSelected);
+      updateTrimSelection();
+    }
+    function installTrimHandle(handle, edge) {
+      handle.addEventListener('pointerdown', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        setTimelineSelected(true);
+        timelineDragging = true;
+        timelinePointerDown = true;
+        const startX = event.clientX;
+        const initialStart = editState.trimStart;
+        const initialEnd = editState.trimEnd || timelineDuration;
+        function move(moveEvent) {
+          moveEvent.preventDefault();
+          const delta = (moveEvent.clientX - startX) / pixelsPerSecond;
+          if (edge === 'start') editState.trimStart = Math.min(initialEnd - .1, Math.max(0, initialStart + delta));
+          else editState.trimEnd = Math.max(initialStart + .1, Math.min(timelineDuration, initialEnd + delta));
+          if (editVideo.currentTime < editState.trimStart) editVideo.currentTime = editState.trimStart;
+          if (editVideo.currentTime > editState.trimEnd) editVideo.currentTime = editState.trimEnd;
+          updateTrimSelection();
+        }
+        function finish() {
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', finish);
+          window.removeEventListener('pointercancel', finish);
+          timelinePointerDown = false;
+          scheduleTimelineDragFinish();
+        }
+        window.addEventListener('pointermove', move, { passive: false });
+        window.addEventListener('pointerup', finish, { once: true });
+        window.addEventListener('pointercancel', finish, { once: true });
+      }, { passive: false });
+    }
+    installTrimHandle(trimStartHandle, 'start');
+    installTrimHandle(trimEndHandle, 'end');
+    document.addEventListener('pointerdown', function (event) {
+      if (timelineSelected && !event.target.closest('.reel-timeline')) setTimelineSelected(false);
+    });
     function seekThumbnailVideo(video, time) {
       return new Promise(function (resolve) {
         if (Math.abs(video.currentTime - time) < .02) return resolve();
@@ -1038,8 +1107,8 @@
         tick.textContent = previewTime(second);
         timelineTicks.appendChild(tick);
       }
-      const frameCount = Math.min(18, Math.max(6, Math.ceil(duration / 1.5)));
-      const frameDuration = duration / frameCount;
+      const frameCount = Math.min(120, Math.max(1, Math.ceil(duration)));
+      const frameDuration = 1;
       const source = document.createElement('video');
       source.className = 'reel-thumbnail-source';
       source.muted = true;
@@ -1063,7 +1132,7 @@
       const context = canvas.getContext('2d');
       for (let index = 0; index < frameCount; index += 1) {
         if (timelineBuildKey !== buildKey) break;
-        const time = Math.min(duration - .01, index * frameDuration + frameDuration / 2);
+        const time = Math.min(duration - .01, index + .5);
         await seekThumbnailVideo(source, Math.max(0, time));
         const sourceRatio = source.videoWidth / source.videoHeight;
         const targetRatio = canvas.width / canvas.height;
@@ -1074,39 +1143,62 @@
         const image = document.createElement('img');
         image.alt = '';
         image.src = canvas.toDataURL('image/jpeg', .72);
-        image.style.left = (index * frameDuration * pixelsPerSecond) + 'px';
-        image.style.width = Math.max(1, frameDuration * pixelsPerSecond + 1) + 'px';
+        image.style.left = (index * pixelsPerSecond) + 'px';
+        image.style.width = Math.max(1, Math.min(1, duration - index) * pixelsPerSecond + 1) + 'px';
         timelineFilmstrip.appendChild(image);
       }
       source.remove();
     }
     function setupTimeline(duration) {
       timelineDuration = Number.isFinite(duration) ? duration : 0;
+      if (!editState.trimEnd || editState.trimEnd > timelineDuration) editState.trimEnd = timelineDuration;
       editTime.textContent = previewTime(editVideo.currentTime) + '/' + previewTime(timelineDuration);
+      updateTrimSelection();
       buildTimelineThumbnails(timelineDuration).catch(function (error) { console.error(error); });
     }
     editVideo.addEventListener('loadedmetadata', function () { setupTimeline(editVideo.duration); });
-    function syncEditPlayback() {
+    function syncEditPlayback(forceText) {
       if (editState.trimEnd > editState.trimStart && editVideo.currentTime >= editState.trimEnd) editVideo.currentTime = editState.trimStart;
-      editTime.textContent = previewTime(editVideo.currentTime) + '/' + previewTime(editVideo.duration);
+      const now = performance.now();
+      if (forceText || now - timelineLastTextUpdate > 90) {
+        timelineLastTextUpdate = now;
+        editTime.textContent = previewTime(editVideo.currentTime) + '/' + previewTime(editVideo.duration);
+      }
       if (timelineDragging) return;
       timelineSyncing = true;
       timelineScroll.scrollLeft = editVideo.currentTime * pixelsPerSecond;
       requestAnimationFrame(function () { timelineSyncing = false; });
     }
-    function followEditPlayback() {
-      syncEditPlayback();
-      if (!editVideo.paused) timelineAnimationFrame = requestAnimationFrame(followEditPlayback);
+    function cancelTimelineFollow() {
+      cancelAnimationFrame(timelineAnimationFrame);
+      if (timelineVideoFrameCallback && typeof editVideo.cancelVideoFrameCallback === 'function') editVideo.cancelVideoFrameCallback(timelineVideoFrameCallback);
+      timelineAnimationFrame = 0;
+      timelineVideoFrameCallback = 0;
     }
-    editVideo.addEventListener('timeupdate', syncEditPlayback);
+    function scheduleTimelineFollow() {
+      if (editVideo.paused) return;
+      if (typeof editVideo.requestVideoFrameCallback === 'function') {
+        timelineVideoFrameCallback = editVideo.requestVideoFrameCallback(function () {
+          syncEditPlayback(false);
+          scheduleTimelineFollow();
+        });
+      } else {
+        timelineAnimationFrame = requestAnimationFrame(function () {
+          syncEditPlayback(false);
+          scheduleTimelineFollow();
+        });
+      }
+    }
+    editVideo.addEventListener('timeupdate', function () { if (editVideo.paused) syncEditPlayback(true); });
     editVideo.addEventListener('play', function () {
       if (editPlayButton) editPlayButton.textContent = '❚❚';
-      cancelAnimationFrame(timelineAnimationFrame);
-      timelineAnimationFrame = requestAnimationFrame(followEditPlayback);
+      cancelTimelineFollow();
+      scheduleTimelineFollow();
     });
     editVideo.addEventListener('pause', function () {
       if (editPlayButton) editPlayButton.textContent = '▶';
-      cancelAnimationFrame(timelineAnimationFrame);
+      cancelTimelineFollow();
+      syncEditPlayback(true);
     });
     function finishTimelineDrag() {
       if (timelinePointerDown) return;
@@ -1117,6 +1209,7 @@
       timelineSettleTimer = window.setTimeout(finishTimelineDrag, 160);
     }
     function beginTimelineDrag() {
+      setTimelineSelected(true);
       timelinePointerDown = true;
       window.clearTimeout(timelineSettleTimer);
       timelineDragging = true;
@@ -1188,10 +1281,11 @@
       flow.classList.remove('is-video-loading');
       document.body.classList.remove('reel-create-open');
       videoLoadGeneration += 1;
-      cancelAnimationFrame(timelineAnimationFrame);
+      cancelTimelineFollow();
       window.clearTimeout(timelineSettleTimer);
       timelineDragging = false;
       timelinePointerDown = false;
+      setTimelineSelected(false);
       timelineBuildKey = '';
       timelineDuration = 0;
       timelineScroll.scrollLeft = 0;
