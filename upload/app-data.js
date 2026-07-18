@@ -965,7 +965,7 @@
     // Attach the mute button to the top-level fixed reel flow, not to any
     // timeline/editor container. Its screen position is calculated from the
     // visible timeline viewport, so translated timeline content cannot move it.
-    flow.appendChild(timelineMuteButton);
+    document.body.appendChild(timelineMuteButton);
     function positionTimelineMuteButton() {
       const timelineRect = timeline.getBoundingClientRect();
       const iconWidth = 44;
@@ -975,13 +975,17 @@
       timelineMuteButton.style.top = top + 'px';
       timelineMuteButton.style.width = iconWidth + 'px';
     }
+    function syncTimelineMuteVisibility() {
+      const open = flow.classList.contains('is-open');
+      timelineMuteButton.hidden = !open;
+      if (open) requestAnimationFrame(positionTimelineMuteButton);
+    }
     positionTimelineMuteButton();
+    syncTimelineMuteVisibility();
     window.addEventListener('resize', positionTimelineMuteButton, { passive: true });
     window.addEventListener('orientationchange', positionTimelineMuteButton, { passive: true });
-    if (window.ResizeObserver) {
-      const timelineMuteObserver = new ResizeObserver(positionTimelineMuteButton);
-      timelineMuteObserver.observe(timeline);
-    }
+    const timelineFlowObserver = new MutationObserver(syncTimelineMuteVisibility);
+    timelineFlowObserver.observe(flow, { attributes: true, attributeFilter: ['class'] });
     function syncTimelineMuteButton() {
       const muted = Boolean(editVideo.muted);
       timelineMuteButton.setAttribute('aria-pressed', muted ? 'true' : 'false');
