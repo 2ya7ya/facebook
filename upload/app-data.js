@@ -906,6 +906,7 @@
     const timelineTicks = document.createElement('div');
     const timelineFilmstrip = document.createElement('div');
     const timelineAudio = document.createElement('div');
+    const timelineSoundLabel = document.createElement('div');
     const timelinePlayhead = document.createElement('div');
     const timelineSelection = document.createElement('div');
     const trimStartHandle = document.createElement('button');
@@ -929,7 +930,8 @@
     timelineTicks.className = 'reel-timeline-ticks';
     timelineFilmstrip.className = 'reel-timeline-filmstrip';
     timelineAudio.className = 'reel-timeline-audio';
-    timelineAudio.innerHTML = '<span>♪&nbsp; Add sound</span>';
+    timelineSoundLabel.className = 'reel-timeline-sound-label';
+    timelineSoundLabel.innerHTML = '<span>♪&nbsp; Add sound</span>';
     timelinePlayhead.className = 'reel-timeline-playhead';
     timelineSelection.className = 'reel-timeline-selection';
     trimStartHandle.className = 'reel-trim-handle reel-trim-start';
@@ -943,7 +945,7 @@
     timelineSelection.append(trimStartHandle, trimDurationLabel, trimEndHandle);
     timelineContent.append(timelineTicks, timelineFilmstrip, timelineAudio, timelineSelection);
     timelineScroll.appendChild(timelineContent);
-    timeline.replaceChildren(timelineScroll, timelinePlayhead);
+    timeline.replaceChildren(timelineScroll, timelinePlayhead, timelineSoundLabel);
     if (timelineAdd) timeline.appendChild(timelineAdd);
     const effectOrder = ['none', 'warm', 'cool', 'mono', 'vivid'];
     const stickers = ['', '✨', '❤️', '🔥', '😊'];
