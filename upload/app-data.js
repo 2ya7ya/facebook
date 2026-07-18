@@ -938,7 +938,12 @@
     timelineMuteButton.type = 'button';
     timelineMuteButton.setAttribute('aria-label', 'Mute video');
     timelineMuteButton.setAttribute('aria-pressed', 'false');
-    timelineMuteButton.innerHTML = '<img src="/reel-volume-on.png" alt="">';
+    timelineMuteButton.innerHTML = '';
+    function muteIconSvg(muted) {
+      return muted
+        ? '<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 12h5l7-6v20l-7-6H5z"/><path d="M21 11l7 10M28 11l-7 10" class="mute-cross"/></svg>'
+        : '<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 12h5l7-6v20l-7-6H5z"/><path d="M21 11c2 2 2 8 0 10M24 8c5 5 5 11 0 16" class="sound-waves"/></svg>';
+    }
     timelineSelection.className = 'reel-timeline-selection';
     trimStartHandle.className = 'reel-trim-handle reel-trim-start';
     trimEndHandle.className = 'reel-trim-handle reel-trim-end';
@@ -951,23 +956,26 @@
     timelineSelection.append(trimStartHandle, trimDurationLabel, trimEndHandle);
     timelineContent.append(timelineTicks, timelineFilmstrip, timelineAudio, timelineSelection);
     timelineScroll.appendChild(timelineContent);
-    timeline.replaceChildren(timelineScroll, timelinePlayhead, timelineSoundLabel, timelineMuteButton);
+    timeline.replaceChildren(timelineScroll, timelinePlayhead, timelineSoundLabel);
     if (timelineAdd) timeline.appendChild(timelineAdd);
+    flow.querySelector('.reel-edit-controls').appendChild(timelineMuteButton);
     function syncTimelineMuteButton() {
       const muted = Boolean(editVideo.muted);
       timelineMuteButton.setAttribute('aria-pressed', muted ? 'true' : 'false');
       timelineMuteButton.setAttribute('aria-label', muted ? 'Unmute video' : 'Mute video');
-      const image = timelineMuteButton.querySelector('img');
-      if (image) image.src = muted ? '/reel-volume-muted.png' : '/reel-volume-on.png';
+      timelineMuteButton.innerHTML = muteIconSvg(muted);
     }
-    timelineMuteButton.addEventListener('pointerdown', function (event) {
-      event.stopPropagation();
+    ['pointerdown', 'pointerup', 'touchstart', 'touchend'].forEach(function (type) {
+      timelineMuteButton.addEventListener(type, function (event) {
+        event.stopPropagation();
+      }, { passive: type.startsWith('touch') });
     });
     timelineMuteButton.addEventListener('click', function (event) {
       event.preventDefault();
       event.stopPropagation();
-      const nextMuted = !editVideo.muted;
-      previewVideos.forEach(function (video) { video.muted = nextMuted; });
+      const stayedPaused = editVideo.paused;
+      editVideo.muted = !editVideo.muted;
+      if (stayedPaused && !editVideo.paused) editVideo.pause();
       syncTimelineMuteButton();
     });
     syncTimelineMuteButton();
