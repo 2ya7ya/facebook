@@ -3,6 +3,9 @@
 
   const fallbackAvatar = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="#e4e6eb"/><circle cx="100" cy="76" r="40" fill="#7b8087"/><path d="M30 200c5-54 36-80 70-80s65 26 70 80" fill="#7b8087"/></svg>');
   let profile = null;
+  const wiredEditDocuments = new WeakSet();
+  const wiredEditFrames = new WeakSet();
+  let photoSaveTimer = 0;
 
   async function api(url, options) {
     const response = await fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' } }, options || {}));
@@ -77,51 +80,196 @@
     image.src = objectUrl;
   }
 
-  function installPhotoControls() {
-    const profileInput = document.createElement('input');
-    const coverInput = document.createElement('input');
-    profileInput.type = coverInput.type = 'file';
-    profileInput.accept = coverInput.accept = 'image/*';
-    profileInput.hidden = coverInput.hidden = true;
-    document.body.append(profileInput, coverInput);
+  function editContext() {
+    try {
+      const outerFrame = document.getElementById('mergedEditProfileFrame');
+      const shellDocument = outerFrame && outerFrame.contentDocument;
+      const pageFrame = shellDocument && shellDocument.getElementById('appFrame');
+      const pageDocument = pageFrame && pageFrame.contentDocument;
+      if (!outerFrame || !shellDocument || !pageFrame || !pageDocument || !pageDocument.body) return null;
+      return { outerFrame: outerFrame, shellDocument: shellDocument, pageFrame: pageFrame, pageDocument: pageDocument, pageWindow: pageFrame.contentWindow };
+    } catch (_error) {
+      return null;
+    }
+  }
 
+  function putStoredPhoto(key, value) {
+    try {
+      if (value) localStorage.setItem(key, value);
+      else localStorage.removeItem(key);
+    } catch (_error) {}
+  }
+
+  function hydrateEditPhotos(context) {
+    if (!profile || !context) return;
+    putStoredPhoto('profilePhoto', profile.profilePhoto || '');
+    putStoredPhoto('pendingProfilePhoto', profile.profilePhoto || '');
+    putStoredPhoto('coverPhoto', profile.coverPhoto || '');
+
+    const doc = context.pageDocument;
+    const profileContainer = doc.getElementById('profilePhotoContainer');
+    if (profileContainer && profile.profilePhoto) {
+      let image = Array.from(profileContainer.querySelectorAll('img')).find(function (candidate) {
+        return candidate.id !== 'profilePhotoFrameOverlay' && candidate.id !== 'profileSelectedCameraIcon';
+      });
+      if (!image) {
+        image = doc.createElement('img');
+        image.alt = 'Profile picture';
+        profileContainer.insertBefore(image, profileContainer.firstChild);
+      }
+      image.src = profile.profilePhoto;
+      image.style.display = 'block';
+      const overlay = doc.getElementById('profileOverlay');
+      if (overlay) overlay.classList.add('hidden');
+      profileContainer.classList.add('has-selected-profile-photo');
+    }
+
+    const coverImage = doc.getElementById('coverPhoto');
+    if (coverImage && profile.coverPhoto) {
+      coverImage.src = profile.coverPhoto;
+      coverImage.style.display = 'block';
+      const gradient = doc.getElementById('coverGradient') || doc.querySelector('.cover-placeholder');
+      if (gradient) gradient.style.display = 'none';
+    }
+  }
+
+  async function persistEditPhotos() {
+    if (!profile) return;
+    let profilePhoto = '';
+    let coverPhoto = '';
+    try {
+      profilePhoto = localStorage.getItem('pendingProfilePhoto') || localStorage.getItem('profilePhoto') || '';
+      coverPhoto = localStorage.getItem('coverPhoto') || '';
+    } catch (_error) {}
+
+    const changes = {};
+    if (/^data:image\//.test(profilePhoto) && profilePhoto !== profile.profilePhoto) changes.profilePhoto = profilePhoto;
+    if (/^data:image\//.test(coverPhoto) && coverPhoto !== profile.coverPhoto) changes.coverPhoto = coverPhoto;
+    if (!Object.keys(changes).length) return;
+
+    try {
+      const result = await api('/api/profile', { method: 'PUT', body: JSON.stringify(changes) });
+      profile = Object.assign(profile, result);
+      putStoredPhoto('profilePhoto', profile.profilePhoto || '');
+      putStoredPhoto('pendingProfilePhoto', profile.profilePhoto || '');
+      putStoredPhoto('coverPhoto', profile.coverPhoto || '');
+      applyPhotos();
+      message(changes.profilePhoto ? 'Profile picture saved' : 'Cover photo saved');
+    } catch (error) {
+      message(error.message);
+    }
+  }
+
+  function schedulePhotoSave(delay) {
+    clearTimeout(photoSaveTimer);
+    photoSaveTimer = setTimeout(persistEditPhotos, delay || 250);
+  }
+
+  function wireEditDocument(context) {
+    if (!context || wiredEditDocuments.has(context.pageDocument)) return;
+    wiredEditDocuments.add(context.pageDocument);
+    hydrateEditPhotos(context);
+    context.pageDocument.addEventListener('click', function (event) {
+      const save = event.target.closest && event.target.closest('#profilePreviewScreen .preview-save-btn, #coverPicturePreviewScreen .cover-preview-save, .profile-preview-screen .preview-save-btn, .cover-picture-preview-screen .cover-preview-save');
+      if (save) {
+        schedulePhotoSave(180);
+        setTimeout(persistEditPhotos, 700);
+      }
+    }, true);
+  }
+
+  function connectEditFrame() {
+    const outerFrame = document.getElementById('mergedEditProfileFrame');
+    if (!outerFrame) return;
+
+    function connectInner() {
+      const context = editContext();
+      if (!context) return;
+      if (!wiredEditFrames.has(context.pageFrame)) {
+        wiredEditFrames.add(context.pageFrame);
+        context.pageFrame.addEventListener('load', function () {
+          const next = editContext();
+          if (next) wireEditDocument(next);
+        });
+      }
+      wireEditDocument(context);
+    }
+
+    outerFrame.addEventListener('load', function () {
+      connectInner();
+      setTimeout(connectInner, 80);
+    });
+    connectInner();
+
+    const layer = document.getElementById('mergedEditProfileLayer');
+    if (layer) {
+      new MutationObserver(function () {
+        if (!layer.classList.contains('is-open')) schedulePhotoSave(120);
+      }).observe(layer, { attributes: true, attributeFilter: ['class', 'aria-hidden'] });
+    }
+    window.addEventListener('message', function (event) {
+      if (event.data && event.data.type === 'closeMergedEditProfile') schedulePhotoSave(120);
+    });
+  }
+
+  function openEditPhotoPicker(kind) {
+    const trigger = document.getElementById('openMergedEditProfile');
+    if (trigger) trigger.click();
+
+    let attempt = 0;
+    (function openWhenReady() {
+      const context = editContext();
+      const input = context && context.pageDocument.getElementById(kind === 'cover' ? 'coverInput' : 'profileInput');
+      if (context && input) {
+        hydrateEditPhotos(context);
+        wireEditDocument(context);
+        input.click();
+        return;
+      }
+      attempt += 1;
+      if (attempt < 40) setTimeout(openWhenReady, 75);
+      else message('Could not open the picture editor. Please try again.');
+    })();
+  }
+
+  function installPhotoControls() {
+    connectEditFrame();
     const avatarButton = document.querySelector('#profile .avatar-container');
     const coverButton = document.querySelector('#profile .cover-camera-btn');
+    const coverSurface = document.querySelector('#profile > .cover');
+
     if (avatarButton) {
       avatarButton.style.cursor = 'pointer';
       avatarButton.setAttribute('role', 'button');
       avatarButton.setAttribute('aria-label', 'Change profile picture');
-      avatarButton.addEventListener('click', function () { profileInput.click(); });
+      avatarButton.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        openEditPhotoPicker('profile');
+      }, true);
     }
     if (coverButton) {
       coverButton.style.cursor = 'pointer';
       coverButton.setAttribute('role', 'button');
       coverButton.setAttribute('aria-label', 'Change cover photo');
-      coverButton.addEventListener('click', function () { coverInput.click(); });
+      coverButton.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        openEditPhotoPicker('cover');
+      }, true);
     }
-
-    profileInput.addEventListener('change', function () {
-      readImage(profileInput.files && profileInput.files[0], async function (image) {
-        try {
-          const result = await api('/api/profile', { method: 'PUT', body: JSON.stringify({ profilePhoto: image }) });
-          profile.profilePhoto = result.profilePhoto;
-          applyPhotos();
-          message('Profile picture saved');
-        } catch (error) { message(error.message); }
-        profileInput.value = '';
+    if (coverSurface) {
+      coverSurface.style.cursor = 'pointer';
+      coverSurface.setAttribute('role', 'button');
+      coverSurface.setAttribute('aria-label', 'Change cover photo');
+      coverSurface.addEventListener('click', function (event) {
+        if (event.target.closest && event.target.closest('.cover-camera-btn')) return;
+        event.preventDefault();
+        openEditPhotoPicker('cover');
       });
-    });
-    coverInput.addEventListener('change', function () {
-      readImage(coverInput.files && coverInput.files[0], async function (image) {
-        try {
-          const result = await api('/api/profile', { method: 'PUT', body: JSON.stringify({ coverPhoto: image }) });
-          profile.coverPhoto = result.coverPhoto;
-          applyPhotos();
-          message('Cover photo saved');
-        } catch (error) { message(error.message); }
-        coverInput.value = '';
-      });
-    });
+    }
   }
 
   function postArticle(post) {
