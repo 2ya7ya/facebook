@@ -1044,6 +1044,8 @@
     function setTimelineSelected(selected) {
       timelineSelected = Boolean(selected);
       timeline.classList.toggle('is-selected', timelineSelected);
+      flow.classList.toggle('is-timeline-selected', timelineSelected);
+      editTime.setAttribute('aria-hidden', timelineSelected ? 'false' : 'true');
       updateTrimSelection();
     }
     function installTrimHandle(handle, edge) {
@@ -1082,8 +1084,10 @@
     installTrimHandle(trimStartHandle, 'start');
     installTrimHandle(trimEndHandle, 'end');
     document.addEventListener('pointerdown', function (event) {
-      if (timelineSelected && !event.target.closest('.reel-timeline')) setTimelineSelected(false);
-    });
+      if (!timelineSelected) return;
+      if (event.target.closest('.reel-timeline-scroll, .reel-trim-handle')) return;
+      setTimelineSelected(false);
+    }, true);
     function seekThumbnailVideo(video, time) {
       return new Promise(function (resolve) {
         if (Math.abs(video.currentTime - time) < .02) return resolve();
