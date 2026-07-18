@@ -1099,6 +1099,9 @@
       // Playing or pausing the preview must not close the active trim controls.
       if (event.target.closest('[data-reel-flow-action="toggle-edit-play"]')) return;
       if (event.target.closest('.reel-trim-handle')) return;
+      // The timeline surface handles its own tap-vs-drag decision. A drag on
+      // the black area must remain available even though a plain tap closes it.
+      if (event.target.closest('.reel-timeline-scroll')) return;
       if (isInsideVisibleTimeline(event.clientX, event.clientY)) return;
       setTimelineSelected(false);
     }, true);
@@ -1254,6 +1257,8 @@
     let timelineVelocity = 0;
     let timelineInertiaFrame = 0;
     let timelineInertiaTime = 0;
+    let timelinePointerStartedVisible = false;
+    let timelinePointerMoved = false;
 
     function cancelTimelineInertia() {
       if (timelineInertiaFrame) cancelAnimationFrame(timelineInertiaFrame);
@@ -1312,15 +1317,11 @@
 
     function beginTimelineDrag(event) {
       if (event.target.closest('.reel-trim-handle')) return;
-      // The scroll layer covers the whole controls area; only the visible
-      // timeline rows should activate dragging/selection.
-      if (!isInsideVisibleTimeline(event.clientX, event.clientY)) {
-        cancelTimelineInertia();
-        setTimelineSelected(false);
-        return;
-      }
+      if (event.target.closest('.reel-timeline-add')) return;
       cancelTimelineInertia();
-      setTimelineSelected(true);
+      timelinePointerStartedVisible = isInsideVisibleTimeline(event.clientX, event.clientY);
+      timelinePointerMoved = false;
+      if (timelinePointerStartedVisible) setTimelineSelected(true);
       timelinePointerDown = true;
       window.clearTimeout(timelineSettleTimer);
       timelineDragging = true;
@@ -1338,6 +1339,7 @@
       if (!timelinePointerDown || event.target.closest('.reel-trim-handle')) return;
       event.preventDefault();
       const now = performance.now();
+      if (Math.abs(event.clientX - timelineDragStartX) >= 5) timelinePointerMoved = true;
       const elapsed = Math.max(1, now - timelineLastPointerAt);
       const pointerDelta = timelineLastPointerX - event.clientX;
       const measuredVelocity = (pointerDelta / pixelsPerSecond) / elapsed;
@@ -1353,6 +1355,14 @@
       timelinePointerDown = false;
       if (cancelled) {
         cancelTimelineInertia();
+        scheduleTimelineDragFinish();
+        return;
+      }
+      // A simple tap in the black area below/beside the clips closes the trim
+      // controls. The same area remains a full drag surface once movement is detected.
+      if (!timelinePointerStartedVisible && !timelinePointerMoved) {
+        cancelTimelineInertia();
+        setTimelineSelected(false);
         scheduleTimelineDragFinish();
         return;
       }
