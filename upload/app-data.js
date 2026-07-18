@@ -913,6 +913,10 @@
     let timelineSyncing = false;
     let timelineBuildKey = '';
     let timelineAnimationFrame = 0;
+    let timelineDragging = false;
+    let timelinePointerDown = false;
+    let timelineResumeAfterDrag = false;
+    let timelineSettleTimer = 0;
     timelineScroll.className = 'reel-timeline-scroll';
     timelineContent.className = 'reel-timeline-content';
     timelineTicks.className = 'reel-timeline-ticks';
@@ -1086,6 +1090,7 @@
     function syncEditPlayback() {
       if (editState.trimEnd > editState.trimStart && editVideo.currentTime >= editState.trimEnd) editVideo.currentTime = editState.trimStart;
       editTime.textContent = previewTime(editVideo.currentTime) + '/' + previewTime(editVideo.duration);
+      if (timelineDragging) return;
       timelineSyncing = true;
       timelineScroll.scrollLeft = editVideo.currentTime * pixelsPerSecond;
       requestAnimationFrame(function () { timelineSyncing = false; });
@@ -1104,11 +1109,41 @@
       if (editPlayButton) editPlayButton.textContent = '▶';
       cancelAnimationFrame(timelineAnimationFrame);
     });
+    function finishTimelineDrag() {
+      if (timelinePointerDown) return;
+      timelineDragging = false;
+      if (timelineResumeAfterDrag) {
+        timelineResumeAfterDrag = false;
+        editVideo.play().catch(function () {});
+      }
+    }
+    function scheduleTimelineDragFinish() {
+      window.clearTimeout(timelineSettleTimer);
+      timelineSettleTimer = window.setTimeout(finishTimelineDrag, 160);
+    }
+    function beginTimelineDrag() {
+      timelinePointerDown = true;
+      window.clearTimeout(timelineSettleTimer);
+      if (!timelineDragging) timelineResumeAfterDrag = !editVideo.paused;
+      timelineDragging = true;
+      timelineSyncing = false;
+      cancelAnimationFrame(timelineAnimationFrame);
+      if (!editVideo.paused) editVideo.pause();
+    }
+    timelineScroll.addEventListener('pointerdown', beginTimelineDrag, { passive: true });
+    window.addEventListener('pointerup', function () { if (!timelinePointerDown) return; timelinePointerDown = false; scheduleTimelineDragFinish(); }, { passive: true });
+    window.addEventListener('pointercancel', function () { if (!timelinePointerDown) return; timelinePointerDown = false; scheduleTimelineDragFinish(); }, { passive: true });
     timelineScroll.addEventListener('scroll', function () {
-      if (timelineSyncing || !timelineDuration) return;
+      if ((timelineSyncing && !timelineDragging) || !timelineDuration) return;
+      if (!timelineDragging) {
+        timelineResumeAfterDrag = !editVideo.paused;
+        timelineDragging = true;
+        if (!editVideo.paused) editVideo.pause();
+      }
       const nextTime = Math.min(timelineDuration, Math.max(0, timelineScroll.scrollLeft / pixelsPerSecond));
       if (Math.abs(editVideo.currentTime - nextTime) > .025) editVideo.currentTime = nextTime;
       editTime.textContent = previewTime(nextTime) + '/' + previewTime(timelineDuration);
+      if (!timelinePointerDown) scheduleTimelineDragFinish();
     }, { passive: true });
     function loadVisibleVideo(video) {
       if (!selectedVideoData) return;
@@ -1164,6 +1199,10 @@
       document.body.classList.remove('reel-create-open');
       videoLoadGeneration += 1;
       cancelAnimationFrame(timelineAnimationFrame);
+      window.clearTimeout(timelineSettleTimer);
+      timelineDragging = false;
+      timelinePointerDown = false;
+      timelineResumeAfterDrag = false;
       timelineBuildKey = '';
       timelineDuration = 0;
       timelineScroll.scrollLeft = 0;
