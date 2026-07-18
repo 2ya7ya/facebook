@@ -3,6 +3,7 @@
 
   const fallbackAvatar = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="#e4e6eb"/><circle cx="100" cy="76" r="40" fill="#7b8087"/><path d="M30 200c5-54 36-80 70-80s65 26 70 80" fill="#7b8087"/></svg>');
   const profileCacheKey = 'facebookProfileCacheV2';
+  const storyPhotoCacheKey = 'facebookCreateStoryPhotoCacheV1';
   const pageStateKey = 'facebookActivePageV1';
   const supportedPages = new Set(['home', 'reels', 'friends', 'marketplace', 'notifications', 'profile']);
   let profile = null;
@@ -160,6 +161,17 @@
     const target = document.querySelector('.app-page[data-page-content="home"] .fb-create-story .fb-story-photo');
     if (!target || !source) return;
     const request = ++storyPhotoRequest;
+    function showStoryPhoto(value) {
+      target.src = value;
+      if (window.__facebookPrepaintProfile) {
+        window.__facebookPrepaintProfile.storyPhoto = value;
+        window.__facebookPrepaintProfile.storyPhotoReady = true;
+      }
+      target.classList.remove('fb-prepaint-story-crop');
+      try {
+        if (/^data:image\//.test(value)) localStorage.setItem(storyPhotoCacheKey, value);
+      } catch (_error) {}
+    }
     const image = new Image();
     image.onload = function () {
       if (request !== storyPhotoRequest) return;
@@ -182,7 +194,7 @@
           return probeContext.getImageData(point[0], point[1], 1, 1).data[3] < 32;
         });
         if (!hasTransparentCorners) {
-          target.src = source;
+          showStoryPhoto(source);
           return;
         }
         const side = (Math.min(width, height) / Math.SQRT2) * 0.98;
@@ -195,13 +207,13 @@
         output.getContext('2d', { alpha: false }).drawImage(
           image, sourceX, sourceY, side, side, 0, 0, outputSize, outputSize
         );
-        target.src = output.toDataURL('image/jpeg', 0.9);
+        showStoryPhoto(output.toDataURL('image/jpeg', 0.9));
       } catch (_error) {
-        target.src = source;
+        showStoryPhoto(source);
       }
     };
     image.onerror = function () {
-      if (request === storyPhotoRequest) target.src = source;
+      if (request === storyPhotoRequest) showStoryPhoto(source);
     };
     image.src = source;
   }
