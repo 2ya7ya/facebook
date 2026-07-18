@@ -635,7 +635,10 @@
       }
       container.replaceChildren.apply(container, data.posts.map(postArticle));
       const count = document.querySelector('.profileSecondaryStatsV125 strong');
-      if (count) count.textContent = String(data.posts.filter(function (post) { return post.userId === profile.id; }).length);
+      const ownPostCount = data.posts.filter(function (post) { return post.userId === profile.id; }).length;
+      if (count) count.textContent = String(ownPostCount);
+      try { localStorage.setItem('facebookProfilePostCountV1', String(ownPostCount)); } catch (_error) {}
+      document.body.dataset.postCountReady = 'true';
     } catch (error) {
       console.error(error);
     }
