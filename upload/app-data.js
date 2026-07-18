@@ -10,6 +10,8 @@
   const wiredEditFrames = new WeakSet();
   let photoSaveTimer = 0;
   let frameSaveTimer = 0;
+  let composerMode = 'post';
+  let currentReel = null;
 
   function readCachedProfile() {
     try {
@@ -56,7 +58,17 @@
       '.fb-create-story::after{display:none!important}',
       'body .fb-create-story.fb-story-card .fb-story-photo[data-home-avatar]{position:absolute!important;inset:auto 0 auto 0!important;top:0!important;bottom:auto!important;width:100%!important;height:70%!important;max-height:70%!important;min-height:0!important;object-fit:cover!important;object-position:center!important;border-radius:0!important;clip-path:none!important;transform:none!important}',
       'body .fb-create-story.fb-story-card .fb-story-plus{display:grid!important;visibility:visible!important;opacity:1!important;position:absolute!important;z-index:50!important;left:50%!important;top:70%!important;transform:translate(-50%,-50%)!important;width:40px!important;height:40px!important;border:4px solid #fff!important;border-radius:50%!important;background:#0866ff!important;color:#fff!important;place-items:center!important;font-size:30px!important;line-height:1!important}',
-      'body .fb-create-story.fb-story-card .fb-story-label{display:block!important;visibility:visible!important;opacity:1!important;color:#050505!important;text-shadow:none!important;text-align:center!important;left:4px!important;right:4px!important;bottom:10px!important}'
+      'body .fb-create-story.fb-story-card .fb-story-label{display:block!important;visibility:visible!important;opacity:1!important;color:#050505!important;text-shadow:none!important;text-align:center!important;left:4px!important;right:4px!important;bottom:10px!important}',
+      '.fb-stored-comments{padding:0 14px;background:#fff}',
+      '.fb-stored-comment{padding:7px 11px;margin:5px 0;border-radius:14px;background:#f0f2f5;font-size:14px;line-height:19px}',
+      '.fb-stored-comment strong{display:block;font-size:13px}',
+      '.fb-stored-comment-form{display:none;gap:8px;padding:9px 14px 12px;border-top:1px solid #f0f2f5;background:#fff}',
+      '.fb-stored-comment-form.is-open{display:flex}',
+      '.fb-stored-comment-form input{height:38px;flex:1;border:0;border-radius:20px;background:#f0f2f5;padding:0 14px;font-size:15px;outline:none}',
+      '.fb-stored-comment-form button{border:0;background:transparent;color:#0866ff;font-weight:700}',
+      '.reels-avatar img{width:100%;height:100%;object-fit:cover;display:block}',
+      '.reels-comment-entry{padding:8px 10px;margin-bottom:7px;border-radius:12px;background:#f0f2f5;color:#1c1e21;line-height:19px}',
+      '.reels-comment-entry strong{display:block;font-size:13px}'
     ].join('\n');
     document.head.appendChild(style);
   }
@@ -586,15 +598,32 @@
     }
   }
 
+  function countText(count, singular) {
+    return String(count) + ' ' + singular + (count === 1 ? '' : 's');
+  }
+
+  function renderPostComments(article, comments) {
+    const list = article.querySelector('.fb-stored-comments');
+    list.replaceChildren();
+    comments.forEach(function (comment) {
+      const item = document.createElement('div');
+      item.className = 'fb-stored-comment';
+      const author = document.createElement('strong');
+      const body = document.createElement('span');
+      author.textContent = comment.author || 'Facebook user';
+      body.textContent = comment.body;
+      item.append(author, body);
+      list.appendChild(item);
+    });
+  }
+
   function postArticle(post) {
     const article = document.createElement('article');
     article.className = 'fb-feed-post stored-user-post';
     article.dataset.postId = post.id;
-    article.innerHTML = '<div class="fb-post-head"><img class="fb-post-avatar" alt=""><div class="fb-post-meta"><div class="fb-post-name-row"><span class="fb-post-name"></span></div><div class="fb-post-time">Posted recently · ●</div></div></div><div class="fb-post-text"></div><img class="fb-post-media" alt="Post photo"><div class="fb-post-stats">Be the first to react</div><div class="fb-post-actions"><button class="fb-action-button" type="button" data-stored-action="like">Like</button><button class="fb-action-button" type="button" data-stored-action="comment">Comment</button><button class="fb-action-button" type="button" data-stored-action="share">Share</button></div>';
+    article.innerHTML = '<div class="fb-post-head"><img class="fb-post-avatar" alt=""><div class="fb-post-meta"><div class="fb-post-name-row"><span class="fb-post-name"></span></div><div class="fb-post-time">Posted recently · ●</div></div></div><div class="fb-post-text"></div><img class="fb-post-media" alt="Post photo"><div class="fb-post-stats"><span data-post-like-count></span><span class="fb-stat-spacer"></span><span data-post-comment-count></span></div><div class="fb-post-actions"><button class="fb-action-button" type="button" data-stored-action="like">Like</button><button class="fb-action-button" type="button" data-stored-action="comment">Comment</button><button class="fb-action-button" type="button" data-stored-action="share">Share</button></div><div class="fb-stored-comments"></div><form class="fb-stored-comment-form"><input maxlength="1000" placeholder="Write a comment…" aria-label="Write a comment"><button type="submit">Post</button></form>';
     article.querySelector('.fb-post-avatar').src = post.profilePhoto || fallbackAvatar;
-    if (String(post.userId) === String(profile.id)) {
-      article.querySelector('.fb-post-avatar').setAttribute('data-current-user-avatar', 'true');
-    }
+    if (String(post.userId) === String(profile.id)) article.querySelector('.fb-post-avatar').setAttribute('data-current-user-avatar', 'true');
     article.querySelector('.fb-post-name').textContent = post.author;
     const body = article.querySelector('.fb-post-text');
     body.textContent = post.body || '';
@@ -602,18 +631,55 @@
     const image = article.querySelector('.fb-post-media');
     if (post.image) image.src = post.image;
     else image.remove();
+    const comments = Array.isArray(post.comments) ? post.comments.slice() : [];
+    const likeButton = article.querySelector('[data-stored-action="like"]');
+    likeButton.classList.toggle('is-liked', Boolean(post.likedByMe));
+    likeButton.textContent = post.likedByMe ? 'Liked' : 'Like';
+    article.querySelector('[data-post-like-count]').textContent = countText(Number(post.likeCount || 0), 'like');
+    article.querySelector('[data-post-comment-count]').textContent = countText(comments.length, 'comment');
+    renderPostComments(article, comments);
     article.addEventListener('click', async function (event) {
       const button = event.target.closest('[data-stored-action]');
-      if (!button) return;
+      if (!button || button.disabled) return;
       if (button.dataset.storedAction === 'like') {
-        button.classList.toggle('is-liked');
-        button.textContent = button.classList.contains('is-liked') ? 'Liked' : 'Like';
+        button.disabled = true;
+        try {
+          const data = await api('/api/posts/' + encodeURIComponent(post.id) + '/like', { method: 'POST', body: '{}' });
+          document.querySelectorAll('.stored-user-post[data-post-id="' + post.id + '"]').forEach(function (copy) {
+            const copyButton = copy.querySelector('[data-stored-action="like"]');
+            copyButton.classList.toggle('is-liked', data.liked);
+            copyButton.textContent = data.liked ? 'Liked' : 'Like';
+            copy.querySelector('[data-post-like-count]').textContent = countText(data.likeCount, 'like');
+          });
+        } catch (error) { message(error.message); }
+        finally { button.disabled = false; }
+      } else if (button.dataset.storedAction === 'comment') {
+        const form = article.querySelector('.fb-stored-comment-form');
+        form.classList.toggle('is-open');
+        if (form.classList.contains('is-open')) form.querySelector('input').focus();
       } else if (button.dataset.storedAction === 'share') {
         try {
           if (navigator.share) await navigator.share({ title: post.author + ' on Facebook', text: post.body || 'Facebook post', url: location.href });
           else await navigator.clipboard.writeText(location.href);
         } catch (_error) {}
       }
+    });
+    article.querySelector('.fb-stored-comment-form').addEventListener('submit', async function (event) {
+      event.preventDefault();
+      const input = event.currentTarget.querySelector('input');
+      const submit = event.currentTarget.querySelector('button');
+      const value = input.value.trim();
+      if (!value || submit.disabled) return;
+      submit.disabled = true;
+      try {
+        const data = await api('/api/posts/' + encodeURIComponent(post.id) + '/comments', { method: 'POST', body: JSON.stringify({ body: value }) });
+        comments.push(data.comment);
+        renderPostComments(article, comments);
+        article.querySelector('[data-post-comment-count]').textContent = countText(comments.length, 'comment');
+        input.value = '';
+        await loadPosts();
+      } catch (error) { message(error.message); }
+      finally { submit.disabled = false; }
     });
     return article;
   }
@@ -631,8 +697,22 @@
         if (stories) stories.after(container);
       }
       container.replaceChildren.apply(container, data.posts.map(postArticle));
+      const profileSection = document.querySelector('#profile')?.parentElement?.querySelector('.posts-section');
+      const ownPosts = data.posts.filter(function (post) { return String(post.userId) === String(profile.id); });
+      if (profileSection) {
+        let profilePosts = profileSection.querySelector('#profileStoredPosts');
+        if (!profilePosts) {
+          profilePosts = document.createElement('div');
+          profilePosts.id = 'profileStoredPosts';
+          const emptyState = profileSection.querySelector('.empty-state');
+          profileSection.insertBefore(profilePosts, emptyState || null);
+        }
+        profilePosts.replaceChildren.apply(profilePosts, ownPosts.map(postArticle));
+        const emptyState = profileSection.querySelector('.empty-state');
+        if (emptyState) emptyState.style.display = ownPosts.length ? 'none' : '';
+      }
       const count = document.querySelector('.profileSecondaryStatsV125 strong');
-      const ownPostCount = data.posts.filter(function (post) { return post.userId === profile.id; }).length;
+      const ownPostCount = ownPosts.length;
       if (count) count.textContent = String(ownPostCount);
       try { localStorage.setItem('facebookProfilePostCountV1', String(ownPostCount)); } catch (_error) {}
       document.body.dataset.postCountReady = 'true';
@@ -641,18 +721,258 @@
     }
   }
 
+  function storyCard(story) {
+    const button = document.createElement('button');
+    button.className = 'fb-story-card stored-story-card';
+    button.type = 'button';
+    button.dataset.storyName = story.author;
+    button.dataset.storySrc = story.image;
+    const photo = document.createElement('img');
+    const ring = document.createElement('img');
+    const label = document.createElement('span');
+    photo.className = 'fb-story-photo';
+    photo.src = story.image;
+    photo.alt = story.author + ' story';
+    ring.className = 'fb-story-ring';
+    ring.src = story.profilePhoto || fallbackAvatar;
+    ring.alt = '';
+    label.className = 'fb-story-label';
+    label.textContent = story.author;
+    button.append(photo, ring, label);
+    return button;
+  }
+
+  async function loadStories() {
+    const rail = document.querySelector('.app-page[data-page-content="home"] .fb-stories');
+    if (!rail) return;
+    try {
+      const data = await api('/api/stories');
+      rail.querySelectorAll('.stored-story-card').forEach(function (card) { card.remove(); });
+      data.stories.forEach(function (story) { rail.appendChild(storyCard(story)); });
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  function reelMessage(root, text) {
+    const toast = root.querySelector('.reels-toast');
+    if (!toast) return message(text);
+    toast.textContent = text;
+    toast.classList.add('show');
+    clearTimeout(reelMessage.timer);
+    reelMessage.timer = setTimeout(function () { toast.classList.remove('show'); }, 2200);
+  }
+
+  function setReelCount(root, action, count) {
+    const target = root.querySelector('[data-reel-action="' + action + '"] .reels-action-count');
+    if (target) target.textContent = String(count || 0);
+  }
+
+  function renderReelComments(root, comments) {
+    const list = root.querySelector('.reels-comments-list');
+    list.replaceChildren();
+    if (!comments.length) {
+      list.textContent = 'No comments yet. Be the first to comment.';
+      return;
+    }
+    comments.forEach(function (comment) {
+      const item = document.createElement('div');
+      item.className = 'reels-comment-entry';
+      const author = document.createElement('strong');
+      const body = document.createElement('span');
+      author.textContent = comment.author || 'Facebook user';
+      body.textContent = comment.body;
+      item.append(author, body);
+      list.appendChild(item);
+    });
+  }
+
+  function showReel(root, reel) {
+    currentReel = reel;
+    const video = root.querySelector('#reelsVideo');
+    const empty = root.querySelector('.reels-empty-state');
+    const avatar = root.querySelector('.reels-avatar');
+    const caption = root.querySelector('#reelsCaption');
+    video.src = reel.video;
+    video.classList.add('has-source');
+    if (empty) empty.style.display = 'none';
+    root.querySelector('#reelsCreatorName').textContent = reel.author || 'Facebook user';
+    if (caption) caption.value = reel.caption || '';
+    if (avatar) {
+      const image = document.createElement('img');
+      image.src = reel.profilePhoto || fallbackAvatar;
+      image.alt = '';
+      avatar.replaceChildren(image);
+    }
+    const like = root.querySelector('[data-reel-action="like"]');
+    like.classList.toggle('is-active', Boolean(reel.likedByMe));
+    if (like.querySelector('img') && window.__reelReactionIcons) like.querySelector('img').src = reel.likedByMe ? window.__reelReactionIcons.liked : window.__reelReactionIcons.outline;
+    setReelCount(root, 'like', reel.likeCount);
+    setReelCount(root, 'comments', reel.comments.length);
+    renderReelComments(root, reel.comments);
+    video.play().catch(function () {});
+  }
+
+  async function loadLatestReel() {
+    const root = document.querySelector('.app-page[data-page-content="reels"] .reels-page');
+    if (!root) return;
+    try {
+      const data = await api('/api/reels');
+      if (data.reels && data.reels[0]) showReel(root, data.reels[0]);
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  function fileData(file) {
+    return new Promise(function (resolve, reject) {
+      const reader = new FileReader();
+      reader.onload = function () { resolve(reader.result); };
+      reader.onerror = function () { reject(new Error('Could not read the selected file.')); };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function installReels() {
+    const root = document.querySelector('.app-page[data-page-content="reels"] .reels-page');
+    if (!root || root.dataset.persistenceReady) return;
+    root.dataset.persistenceReady = 'true';
+    const file = root.querySelector('#reelsFile');
+    const publish = root.querySelector('#reelsPublish');
+    const caption = root.querySelector('#reelsCaption');
+    const form = root.querySelector('.reels-comment-form');
+    file.addEventListener('change', function () {
+      const selected = file.files && file.files[0];
+      if (!selected) return;
+      currentReel = null;
+      setReelCount(root, 'like', 0);
+      setReelCount(root, 'comments', 0);
+      renderReelComments(root, []);
+      publish.classList.add('is-visible');
+      publish.disabled = selected.size > 7 * 1024 * 1024;
+      if (publish.disabled) reelMessage(root, 'Choose a video smaller than 7 MB.');
+    });
+    publish.addEventListener('click', async function () {
+      const selected = file.files && file.files[0];
+      if (!selected || publish.disabled) return;
+      publish.disabled = true;
+      publish.textContent = 'Posting…';
+      try {
+        const video = await fileData(selected);
+        await api('/api/reels', { method: 'POST', body: JSON.stringify({ video: video, mimeType: selected.type, caption: caption.value.trim() }) });
+        file.value = '';
+        publish.classList.remove('is-visible');
+        reelMessage(root, 'Reel posted');
+        await loadLatestReel();
+      } catch (error) {
+        reelMessage(root, error.message);
+      } finally {
+        publish.textContent = 'Post reel';
+        publish.disabled = false;
+      }
+    });
+    root.addEventListener('click', async function (event) {
+      const like = event.target.closest('[data-reel-action="like"]');
+      if (!like) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (!currentReel || like.disabled) return reelMessage(root, 'Post a reel first.');
+      like.disabled = true;
+      try {
+        const data = await api('/api/reels/' + encodeURIComponent(currentReel.id) + '/like', { method: 'POST', body: '{}' });
+        currentReel.likedByMe = data.liked;
+        currentReel.likeCount = data.likeCount;
+        like.classList.toggle('is-active', data.liked);
+        const image = like.querySelector('img');
+        if (image && window.__reelReactionIcons) image.src = data.liked ? window.__reelReactionIcons.liked : window.__reelReactionIcons.outline;
+        setReelCount(root, 'like', data.likeCount);
+      } catch (error) { reelMessage(root, error.message); }
+      finally { like.disabled = false; }
+    }, true);
+    form.addEventListener('submit', async function (event) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const input = form.querySelector('input');
+      const submit = form.querySelector('button');
+      const value = input.value.trim();
+      if (!currentReel) return reelMessage(root, 'Post a reel first.');
+      if (!value || submit.disabled) return;
+      submit.disabled = true;
+      try {
+        const data = await api('/api/reels/' + encodeURIComponent(currentReel.id) + '/comments', { method: 'POST', body: JSON.stringify({ body: value }) });
+        currentReel.comments.push(data.comment);
+        renderReelComments(root, currentReel.comments);
+        setReelCount(root, 'comments', currentReel.comments.length);
+        input.value = '';
+      } catch (error) { reelMessage(root, error.message); }
+      finally { submit.disabled = false; }
+    }, true);
+  }
+
   function installPostSaving() {
-    document.addEventListener('click', function (event) {
+    document.addEventListener('click', async function (event) {
+      const action = event.target.closest('[data-home-action]');
+      if (action) {
+        if (action.dataset.homeAction === 'create-story') composerMode = 'story';
+        else if (['composer', 'create', 'photo'].includes(action.dataset.homeAction)) composerMode = 'post';
+        const title = document.querySelector('.fb-dialog-title');
+        const publishButton = document.querySelector('#fbPublishPost');
+        if (title) title.textContent = composerMode === 'story' ? 'Create story' : 'Create post';
+        if (publishButton) publishButton.textContent = composerMode === 'story' ? 'Share to story' : 'Post';
+      }
       const button = event.target.closest('#fbPublishPost');
       if (!button || button.disabled) return;
       const text = document.querySelector('#fbComposerText');
       const preview = document.querySelector('#fbComposerPreview');
       const body = text ? text.value.trim() : '';
       const image = preview && preview.style.display !== 'none' && /^data:image\//.test(preview.src) ? preview.src : '';
+      if (composerMode === 'story') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (!image) return message('Choose a photo for your story.');
+        button.disabled = true;
+        let published = false;
+        try {
+          await api('/api/stories', { method: 'POST', body: JSON.stringify({ caption: body, image: image }) });
+          published = true;
+          if (typeof window.__resetFacebookHomeComposer === 'function') window.__resetFacebookHomeComposer();
+          composerMode = 'post';
+          document.querySelector('.fb-dialog-title').textContent = 'Create post';
+          button.textContent = 'Post';
+          await loadStories();
+          message('Story published');
+        } catch (error) {
+          message(error.message);
+        } finally {
+          if (!published) button.disabled = false;
+        }
+        return;
+      }
       api('/api/posts', { method: 'POST', body: JSON.stringify({ body: body, image: image }) })
         .then(function () { setTimeout(loadPosts, 250); })
         .catch(function (error) { message(error.message); });
     }, true);
+  }
+
+  function installCreationShortcuts() {
+    const profilePage = document.querySelector('.app-page[data-page-content="profile"]');
+    if (!profilePage || profilePage.dataset.creationShortcutsReady) return;
+    profilePage.dataset.creationShortcutsReady = 'true';
+    const story = profilePage.querySelector('.action-buttons .btn-blue');
+    const post = profilePage.querySelector('.post-input-row');
+    const reel = Array.from(profilePage.querySelectorAll('.chip-btn')).find(function (button) { return button.textContent.trim() === 'Reel'; });
+    if (story) story.addEventListener('click', function () {
+      setActivePage('home');
+      requestAnimationFrame(function () { document.querySelector('[data-home-action="create-story"]')?.click(); });
+    });
+    if (post) post.addEventListener('click', function () {
+      setActivePage('home');
+      requestAnimationFrame(function () { document.querySelector('[data-home-action="composer"]')?.click(); });
+    });
+    if (reel) reel.addEventListener('click', function () {
+      setActivePage('reels');
+      requestAnimationFrame(function () { document.querySelector('[data-reel-action="camera"]')?.click(); });
+    });
   }
 
   async function start() {
@@ -669,7 +989,9 @@
       applyPhotos();
       installPhotoControls();
       installPostSaving();
-      await loadPosts();
+      installCreationShortcuts();
+      installReels();
+      await Promise.all([loadPosts(), loadStories(), loadLatestReel()]);
       new MutationObserver(function () { applyName(); applyPhotos(); applyFrames(); }).observe(document.body, { childList: true, subtree: true });
     } catch (error) {
       console.error(error);

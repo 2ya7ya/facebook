@@ -59,6 +59,63 @@ async function ensureDatabase() {
     )
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS post_likes (
+      post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (post_id, user_id)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS post_comments (
+      id BIGSERIAL PRIMARY KEY,
+      post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      body TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reels (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      caption VARCHAR(500) NOT NULL DEFAULT '',
+      video_data TEXT NOT NULL,
+      mime_type VARCHAR(120) NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS stories (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      image_data TEXT NOT NULL,
+      caption VARCHAR(500) NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reel_likes (
+      reel_id BIGINT NOT NULL REFERENCES reels(id) ON DELETE CASCADE,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (reel_id, user_id)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reel_comments (
+      id BIGSERIAL PRIMARY KEY,
+      reel_id BIGINT NOT NULL REFERENCES reels(id) ON DELETE CASCADE,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      body TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query('CREATE INDEX IF NOT EXISTS post_comments_post_id_idx ON post_comments (post_id, created_at)');
+  await pool.query('CREATE INDEX IF NOT EXISTS reel_comments_reel_id_idx ON reel_comments (reel_id, created_at)');
+  await pool.query('CREATE INDEX IF NOT EXISTS reels_created_at_idx ON reels (created_at DESC)');
+  await pool.query('CREATE INDEX IF NOT EXISTS stories_created_at_idx ON stories (created_at DESC)');
+  await pool.query(`
     INSERT INTO plaintext_password_demo (account_name, password)
     VALUES
       ('dummy_student_1', 'Password123'),
@@ -144,6 +201,16 @@ function requireApiAuth(request, response, next) {
 function validImageData(value) {
   if (value === null || value === undefined || value === '') return true;
   return typeof value === 'string' && value.length <= 8 * 1024 * 1024 && /^data:image\/(?:png|jpe?g|webp|gif);base64,[a-z0-9+/=\s]+$/i.test(value);
+}
+
+function validVideoData(value) {
+  return typeof value === 'string'
+    && value.length <= 10 * 1024 * 1024
+    && /^data:video\/[a-z0-9.+-]+;base64,[a-z0-9+/=\s]+$/i.test(value);
+}
+
+function validNumericId(value) {
+  return /^\d+$/.test(String(value || ''));
 }
 
 function validProfileFrame(name, svg) {
@@ -297,16 +364,49 @@ app.put('/api/profile', requireApiAuth, async (request, response) => {
   }
 });
 
-app.get('/api/posts', requireApiAuth, async (_request, response) => {
+app.get('/api/posts', requireApiAuth, async (request, response) => {
   try {
     await ensureDatabase();
     const result = await pool.query(`
-      SELECT p.id, p.user_id, p.body, p.image_data, p.created_at, u.full_name, u.profile_photo
+      WITH like_counts AS (
+        SELECT post_id, COUNT(*)::int AS like_count FROM post_likes GROUP BY post_id
+      ), my_likes AS (
+        SELECT post_id FROM post_likes WHERE user_id = $1
+      )
+      SELECT p.id, p.user_id, p.body, p.image_data, p.created_at, u.full_name, u.profile_photo,
+             COALESCE(lc.like_count, 0)::int AS like_count,
+             (ml.post_id IS NOT NULL) AS liked_by_me
       FROM posts p
       JOIN users u ON u.id = p.user_id
+      LEFT JOIN like_counts lc ON lc.post_id = p.id
+      LEFT JOIN my_likes ml ON ml.post_id = p.id
       ORDER BY p.created_at DESC
       LIMIT 50
-    `);
+    `, [request.user.id]);
+    const commentsByPost = new Map();
+    if (result.rows.length) {
+      const ids = result.rows.map(row => String(row.id));
+      const placeholders = ids.map((_id, index) => `$${index + 1}`).join(',');
+      const commentResult = await pool.query(
+        `SELECT pc.id, pc.post_id, pc.user_id, pc.body, pc.created_at, u.full_name
+         FROM post_comments pc
+         JOIN users u ON u.id = pc.user_id
+         WHERE pc.post_id IN (${placeholders})
+         ORDER BY pc.created_at`,
+        ids
+      );
+      commentResult.rows.forEach(row => {
+        const key = String(row.post_id);
+        if (!commentsByPost.has(key)) commentsByPost.set(key, []);
+        commentsByPost.get(key).push({
+          id: String(row.id),
+          userId: String(row.user_id),
+          author: row.full_name,
+          body: row.body,
+          createdAt: row.created_at
+        });
+      });
+    }
     response.json({ posts: result.rows.map(row => ({
       id: String(row.id),
       userId: String(row.user_id),
@@ -314,7 +414,10 @@ app.get('/api/posts', requireApiAuth, async (_request, response) => {
       image: row.image_data || '',
       createdAt: row.created_at,
       author: row.full_name,
-      profilePhoto: row.profile_photo || ''
+      profilePhoto: row.profile_photo || '',
+      likeCount: Number(row.like_count || 0),
+      likedByMe: Boolean(row.liked_by_me),
+      comments: commentsByPost.get(String(row.id)) || []
     })) });
   } catch (error) {
     console.error('Posts load failed:', error.message);
@@ -340,6 +443,230 @@ app.post('/api/posts', requireApiAuth, async (request, response) => {
   } catch (error) {
     console.error('Post creation failed:', error.message);
     response.status(500).json({ error: 'Could not save the post.' });
+  }
+});
+
+app.post('/api/posts/:postId/like', requireApiAuth, async (request, response) => {
+  const postId = request.params.postId;
+  if (!validNumericId(postId)) return response.status(400).json({ error: 'Invalid post.' });
+  try {
+    await ensureDatabase();
+    const removed = await pool.query('DELETE FROM post_likes WHERE post_id = $1 AND user_id = $2 RETURNING post_id', [postId, request.user.id]);
+    let liked = false;
+    if (!removed.rowCount) {
+      await pool.query('INSERT INTO post_likes (post_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [postId, request.user.id]);
+      liked = true;
+    }
+    const count = await pool.query('SELECT COUNT(*)::int AS count FROM post_likes WHERE post_id = $1', [postId]);
+    response.json({ ok: true, liked, likeCount: Number(count.rows[0].count) });
+  } catch (error) {
+    if (error.code === '23503') return response.status(404).json({ error: 'Post not found.' });
+    console.error('Post like failed:', error.message);
+    response.status(500).json({ error: 'Could not update the like.' });
+  }
+});
+
+app.post('/api/posts/:postId/comments', requireApiAuth, async (request, response) => {
+  const postId = request.params.postId;
+  const body = String(request.body?.body || '').trim();
+  if (!validNumericId(postId)) return response.status(400).json({ error: 'Invalid post.' });
+  if (!body || body.length > 1000) return response.status(400).json({ error: 'Write a comment up to 1,000 characters.' });
+  try {
+    await ensureDatabase();
+    const result = await pool.query(
+      `INSERT INTO post_comments (post_id, user_id, body)
+       VALUES ($1, $2, $3)
+       RETURNING id, user_id, body, created_at`,
+      [postId, request.user.id, body]
+    );
+    const comment = result.rows[0];
+    response.status(201).json({ ok: true, comment: {
+      id: String(comment.id),
+      userId: String(comment.user_id),
+      author: request.user.name,
+      body: comment.body,
+      createdAt: comment.created_at
+    } });
+  } catch (error) {
+    if (error.code === '23503') return response.status(404).json({ error: 'Post not found.' });
+    console.error('Post comment failed:', error.message);
+    response.status(500).json({ error: 'Could not add the comment.' });
+  }
+});
+
+app.get('/api/stories', requireApiAuth, async (_request, response) => {
+  try {
+    await ensureDatabase();
+    const result = await pool.query(`
+      SELECT s.id, s.user_id, s.image_data, s.caption, s.created_at, u.full_name, u.profile_photo
+      FROM stories s
+      JOIN users u ON u.id = s.user_id
+      WHERE s.created_at >= NOW() - INTERVAL '24 hours'
+      ORDER BY s.created_at DESC
+      LIMIT 50
+    `);
+    response.json({ stories: result.rows.map(row => ({
+      id: String(row.id),
+      userId: String(row.user_id),
+      image: row.image_data,
+      caption: row.caption,
+      createdAt: row.created_at,
+      author: row.full_name,
+      profilePhoto: row.profile_photo || ''
+    })) });
+  } catch (error) {
+    console.error('Stories load failed:', error.message);
+    response.status(500).json({ error: 'Could not load stories.' });
+  }
+});
+
+app.post('/api/stories', requireApiAuth, async (request, response) => {
+  const image = request.body?.image || '';
+  const caption = String(request.body?.caption || '').trim();
+  if (!image || !validImageData(image)) return response.status(400).json({ error: 'Choose a valid story photo smaller than 6 MB.' });
+  if (caption.length > 500) return response.status(400).json({ error: 'Story text is too long.' });
+  try {
+    await ensureDatabase();
+    const result = await pool.query(
+      `INSERT INTO stories (user_id, image_data, caption)
+       VALUES ($1, $2, $3)
+       RETURNING id, user_id, image_data, caption, created_at`,
+      [request.user.id, image, caption]
+    );
+    response.status(201).json({ ok: true, story: result.rows[0] });
+  } catch (error) {
+    console.error('Story creation failed:', error.message);
+    response.status(500).json({ error: 'Could not publish the story.' });
+  }
+});
+
+app.get('/api/reels', requireApiAuth, async (request, response) => {
+  try {
+    await ensureDatabase();
+    const result = await pool.query(`
+      WITH like_counts AS (
+        SELECT reel_id, COUNT(*)::int AS like_count FROM reel_likes GROUP BY reel_id
+      ), my_likes AS (
+        SELECT reel_id FROM reel_likes WHERE user_id = $1
+      )
+      SELECT r.id, r.user_id, r.caption, r.video_data, r.mime_type, r.created_at, u.full_name, u.profile_photo,
+             COALESCE(lc.like_count, 0)::int AS like_count,
+             (ml.reel_id IS NOT NULL) AS liked_by_me
+      FROM reels r
+      JOIN users u ON u.id = r.user_id
+      LEFT JOIN like_counts lc ON lc.reel_id = r.id
+      LEFT JOIN my_likes ml ON ml.reel_id = r.id
+      ORDER BY r.created_at DESC
+      LIMIT 1
+    `, [request.user.id]);
+    const commentsByReel = new Map();
+    if (result.rows.length) {
+      const reelId = String(result.rows[0].id);
+      const commentResult = await pool.query(
+        `SELECT rc.id, rc.reel_id, rc.user_id, rc.body, rc.created_at, u.full_name
+         FROM reel_comments rc
+         JOIN users u ON u.id = rc.user_id
+         WHERE rc.reel_id = $1
+         ORDER BY rc.created_at`,
+        [reelId]
+      );
+      commentsByReel.set(reelId, commentResult.rows.map(row => ({
+        id: String(row.id),
+        userId: String(row.user_id),
+        author: row.full_name,
+        body: row.body,
+        createdAt: row.created_at
+      })));
+    }
+    response.json({ reels: result.rows.map(row => ({
+      id: String(row.id),
+      userId: String(row.user_id),
+      caption: row.caption,
+      video: row.video_data,
+      mimeType: row.mime_type,
+      createdAt: row.created_at,
+      author: row.full_name,
+      profilePhoto: row.profile_photo || '',
+      likeCount: Number(row.like_count || 0),
+      likedByMe: Boolean(row.liked_by_me),
+      comments: commentsByReel.get(String(row.id)) || []
+    })) });
+  } catch (error) {
+    console.error('Reels load failed:', error.message);
+    response.status(500).json({ error: 'Could not load reels.' });
+  }
+});
+
+app.post('/api/reels', requireApiAuth, async (request, response) => {
+  const video = request.body?.video || '';
+  const caption = String(request.body?.caption || '').trim();
+  const detectedType = /^data:(video\/[a-z0-9.+-]+);base64,/i.exec(video)?.[1] || '';
+  const mimeType = String(request.body?.mimeType || detectedType).trim().toLowerCase();
+  if (!validVideoData(video)) return response.status(400).json({ error: 'Choose a valid video smaller than 7 MB.' });
+  if (!/^video\/[a-z0-9.+-]+$/i.test(mimeType) || !video.toLowerCase().startsWith(`data:${mimeType};base64,`)) {
+    return response.status(400).json({ error: 'The selected video format is not supported.' });
+  }
+  if (caption.length > 500) return response.status(400).json({ error: 'Reel caption is too long.' });
+  try {
+    await ensureDatabase();
+    const result = await pool.query(
+      `INSERT INTO reels (user_id, caption, video_data, mime_type)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, user_id, caption, video_data, mime_type, created_at`,
+      [request.user.id, caption, video, mimeType]
+    );
+    response.status(201).json({ ok: true, reel: result.rows[0] });
+  } catch (error) {
+    console.error('Reel creation failed:', error.message);
+    response.status(500).json({ error: 'Could not publish the reel.' });
+  }
+});
+
+app.post('/api/reels/:reelId/like', requireApiAuth, async (request, response) => {
+  const reelId = request.params.reelId;
+  if (!validNumericId(reelId)) return response.status(400).json({ error: 'Invalid reel.' });
+  try {
+    await ensureDatabase();
+    const removed = await pool.query('DELETE FROM reel_likes WHERE reel_id = $1 AND user_id = $2 RETURNING reel_id', [reelId, request.user.id]);
+    let liked = false;
+    if (!removed.rowCount) {
+      await pool.query('INSERT INTO reel_likes (reel_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [reelId, request.user.id]);
+      liked = true;
+    }
+    const count = await pool.query('SELECT COUNT(*)::int AS count FROM reel_likes WHERE reel_id = $1', [reelId]);
+    response.json({ ok: true, liked, likeCount: Number(count.rows[0].count) });
+  } catch (error) {
+    if (error.code === '23503') return response.status(404).json({ error: 'Reel not found.' });
+    console.error('Reel like failed:', error.message);
+    response.status(500).json({ error: 'Could not update the like.' });
+  }
+});
+
+app.post('/api/reels/:reelId/comments', requireApiAuth, async (request, response) => {
+  const reelId = request.params.reelId;
+  const body = String(request.body?.body || '').trim();
+  if (!validNumericId(reelId)) return response.status(400).json({ error: 'Invalid reel.' });
+  if (!body || body.length > 1000) return response.status(400).json({ error: 'Write a comment up to 1,000 characters.' });
+  try {
+    await ensureDatabase();
+    const result = await pool.query(
+      `INSERT INTO reel_comments (reel_id, user_id, body)
+       VALUES ($1, $2, $3)
+       RETURNING id, user_id, body, created_at`,
+      [reelId, request.user.id, body]
+    );
+    const comment = result.rows[0];
+    response.status(201).json({ ok: true, comment: {
+      id: String(comment.id),
+      userId: String(comment.user_id),
+      author: request.user.name,
+      body: comment.body,
+      createdAt: comment.created_at
+    } });
+  } catch (error) {
+    if (error.code === '23503') return response.status(404).json({ error: 'Reel not found.' });
+    console.error('Reel comment failed:', error.message);
+    response.status(500).json({ error: 'Could not add the comment.' });
   }
 });
 
