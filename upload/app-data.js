@@ -898,6 +898,18 @@
     let videoLoadGeneration = 0;
     let editState = freshEditState();
     const editVideo = flow.querySelector('#reelEditVideo');
+    const editStage = flow.querySelector('[data-reel-create-stage="edit"]');
+    const scrubPreviewVideo = document.createElement('video');
+    const scrubPreviewImage = document.createElement('img');
+    scrubPreviewVideo.className = 'reel-scrub-preview';
+    scrubPreviewVideo.muted = true;
+    scrubPreviewVideo.playsInline = true;
+    scrubPreviewVideo.preload = 'auto';
+    scrubPreviewVideo.setAttribute('aria-hidden', 'true');
+    scrubPreviewImage.className = 'reel-scrub-preview-image';
+    scrubPreviewImage.alt = '';
+    scrubPreviewImage.setAttribute('aria-hidden', 'true');
+    editStage.append(scrubPreviewVideo, scrubPreviewImage);
     const editTime = flow.querySelector('#reelEditTime');
     const editPlayButton = flow.querySelector('[data-reel-flow-action="toggle-edit-play"]');
     const timeline = flow.querySelector('.reel-timeline');
@@ -923,6 +935,8 @@
     let timelinePendingScrub = null;
     let timelineScrubInFlight = false;
     let timelineScrubTimer = 0;
+    let timelineScrubFrame = 0;
+    let timelineLastScrubTarget = 0;
     let timelineDragging = false;
     let timelinePointerDown = false;
     let timelineSettleTimer = 0;
@@ -1162,6 +1176,11 @@
     }
     function setupTimeline(duration) {
       timelineDuration = Number.isFinite(duration) ? duration : 0;
+      if (selectedVideoData && scrubPreviewVideo.__reelSource !== selectedVideoData) {
+        scrubPreviewVideo.__reelSource = selectedVideoData;
+        scrubPreviewVideo.src = selectedVideoData;
+        scrubPreviewVideo.load();
+      }
       if (!editState.trimEnd || editState.trimEnd > timelineDuration) editState.trimEnd = timelineDuration;
       editTime.textContent = previewTime(editVideo.currentTime) + '/' + previewTime(timelineDuration);
       updateTrimSelection();
@@ -1172,28 +1191,45 @@
       const offset = Math.max(0, Math.min(timelineDuration, Number(time) || 0)) * pixelsPerSecond;
       timelineContent.style.transform = 'translate3d(' + (-offset) + 'px,0,0)';
     }
+    function showScrubFallback(target) {
+      const frames = timelineFilmstrip.querySelectorAll('img');
+      const frame = frames[Math.min(frames.length - 1, Math.max(0, Math.floor(target)))];
+      if (!frame || !frame.src) return;
+      scrubPreviewImage.src = frame.src;
+      scrubPreviewImage.classList.add('is-active');
+    }
     function applyPendingTimelineScrub() {
-      if (timelineScrubInFlight || timelinePendingScrub === null) return;
+      if (timelinePendingScrub === null) return;
       const target = timelinePendingScrub;
       timelinePendingScrub = null;
-      timelineScrubInFlight = true;
-      let finished = false;
-      function done() {
-        if (finished) return;
-        finished = true;
-        window.clearTimeout(timelineScrubTimer);
-        editVideo.removeEventListener('seeked', done);
-        timelineScrubInFlight = false;
-        if (timelinePendingScrub !== null) applyPendingTimelineScrub();
+      timelineLastScrubTarget = target;
+      showScrubFallback(target);
+      if (selectedVideoData && scrubPreviewVideo.__reelSource !== selectedVideoData) {
+        scrubPreviewVideo.__reelSource = selectedVideoData;
+        scrubPreviewVideo.src = selectedVideoData;
+        scrubPreviewVideo.load();
       }
-      editVideo.addEventListener('seeked', done, { once: true });
-      try { editVideo.currentTime = target; } catch (error) { done(); }
-      timelineScrubTimer = window.setTimeout(done, 120);
+      try {
+        scrubPreviewVideo.pause();
+        scrubPreviewVideo.currentTime = target;
+      } catch (error) {}
     }
     function scrubTimelineTo(time) {
       timelinePendingScrub = Math.min(Math.max(0, timelineDuration - .01), Math.max(0, time));
-      applyPendingTimelineScrub();
+      timelineLastScrubTarget = timelinePendingScrub;
+      showScrubFallback(timelinePendingScrub);
+      if (!timelineScrubFrame) {
+        timelineScrubFrame = requestAnimationFrame(function () {
+          timelineScrubFrame = 0;
+          applyPendingTimelineScrub();
+        });
+      }
     }
+    scrubPreviewVideo.addEventListener('seeked', function () {
+      if (!timelineDragging) return;
+      scrubPreviewVideo.classList.add('is-active');
+      scrubPreviewImage.classList.remove('is-active');
+    });
     function syncEditPlayback(forceText) {
       if (!timelineDragging && editState.trimEnd > editState.trimStart && editState.trimEnd < timelineDuration && editVideo.currentTime >= editState.trimEnd) {
         editVideo.currentTime = Math.max(editState.trimStart, editState.trimEnd - .01);
@@ -1250,14 +1286,35 @@
     });
     function finishTimelineDrag() {
       if (timelinePointerDown) return;
-      timelineDragging = false;
+      if (timelineScrubFrame) {
+        cancelAnimationFrame(timelineScrubFrame);
+        timelineScrubFrame = 0;
+      }
       if (timelinePendingScrub !== null) applyPendingTimelineScrub();
-      renderTimelineAt(timelinePendingScrub === null ? editVideo.currentTime : timelinePendingScrub);
-      if (!editVideo.paused) scheduleTimelineFollow();
+      const finalTarget = Math.min(Math.max(0, timelineDuration - .01), Math.max(0, timelineLastScrubTarget));
+      timelineDragging = false;
+      renderTimelineAt(finalTarget);
+      let revealed = false;
+      function revealMainVideo() {
+        if (revealed) return;
+        revealed = true;
+        editVideo.removeEventListener('seeked', mainVideoSeeked);
+        window.clearTimeout(timelineScrubTimer);
+        scrubPreviewVideo.classList.remove('is-active');
+        scrubPreviewImage.classList.remove('is-active');
+        if (!editVideo.paused) scheduleTimelineFollow();
+      }
+      function mainVideoSeeked() {
+        if (typeof editVideo.requestVideoFrameCallback === 'function') editVideo.requestVideoFrameCallback(revealMainVideo);
+        else requestAnimationFrame(function () { requestAnimationFrame(revealMainVideo); });
+      }
+      editVideo.addEventListener('seeked', mainVideoSeeked, { once: true });
+      try { editVideo.currentTime = finalTarget; } catch (error) { revealMainVideo(); }
+      timelineScrubTimer = window.setTimeout(revealMainVideo, 350);
     }
     function scheduleTimelineDragFinish() {
       window.clearTimeout(timelineSettleTimer);
-      timelineSettleTimer = window.setTimeout(finishTimelineDrag, 160);
+      timelineSettleTimer = window.setTimeout(finishTimelineDrag, 0);
     }
     let timelineDragStartX = 0;
     let timelineDragStartTime = 0;
@@ -1269,8 +1326,10 @@
       timelineSyncing = false;
       timelineDragStartX = event.clientX;
       timelineDragStartTime = editVideo.currentTime;
+      timelineLastScrubTarget = editVideo.currentTime;
       cancelTimelineFollow();
       renderTimelineAt(editVideo.currentTime);
+      scrubTimelineTo(editVideo.currentTime);
       try { timelineScroll.setPointerCapture(event.pointerId); } catch (error) {}
     }
     function moveTimelineDrag(event) {
@@ -1341,6 +1400,8 @@
       cancelTimelineFollow();
       window.clearTimeout(timelineSettleTimer);
       window.clearTimeout(timelineScrubTimer);
+      cancelAnimationFrame(timelineScrubFrame);
+      timelineScrubFrame = 0;
       timelinePendingScrub = null;
       timelineScrubInFlight = false;
       timelineDragging = false;
@@ -1352,6 +1413,13 @@
       timelineContent.style.transform = 'translate3d(0,0,0)';
       timelineTicks.replaceChildren();
       timelineFilmstrip.replaceChildren();
+      scrubPreviewVideo.pause();
+      scrubPreviewVideo.classList.remove('is-active');
+      scrubPreviewVideo.removeAttribute('src');
+      scrubPreviewVideo.__reelSource = '';
+      scrubPreviewVideo.load();
+      scrubPreviewImage.classList.remove('is-active');
+      scrubPreviewImage.removeAttribute('src');
       previewVideos.forEach(function (video) { video.pause(); video.removeAttribute('src'); video.__reelSource = ''; video.load(); });
       selectedVideo = null;
       selectedVideoData = '';
