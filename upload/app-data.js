@@ -1231,7 +1231,70 @@
     }
     let timelineDragStartX = 0;
     let timelineDragStartTime = 0;
+    let timelineLastPointerX = 0;
+    let timelineLastPointerAt = 0;
+    let timelineVelocity = 0;
+    let timelineInertiaFrame = 0;
+    let timelineInertiaTime = 0;
+
+    function cancelTimelineInertia() {
+      if (timelineInertiaFrame) cancelAnimationFrame(timelineInertiaFrame);
+      timelineInertiaFrame = 0;
+      timelineInertiaTime = 0;
+      timelineVelocity = 0;
+    }
+
+    function applyTimelineTime(nextTime) {
+      const boundedTime = Math.min(timelineDuration, Math.max(0, nextTime));
+      editVideo.currentTime = boundedTime;
+      renderTimelineAt(boundedTime);
+      editTime.textContent = previewTime(boundedTime) + '/' + previewTime(timelineDuration);
+      return boundedTime;
+    }
+
+    function finishTimelineInertia() {
+      cancelTimelineInertia();
+      timelineDragging = false;
+      renderTimelineAt(editVideo.currentTime);
+      if (!editVideo.paused) scheduleTimelineFollow();
+    }
+
+    function startTimelineInertia() {
+      const minimumVelocity = 0.0007;
+      if (Math.abs(timelineVelocity) < minimumVelocity) {
+        scheduleTimelineDragFinish();
+        return;
+      }
+      timelineDragging = true;
+      timelineInertiaTime = performance.now();
+      const maximumVelocity = 0.012;
+      timelineVelocity = Math.max(-maximumVelocity, Math.min(maximumVelocity, timelineVelocity));
+
+      function glide(now) {
+        if (timelinePointerDown) {
+          cancelTimelineInertia();
+          return;
+        }
+        const elapsed = Math.min(34, Math.max(1, now - timelineInertiaTime));
+        timelineInertiaTime = now;
+        const previousTime = editVideo.currentTime;
+        const nextTime = applyTimelineTime(previousTime + timelineVelocity * elapsed);
+
+        // Exponential ease-out gives a native-feeling, frame-rate-independent slowdown.
+        timelineVelocity *= Math.exp(-elapsed / 260);
+        const reachedBoundary = (nextTime <= 0 && timelineVelocity < 0) || (nextTime >= timelineDuration && timelineVelocity > 0);
+        if (reachedBoundary || Math.abs(timelineVelocity) < 0.00018) {
+          finishTimelineInertia();
+          return;
+        }
+        timelineInertiaFrame = requestAnimationFrame(glide);
+      }
+      timelineInertiaFrame = requestAnimationFrame(glide);
+    }
+
     function beginTimelineDrag(event) {
+      if (event.target.closest('.reel-trim-handle')) return;
+      cancelTimelineInertia();
       setTimelineSelected(true);
       timelinePointerDown = true;
       window.clearTimeout(timelineSettleTimer);
@@ -1239,6 +1302,9 @@
       timelineSyncing = false;
       timelineDragStartX = event.clientX;
       timelineDragStartTime = editVideo.currentTime;
+      timelineLastPointerX = event.clientX;
+      timelineLastPointerAt = performance.now();
+      timelineVelocity = 0;
       cancelTimelineFollow();
       renderTimelineAt(editVideo.currentTime);
       try { timelineScroll.setPointerCapture(event.pointerId); } catch (error) {}
@@ -1246,15 +1312,31 @@
     function moveTimelineDrag(event) {
       if (!timelinePointerDown || event.target.closest('.reel-trim-handle')) return;
       event.preventDefault();
-      const nextTime = Math.min(timelineDuration, Math.max(0, timelineDragStartTime + (timelineDragStartX - event.clientX) / pixelsPerSecond));
-      editVideo.currentTime = nextTime;
-      renderTimelineAt(nextTime);
-      editTime.textContent = previewTime(nextTime) + '/' + previewTime(timelineDuration);
+      const now = performance.now();
+      const elapsed = Math.max(1, now - timelineLastPointerAt);
+      const pointerDelta = timelineLastPointerX - event.clientX;
+      const measuredVelocity = (pointerDelta / pixelsPerSecond) / elapsed;
+      // Smooth noisy touch samples while keeping the latest swipe direction responsive.
+      timelineVelocity = timelineVelocity * 0.68 + measuredVelocity * 0.32;
+      timelineLastPointerX = event.clientX;
+      timelineLastPointerAt = now;
+      const nextTime = timelineDragStartTime + (timelineDragStartX - event.clientX) / pixelsPerSecond;
+      applyTimelineTime(nextTime);
+    }
+    function endTimelineDrag(cancelled) {
+      if (!timelinePointerDown) return;
+      timelinePointerDown = false;
+      if (cancelled) {
+        cancelTimelineInertia();
+        scheduleTimelineDragFinish();
+        return;
+      }
+      startTimelineInertia();
     }
     timelineScroll.addEventListener('pointerdown', beginTimelineDrag, { passive: true });
     timelineScroll.addEventListener('pointermove', moveTimelineDrag, { passive: false });
-    window.addEventListener('pointerup', function () { if (!timelinePointerDown) return; timelinePointerDown = false; scheduleTimelineDragFinish(); }, { passive: true });
-    window.addEventListener('pointercancel', function () { if (!timelinePointerDown) return; timelinePointerDown = false; scheduleTimelineDragFinish(); }, { passive: true });
+    window.addEventListener('pointerup', function () { endTimelineDrag(false); }, { passive: true });
+    window.addEventListener('pointercancel', function () { endTimelineDrag(true); }, { passive: true });
     function loadVisibleVideo(video) {
       if (!selectedVideoData) return;
       const generation = videoLoadGeneration;
@@ -1309,6 +1391,7 @@
       document.body.classList.remove('reel-create-open');
       videoLoadGeneration += 1;
       cancelTimelineFollow();
+      cancelTimelineInertia();
       window.clearTimeout(timelineSettleTimer);
       timelineDragging = false;
       timelinePointerDown = false;
