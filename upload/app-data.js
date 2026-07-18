@@ -1131,8 +1131,6 @@
       const frameDuration = 1;
       const source = document.createElement('video');
       source.className = 'reel-thumbnail-source';
-      source.setAttribute('aria-hidden', 'true');
-      source.tabIndex = -1;
       source.muted = true;
       source.playsInline = true;
       source.preload = 'auto';
@@ -1189,34 +1187,18 @@
       timelinePendingScrub = null;
       timelineScrubInFlight = false;
       try {
-        // Seek the visible preview video itself. Timeline thumbnail images are
-        // never used as the preview while the user is dragging.
-        if (!editVideo.paused) editVideo.pause();
+        // Setting currentTime on every animation frame lets the decoded preview
+        // follow the finger instead of waiting for the previous seeked event.
         editVideo.currentTime = target;
       } catch (error) {}
     }
     function scrubTimelineTo(time) {
-      const target = Math.min(Math.max(0, timelineDuration - .001), Math.max(0, time));
-      timelinePendingScrub = target;
-
-      // Apply immediately on every pointer movement. Waiting for a queued
-      // animation frame made Android browsers move only the filmstrip while
-      // leaving the visible video on an older frame.
-      applyPendingTimelineScrub();
-
-      // Request a video-frame repaint where supported. The callback does not
-      // replace the preview with a canvas or thumbnail; it only prompts the
-      // browser to present the newly decoded frame quickly.
-      if (typeof editVideo.requestVideoFrameCallback === 'function') {
-        try {
-          if (timelineVideoFrameCallback && typeof editVideo.cancelVideoFrameCallback === 'function') {
-            editVideo.cancelVideoFrameCallback(timelineVideoFrameCallback);
-          }
-          timelineVideoFrameCallback = editVideo.requestVideoFrameCallback(function () {
-            timelineVideoFrameCallback = 0;
-          });
-        } catch (error) {}
-      }
+      timelinePendingScrub = Math.min(Math.max(0, timelineDuration - .001), Math.max(0, time));
+      if (timelineAnimationFrame) return;
+      timelineAnimationFrame = requestAnimationFrame(function applyLiveScrub() {
+        timelineAnimationFrame = 0;
+        applyPendingTimelineScrub();
+      });
     }
     function syncEditPlayback(forceText) {
       if (!timelineDragging && editState.trimEnd > editState.trimStart && editState.trimEnd < timelineDuration && editVideo.currentTime >= editState.trimEnd) {
