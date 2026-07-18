@@ -162,9 +162,54 @@
   function applyCreateStoryPhoto(source) {
     const target = document.querySelector('.app-page[data-page-content="home"] .fb-create-story .fb-story-photo');
     if (!target || !source) return;
-    target.src = source;
-    target.classList.toggle('fb-prepaint-story-crop', Boolean(profile && profile.profilePhoto));
-    if (window.__facebookPrepaintProfile) window.__facebookPrepaintProfile.storyPhoto = source;
+    const signature = source.length + ':' + source.slice(0, 64) + ':' + source.slice(-64);
+    try {
+      const cached = JSON.parse(localStorage.getItem('facebookCreateStoryPhotoCacheV2') || 'null');
+      if (cached && cached.signature === signature && /^data:image\//.test(cached.image || '')) {
+        target.src = cached.image;
+        target.classList.remove('fb-prepaint-story-crop');
+        return;
+      }
+    } catch (_error) {}
+
+    if (!profile || !profile.profilePhoto) {
+      target.src = source;
+      target.classList.remove('fb-prepaint-story-crop');
+      return;
+    }
+
+    const image = new Image();
+    image.onload = function () {
+      try {
+        const width = image.naturalWidth;
+        const height = image.naturalHeight;
+        const side = (Math.min(width, height) / Math.SQRT2) * 0.98;
+        const output = document.createElement('canvas');
+        const outputSize = Math.min(600, Math.max(320, Math.round(side)));
+        output.width = outputSize;
+        output.height = outputSize;
+        output.getContext('2d', { alpha: false }).drawImage(
+          image, (width - side) / 2, (height - side) / 2, side, side,
+          0, 0, outputSize, outputSize
+        );
+        const result = output.toDataURL('image/jpeg', 0.84);
+        target.src = result;
+        target.classList.remove('fb-prepaint-story-crop');
+        try { localStorage.setItem('facebookCreateStoryPhotoCacheV2', JSON.stringify({ signature: signature, image: result })); } catch (_error) {}
+        if (window.__facebookPrepaintProfile) {
+          window.__facebookPrepaintProfile.storyPhoto = result;
+          window.__facebookPrepaintProfile.storyPhotoReady = true;
+        }
+      } catch (_error) {
+        target.src = source;
+        target.classList.remove('fb-prepaint-story-crop');
+      }
+    };
+    image.onerror = function () {
+      target.src = source;
+      target.classList.remove('fb-prepaint-story-crop');
+    };
+    image.src = source;
   }
 
   function readSavedPage() {
