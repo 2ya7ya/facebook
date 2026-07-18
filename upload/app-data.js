@@ -153,6 +153,8 @@
       }
       overlay.src = url;
       overlay.hidden = !url;
+      delete document.body.dataset.hasCachedProfileFrame;
+      container.style.removeProperty('--fb-prepaint-frame');
     }
     document.querySelectorAll('[data-home-avatar]:not(.fb-story-photo),.stored-user-post .fb-post-avatar[data-current-user-avatar]').forEach(frameAvatar);
   }
