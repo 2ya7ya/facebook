@@ -958,39 +958,12 @@
     timelineScroll.appendChild(timelineContent);
     timeline.replaceChildren(timelineScroll, timelinePlayhead, timelineSoundLabel);
     if (timelineAdd) timeline.appendChild(timelineAdd);
-    // Keep the mute control completely outside the timeline DOM tree.
-    // The timeline content is translated during dragging/playback; placing this
-    // button as a sibling prevents it from inheriting any current or future
-    // timeline transforms/animations.
-    // Attach the mute button to the top-level fixed reel flow, not to any
-    // timeline/editor container. Its screen position is calculated from the
-    // visible timeline viewport, so translated timeline content cannot move it.
-    document.body.appendChild(timelineMuteButton);
-    function positionTimelineMuteButton() {
-      const timelineRect = timeline.getBoundingClientRect();
-      const iconSize = 42;
-      const playheadX = timelineRect.left + (timelineRect.width / 2);
-      // Keep the mute control in one fixed screen position beside the playhead,
-      // matching the reference layout. Only timelineContent is translated.
-      const left = playheadX - 128;
-      const top = timelineRect.top + 61;
-      timelineMuteButton.style.left = Math.round(left) + 'px';
-      timelineMuteButton.style.top = Math.round(top) + 'px';
-      timelineMuteButton.style.width = iconSize + 'px';
-      timelineMuteButton.style.height = iconSize + 'px';
-      timelineMuteButton.style.transform = 'none';
-    }
-    function syncTimelineMuteVisibility() {
-      const open = flow.classList.contains('is-open');
-      timelineMuteButton.hidden = !open;
-      if (open) requestAnimationFrame(positionTimelineMuteButton);
-    }
-    positionTimelineMuteButton();
-    syncTimelineMuteVisibility();
-    window.addEventListener('resize', positionTimelineMuteButton, { passive: true });
-    window.addEventListener('orientationchange', positionTimelineMuteButton, { passive: true });
-    const timelineFlowObserver = new MutationObserver(syncTimelineMuteVisibility);
-    timelineFlowObserver.observe(flow, { attributes: true, attributeFilter: ['class'] });
+    // Keep the mute control in the fixed editor-controls layer, completely
+    // outside .reel-timeline and .reel-timeline-content. Only the latter is
+    // translated during dragging/momentum, so this button cannot move with it.
+    const editorControls = timeline.closest('.reel-edit-controls');
+    if (editorControls) editorControls.appendChild(timelineMuteButton);
+    else flow.appendChild(timelineMuteButton);
     function syncTimelineMuteButton() {
       const muted = Boolean(editVideo.muted);
       timelineMuteButton.setAttribute('aria-pressed', muted ? 'true' : 'false');
