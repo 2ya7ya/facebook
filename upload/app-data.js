@@ -958,12 +958,29 @@
     timelineScroll.appendChild(timelineContent);
     timeline.replaceChildren(timelineScroll, timelinePlayhead, timelineSoundLabel);
     if (timelineAdd) timeline.appendChild(timelineAdd);
-    // Keep the mute control in the fixed editor-controls layer, completely
-    // outside .reel-timeline and .reel-timeline-content. Only the latter is
-    // translated during dragging/momentum, so this button cannot move with it.
-    const editorControls = timeline.closest('.reel-edit-controls');
-    if (editorControls) editorControls.appendChild(timelineMuteButton);
-    else flow.appendChild(timelineMuteButton);
+    // Put the mute control directly under <body>. This keeps it outside every
+    // reel/timeline ancestor that can be translated during dragging or inertia.
+    timelineMuteButton.id = 'reelTimelineMuteFixed';
+    document.body.appendChild(timelineMuteButton);
+    function positionTimelineMuteButton() {
+      if (!flow.classList.contains('is-open') || !flow.querySelector('.reel-create-edit.is-active')) {
+        timelineMuteButton.style.display = 'none';
+        return;
+      }
+      const rect = timeline.getBoundingClientRect();
+      if (!rect.width || !rect.height) {
+        timelineMuteButton.style.display = 'none';
+        return;
+      }
+      const playheadX = rect.left + rect.width / 2;
+      timelineMuteButton.style.left = Math.round(playheadX - 112) + 'px';
+      timelineMuteButton.style.top = Math.round(rect.top + 82 + 3) + 'px';
+      timelineMuteButton.style.display = 'grid';
+    }
+    window.addEventListener('resize', positionTimelineMuteButton, { passive: true });
+    window.addEventListener('orientationchange', function () {
+      requestAnimationFrame(positionTimelineMuteButton);
+    }, { passive: true });
     function syncTimelineMuteButton() {
       const muted = Boolean(editVideo.muted);
       timelineMuteButton.setAttribute('aria-pressed', muted ? 'true' : 'false');
@@ -1453,6 +1470,7 @@
       const videos = { preview: '#reelCreateVideo', edit: '#reelEditVideo', caption: '#reelCaptionVideo' };
       const video = flow.querySelector(videos[name]);
       if (video) loadVisibleVideo(video);
+      requestAnimationFrame(positionTimelineMuteButton);
     }
     function openFlow() {
       flow.classList.add('is-open');
@@ -1467,6 +1485,7 @@
       closeToolPanel();
       flow.classList.remove('is-video-loading');
       document.body.classList.remove('reel-create-open');
+      timelineMuteButton.style.display = 'none';
       videoLoadGeneration += 1;
       cancelTimelineFollow();
       cancelTimelineInertia();
