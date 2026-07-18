@@ -11,7 +11,7 @@ const publicDirectory = path.join(__dirname, 'upload');
 const authSecret = process.env.AUTH_SECRET || crypto.randomBytes(32).toString('hex');
 
 app.disable('x-powered-by');
-app.use(express.json({ limit: '64kb' }));
+app.use(express.json({ limit: '12mb' }));
 
 let pool = null;
 if (process.env.DATABASE_URL) {
@@ -43,6 +43,17 @@ async function ensureDatabase() {
       account_name VARCHAR(120) NOT NULL UNIQUE,
       password VARCHAR(255) NOT NULL,
       warning TEXT NOT NULL DEFAULT 'School demonstration only — never store real passwords this way.'
+    )
+  `);
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_photo TEXT');
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS cover_photo TEXT');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS posts (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      body TEXT NOT NULL DEFAULT '',
+      image_data TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
   await pool.query(`
@@ -121,6 +132,18 @@ function requireAuth(request, response, next) {
   next();
 }
 
+function requireApiAuth(request, response, next) {
+  const session = readSession(request);
+  if (!session) return response.status(401).json({ error: 'Sign in to continue.' });
+  request.user = session;
+  next();
+}
+
+function validImageData(value) {
+  if (value === null || value === undefined || value === '') return true;
+  return typeof value === 'string' && value.length <= 8 * 1024 * 1024 && /^data:image\/(?:png|jpe?g|webp|gif);base64,[a-z0-9+/=\s]+$/i.test(value);
+}
+
 const loginAttempts = new Map();
 function loginAllowed(ip) {
   const now = Date.now();
@@ -197,6 +220,101 @@ app.get('/api/me', (request, response) => {
   response.json({ authenticated: true, user: { id: session.id, name: session.name } });
 });
 
+app.get('/api/profile', requireApiAuth, async (request, response) => {
+  try {
+    await ensureDatabase();
+    const result = await pool.query(
+      'SELECT id, full_name, profile_photo, cover_photo FROM users WHERE id = $1 LIMIT 1',
+      [request.user.id]
+    );
+    const user = result.rows[0];
+    if (!user) return response.status(404).json({ error: 'Account not found.' });
+    response.json({
+      id: String(user.id),
+      name: user.full_name,
+      profilePhoto: user.profile_photo || '',
+      coverPhoto: user.cover_photo || ''
+    });
+  } catch (error) {
+    console.error('Profile load failed:', error.message);
+    response.status(500).json({ error: 'Could not load the profile.' });
+  }
+});
+
+app.put('/api/profile', requireApiAuth, async (request, response) => {
+  const profilePhoto = request.body?.profilePhoto;
+  const coverPhoto = request.body?.coverPhoto;
+  if (profilePhoto === undefined && coverPhoto === undefined) return response.status(400).json({ error: 'No profile changes supplied.' });
+  if (!validImageData(profilePhoto) || !validImageData(coverPhoto)) return response.status(400).json({ error: 'Choose a valid image smaller than 6 MB.' });
+  try {
+    await ensureDatabase();
+    const result = await pool.query(
+      `UPDATE users
+       SET profile_photo = CASE WHEN $2::boolean THEN $3 ELSE profile_photo END,
+           cover_photo = CASE WHEN $4::boolean THEN $5 ELSE cover_photo END
+       WHERE id = $1
+       RETURNING id, full_name, profile_photo, cover_photo`,
+      [request.user.id, profilePhoto !== undefined, profilePhoto || null, coverPhoto !== undefined, coverPhoto || null]
+    );
+    const user = result.rows[0];
+    response.json({
+      ok: true,
+      name: user.full_name,
+      profilePhoto: user.profile_photo || '',
+      coverPhoto: user.cover_photo || ''
+    });
+  } catch (error) {
+    console.error('Profile update failed:', error.message);
+    response.status(500).json({ error: 'Could not save the photo.' });
+  }
+});
+
+app.get('/api/posts', requireApiAuth, async (_request, response) => {
+  try {
+    await ensureDatabase();
+    const result = await pool.query(`
+      SELECT p.id, p.user_id, p.body, p.image_data, p.created_at, u.full_name, u.profile_photo
+      FROM posts p
+      JOIN users u ON u.id = p.user_id
+      ORDER BY p.created_at DESC
+      LIMIT 50
+    `);
+    response.json({ posts: result.rows.map(row => ({
+      id: String(row.id),
+      userId: String(row.user_id),
+      body: row.body,
+      image: row.image_data || '',
+      createdAt: row.created_at,
+      author: row.full_name,
+      profilePhoto: row.profile_photo || ''
+    })) });
+  } catch (error) {
+    console.error('Posts load failed:', error.message);
+    response.status(500).json({ error: 'Could not load posts.' });
+  }
+});
+
+app.post('/api/posts', requireApiAuth, async (request, response) => {
+  const body = String(request.body?.body || '').trim();
+  const image = request.body?.image || '';
+  if (!body && !image) return response.status(400).json({ error: 'Write something or add a photo.' });
+  if (body.length > 5000) return response.status(400).json({ error: 'Post text is too long.' });
+  if (!validImageData(image)) return response.status(400).json({ error: 'Choose a valid image smaller than 6 MB.' });
+  try {
+    await ensureDatabase();
+    const result = await pool.query(
+      `INSERT INTO posts (user_id, body, image_data)
+       VALUES ($1, $2, $3)
+       RETURNING id, body, image_data, created_at`,
+      [request.user.id, body, image || null]
+    );
+    response.status(201).json({ ok: true, post: result.rows[0] });
+  } catch (error) {
+    console.error('Post creation failed:', error.message);
+    response.status(500).json({ error: 'Could not save the post.' });
+  }
+});
+
 app.get('/', (request, response) => {
   if (readSession(request)) return response.redirect('/app');
   response.sendFile(path.join(publicDirectory, 'login.html'));
@@ -204,6 +322,10 @@ app.get('/', (request, response) => {
 
 app.get('/app', requireAuth, (_request, response) => {
   response.sendFile(path.join(publicDirectory, 'profile_pagee.html'));
+});
+
+app.get('/app-data.js', requireAuth, (_request, response) => {
+  response.type('application/javascript').sendFile(path.join(publicDirectory, 'app-data.js'));
 });
 
 app.get('*splat', (request, response) => response.redirect(readSession(request) ? '/app' : '/'));
