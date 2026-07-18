@@ -961,7 +961,8 @@
     timeline.replaceChildren(timelineScroll, timelinePlayhead, timelineSoundLabel);
     if (timelineAdd) timeline.appendChild(timelineAdd);
     timelineMuteLayer.appendChild(timelineMuteButton);
-    flow.querySelector('[data-reel-create-stage="edit"]').appendChild(timelineMuteLayer);
+    timelineMuteLayer.hidden = true;
+    flow.appendChild(timelineMuteLayer);
     function syncTimelineMuteButton() {
       const muted = Boolean(editVideo.muted);
       timelineMuteButton.setAttribute('aria-pressed', muted ? 'true' : 'false');
@@ -1448,6 +1449,7 @@
     }
     function showStage(name) {
       flow.querySelectorAll('[data-reel-create-stage]').forEach(function (stage) { stage.classList.toggle('is-active', stage.dataset.reelCreateStage === name); });
+      timelineMuteLayer.hidden = name !== 'edit';
       const videos = { preview: '#reelCreateVideo', edit: '#reelEditVideo', caption: '#reelCaptionVideo' };
       const video = flow.querySelector(videos[name]);
       if (video) loadVisibleVideo(video);
