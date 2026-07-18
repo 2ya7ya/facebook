@@ -920,6 +920,9 @@
     let timelineVideoFrameCallback = 0;
     let timelineLastTextUpdate = 0;
     let timelinePlaybackAnimation = null;
+    let timelinePendingScrub = null;
+    let timelineScrubInFlight = false;
+    let timelineScrubTimer = 0;
     let timelineDragging = false;
     let timelinePointerDown = false;
     let timelineSettleTimer = 0;
@@ -1169,19 +1172,39 @@
       const offset = Math.max(0, Math.min(timelineDuration, Number(time) || 0)) * pixelsPerSecond;
       timelineContent.style.transform = 'translate3d(' + (-offset) + 'px,0,0)';
     }
+    function applyPendingTimelineScrub() {
+      if (timelineScrubInFlight || timelinePendingScrub === null) return;
+      const target = timelinePendingScrub;
+      timelinePendingScrub = null;
+      timelineScrubInFlight = true;
+      let finished = false;
+      function done() {
+        if (finished) return;
+        finished = true;
+        window.clearTimeout(timelineScrubTimer);
+        editVideo.removeEventListener('seeked', done);
+        timelineScrubInFlight = false;
+        if (timelinePendingScrub !== null) applyPendingTimelineScrub();
+      }
+      editVideo.addEventListener('seeked', done, { once: true });
+      try { editVideo.currentTime = target; } catch (error) { done(); }
+      timelineScrubTimer = window.setTimeout(done, 120);
+    }
+    function scrubTimelineTo(time) {
+      timelinePendingScrub = Math.min(Math.max(0, timelineDuration - .01), Math.max(0, time));
+      applyPendingTimelineScrub();
+    }
     function syncEditPlayback(forceText) {
-      let looped = false;
-      if (editState.trimEnd > editState.trimStart && editVideo.currentTime >= editState.trimEnd) {
-        editVideo.currentTime = editState.trimStart;
-        looped = true;
+      if (!timelineDragging && editState.trimEnd > editState.trimStart && editState.trimEnd < timelineDuration && editVideo.currentTime >= editState.trimEnd) {
+        editVideo.currentTime = Math.max(editState.trimStart, editState.trimEnd - .01);
+        editVideo.pause();
       }
       const now = performance.now();
       if (forceText || now - timelineLastTextUpdate > 90) {
         timelineLastTextUpdate = now;
         editTime.textContent = previewTime(editVideo.currentTime) + '/' + previewTime(editVideo.duration);
       }
-      if (timelineDragging || editVideo.paused) renderTimelineAt(editVideo.currentTime);
-      if (looped && !editVideo.paused && !timelineDragging) scheduleTimelineFollow();
+      if (!timelineDragging && editVideo.paused) renderTimelineAt(editVideo.currentTime);
     }
     function cancelTimelineFollow() {
       cancelAnimationFrame(timelineAnimationFrame);
@@ -1197,7 +1220,11 @@
       const start = Math.max(editState.trimStart || 0, editVideo.currentTime || 0);
       const end = editState.trimEnd > start ? editState.trimEnd : timelineDuration;
       renderTimelineAt(start);
-      if (end <= start || typeof timelineContent.animate !== 'function') {
+      if (end <= start + .01) {
+        renderTimelineAt(end);
+        return;
+      }
+      if (typeof timelineContent.animate !== 'function') {
         timelineAnimationFrame = requestAnimationFrame(function fallbackFollow() {
           if (editVideo.paused || timelineDragging) return;
           renderTimelineAt(editVideo.currentTime);
@@ -1224,7 +1251,8 @@
     function finishTimelineDrag() {
       if (timelinePointerDown) return;
       timelineDragging = false;
-      renderTimelineAt(editVideo.currentTime);
+      if (timelinePendingScrub !== null) applyPendingTimelineScrub();
+      renderTimelineAt(timelinePendingScrub === null ? editVideo.currentTime : timelinePendingScrub);
       if (!editVideo.paused) scheduleTimelineFollow();
     }
     function scheduleTimelineDragFinish() {
@@ -1249,7 +1277,7 @@
       if (!timelinePointerDown || event.target.closest('.reel-trim-handle')) return;
       event.preventDefault();
       const nextTime = Math.min(timelineDuration, Math.max(0, timelineDragStartTime + (timelineDragStartX - event.clientX) / pixelsPerSecond));
-      editVideo.currentTime = nextTime;
+      scrubTimelineTo(nextTime);
       renderTimelineAt(nextTime);
       editTime.textContent = previewTime(nextTime) + '/' + previewTime(timelineDuration);
     }
@@ -1312,6 +1340,9 @@
       videoLoadGeneration += 1;
       cancelTimelineFollow();
       window.clearTimeout(timelineSettleTimer);
+      window.clearTimeout(timelineScrubTimer);
+      timelinePendingScrub = null;
+      timelineScrubInFlight = false;
       timelineDragging = false;
       timelinePointerDown = false;
       setTimelineSelected(false);
