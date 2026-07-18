@@ -794,6 +794,38 @@
     const avatar = root.querySelector('.reels-avatar');
     const caption = root.querySelector('#reelsCaptionDisplay');
     video.src = reel.video;
+    const edits = Object.assign({ trimStart: 0, trimEnd: 0, brightness: 1, contrast: 1, saturation: 1, effect: 'none', text: '', sticker: '', captions: false, overlay: false, fit: 'contain' }, reel.editData || {});
+    const effectFilters = { none: '', warm: 'sepia(.22) hue-rotate(-8deg)', cool: 'hue-rotate(18deg) saturate(.9)', mono: 'grayscale(1)', vivid: 'saturate(1.45) contrast(1.08)' };
+    video.style.filter = 'brightness(' + edits.brightness + ') contrast(' + edits.contrast + ') saturate(' + edits.saturation + ') ' + (effectFilters[edits.effect] || '');
+    video.style.objectFit = edits.fit === 'cover' ? 'cover' : 'contain';
+    video.dataset.trimStart = String(edits.trimStart || 0);
+    video.dataset.trimEnd = String(edits.trimEnd || 0);
+    let publishedOverlay = root.querySelector('.reels-published-overlay');
+    if (!publishedOverlay) {
+      publishedOverlay = document.createElement('div');
+      publishedOverlay.className = 'reels-published-overlay';
+      root.appendChild(publishedOverlay);
+    }
+    publishedOverlay.classList.toggle('has-vignette', Boolean(edits.overlay));
+    publishedOverlay.replaceChildren();
+    if (edits.text) {
+      const text = document.createElement('span');
+      text.className = 'reel-overlay-text';
+      text.textContent = edits.text;
+      publishedOverlay.appendChild(text);
+    }
+    if (edits.sticker) {
+      const sticker = document.createElement('span');
+      sticker.className = 'reel-overlay-sticker';
+      sticker.textContent = edits.sticker;
+      publishedOverlay.appendChild(sticker);
+    }
+    if (edits.captions) {
+      const generatedCaption = document.createElement('span');
+      generatedCaption.className = 'reel-overlay-captions';
+      generatedCaption.textContent = reel.caption || 'Captions enabled';
+      publishedOverlay.appendChild(generatedCaption);
+    }
     video.classList.add('has-source');
     if (empty) empty.style.display = 'none';
     root.querySelector('#reelsCreatorName').textContent = reel.author || 'Facebook user';
@@ -818,6 +850,11 @@
       commentForm.querySelectorAll('input,button').forEach(function (control) { control.disabled = reel.allowComments === false; });
       if (reel.allowComments === false && !reel.comments.length) root.querySelector('.reels-comments-list').textContent = 'Comments are turned off for this Reel.';
     }
+    video.addEventListener('loadedmetadata', function setPublishedTrim() {
+      video.removeEventListener('loadedmetadata', setPublishedTrim);
+      const start = Number(video.dataset.trimStart || 0);
+      if (start > 0 && start < video.duration) video.currentTime = start;
+    });
     video.play().catch(function () {});
   }
 
@@ -855,19 +892,110 @@
     const commentsLabel = flow.querySelector('#reelCommentsLabel');
     const previewVideos = Array.from(flow.querySelectorAll('video'));
     const form = root.querySelector('.reels-comment-form');
-    let previewUrl = '';
+    const publishedVideo = root.querySelector('#reelsVideo');
+    let previewUrls = [];
+    let selectedVideo = null;
+    let previewReadyTimer = 0;
+    let editState = freshEditState();
     const editVideo = flow.querySelector('#reelEditVideo');
     const editTime = flow.querySelector('#reelEditTime');
+    const effectOrder = ['none', 'warm', 'cool', 'mono', 'vivid'];
+    const stickers = ['', '✨', '❤️', '🔥', '😊'];
+    const effectFilters = { none: '', warm: 'sepia(.22) hue-rotate(-8deg)', cool: 'hue-rotate(18deg) saturate(.9)', mono: 'grayscale(1)', vivid: 'saturate(1.45) contrast(1.08)' };
+    const toolPanel = document.createElement('section');
+    toolPanel.className = 'reel-tool-panel';
+    toolPanel.setAttribute('aria-hidden', 'true');
+    flow.appendChild(toolPanel);
+    function freshEditState() {
+      return { trimStart: 0, trimEnd: 0, brightness: 1, contrast: 1, saturation: 1, effect: 'none', text: '', sticker: '', captions: false, overlay: false, fit: 'contain' };
+    }
+    function clearPreviewUrls() {
+      previewUrls.forEach(function (url) { URL.revokeObjectURL(url); });
+      previewUrls = [];
+    }
+    function ensureUserOverlay(video) {
+      const panel = video.closest('[data-reel-create-stage]');
+      let overlay = panel.querySelector('.reel-user-overlay');
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.className = 'reel-user-overlay';
+        panel.appendChild(overlay);
+      }
+      overlay.classList.toggle('has-vignette', editState.overlay);
+      overlay.replaceChildren();
+      if (editState.text) {
+        const text = document.createElement('span');
+        text.className = 'reel-overlay-text';
+        text.textContent = editState.text;
+        overlay.appendChild(text);
+      }
+      if (editState.sticker) {
+        const sticker = document.createElement('span');
+        sticker.className = 'reel-overlay-sticker';
+        sticker.textContent = editState.sticker;
+        overlay.appendChild(sticker);
+      }
+      if (editState.captions) {
+        const captions = document.createElement('span');
+        captions.className = 'reel-overlay-captions';
+        captions.textContent = caption.value.trim() || 'Captions enabled';
+        overlay.appendChild(captions);
+      }
+    }
+    function applyPreviewEdits() {
+      const filter = 'brightness(' + editState.brightness + ') contrast(' + editState.contrast + ') saturate(' + editState.saturation + ') ' + (effectFilters[editState.effect] || '');
+      previewVideos.forEach(function (video) {
+        video.style.filter = filter;
+        video.style.objectFit = editState.fit;
+        ensureUserOverlay(video);
+      });
+    }
+    function closeToolPanel() {
+      toolPanel.classList.remove('is-open');
+      toolPanel.setAttribute('aria-hidden', 'true');
+    }
+    function openToolPanel(title, body) {
+      toolPanel.innerHTML = '<header><strong></strong><button type="button" aria-label="Close">×</button></header><div class="reel-tool-panel-body"></div>';
+      toolPanel.querySelector('strong').textContent = title;
+      toolPanel.querySelector('.reel-tool-panel-body').appendChild(body);
+      toolPanel.classList.add('is-open');
+      toolPanel.setAttribute('aria-hidden', 'false');
+      toolPanel.querySelector('button').addEventListener('click', closeToolPanel);
+    }
+    function rangeControl(label, key, min, max, step) {
+      const row = document.createElement('label');
+      row.className = 'reel-tool-range';
+      const name = document.createElement('span');
+      const output = document.createElement('output');
+      const input = document.createElement('input');
+      name.textContent = label;
+      output.textContent = editState[key];
+      input.type = 'range'; input.min = min; input.max = max; input.step = step; input.value = editState[key];
+      input.addEventListener('input', function () { editState[key] = Number(input.value); output.textContent = input.value; applyPreviewEdits(); });
+      row.append(name, output, input);
+      return row;
+    }
     function previewTime(value) {
       value = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
       return String(Math.floor(value / 60)).padStart(2, '0') + ':' + String(value % 60).padStart(2, '0');
     }
     editVideo.addEventListener('loadedmetadata', function () { editTime.textContent = previewTime(0) + '/' + previewTime(editVideo.duration); });
-    editVideo.addEventListener('timeupdate', function () { editTime.textContent = previewTime(editVideo.currentTime) + '/' + previewTime(editVideo.duration); });
+    editVideo.addEventListener('timeupdate', function () {
+      if (editState.trimEnd > editState.trimStart && editVideo.currentTime >= editState.trimEnd) editVideo.currentTime = editState.trimStart;
+      editTime.textContent = previewTime(editVideo.currentTime) + '/' + previewTime(editVideo.duration);
+    });
     function showStage(name) {
       flow.querySelectorAll('[data-reel-create-stage]').forEach(function (stage) { stage.classList.toggle('is-active', stage.dataset.reelCreateStage === name); });
-      if (name === 'edit') flow.querySelector('#reelEditVideo').play().catch(function () {});
-      else if (name === 'preview') flow.querySelector('#reelCreateVideo').play().catch(function () {});
+      if (name === 'edit') {
+        const video = flow.querySelector('#reelEditVideo');
+        if (video.readyState >= 1 && video.currentTime === 0) video.currentTime = Math.min(.05, (video.duration || .5) / 10);
+        video.play().catch(function () {});
+      } else if (name === 'preview') flow.querySelector('#reelCreateVideo').play().catch(function () {});
+      else if (name === 'caption') {
+        const video = flow.querySelector('#reelCaptionVideo');
+        if (video.readyState >= 1 && video.currentTime === 0) video.currentTime = Math.min(.05, (video.duration || .5) / 10);
+        video.play().catch(function () {});
+      }
     }
     function openFlow() {
       flow.classList.add('is-open');
@@ -879,10 +1007,13 @@
       flow.classList.remove('is-open');
       flow.setAttribute('aria-hidden', 'true');
       settings.classList.remove('is-open');
+      closeToolPanel();
       document.body.classList.remove('reel-create-open');
       previewVideos.forEach(function (video) { video.pause(); video.removeAttribute('src'); });
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      previewUrl = '';
+      window.clearTimeout(previewReadyTimer);
+      clearPreviewUrls();
+      selectedVideo = null;
+      editState = freshEditState();
       file.value = '';
       caption.value = '';
     }
@@ -894,10 +1025,36 @@
         reelMessage(root, 'Choose a video smaller than 7 MB.');
         return;
       }
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      previewUrl = URL.createObjectURL(selected);
-      previewVideos.forEach(function (video) { video.src = previewUrl; });
-      openFlow();
+      clearPreviewUrls();
+      selectedVideo = selected;
+      editState = freshEditState();
+      let opened = false;
+      function revealWhenDecoded() {
+        if (opened || selectedVideo !== selected) return;
+        opened = true;
+        window.clearTimeout(previewReadyTimer);
+        previewVideos.forEach(function (video) {
+          if (video.readyState >= 1 && video.duration && video.currentTime === 0) {
+            try { video.currentTime = Math.min(.05, video.duration / 10); } catch (error) {}
+          }
+        });
+        applyPreviewEdits();
+        openFlow();
+      }
+      previewVideos.forEach(function (video, index) {
+        const url = URL.createObjectURL(selected);
+        previewUrls.push(url);
+        video.muted = true;
+        video.playsInline = true;
+        video.preload = 'auto';
+        video.src = url;
+        video.load();
+        if (index === 0) {
+          video.addEventListener('loadeddata', revealWhenDecoded, { once: true });
+          video.addEventListener('canplay', revealWhenDecoded, { once: true });
+        }
+      });
+      previewReadyTimer = window.setTimeout(revealWhenDecoded, 1400);
     });
     publish.addEventListener('click', async function () {
       const selected = file.files && file.files[0];
@@ -907,7 +1064,7 @@
       try {
         const video = await fileData(selected);
         const audience = flow.querySelector('input[name="reelAudience"]:checked')?.value || 'followers';
-        await api('/api/reels', { method: 'POST', body: JSON.stringify({ video: video, mimeType: selected.type, caption: caption.value.trim(), visibility: audience, allowComments: allowComments.checked }) });
+        await api('/api/reels', { method: 'POST', body: JSON.stringify({ video: video, mimeType: selected.type, caption: caption.value.trim(), visibility: audience, allowComments: allowComments.checked, editData: editState }) });
         await loadLatestReel();
         closeFlow();
         reelMessage(root, 'Reel posted');
@@ -935,7 +1092,56 @@
           if (video.paused) video.play().catch(function () {}); else video.pause();
         }
       } else if (tool) {
-        reelMessage(root, tool.dataset.reelTool === 'story' ? 'Use Next to finish your video.' : 'Editing option selected');
+        const name = tool.dataset.reelTool;
+        if (name === 'sound') {
+          const muted = !previewVideos[0].muted;
+          previewVideos.forEach(function (video) { video.muted = muted; });
+          tool.textContent = muted ? '♪  Add sound' : '🔊  Sound on';
+        } else if (name === 'layout') {
+          editState.fit = editState.fit === 'contain' ? 'cover' : 'contain';
+          applyPreviewEdits();
+          reelMessage(root, editState.fit === 'cover' ? 'Video fills the frame' : 'Full video is visible');
+        } else if (name === 'effects' || name === 'filters' || name === 'magic') {
+          editState.effect = effectOrder[(effectOrder.indexOf(editState.effect) + 1) % effectOrder.length];
+          applyPreviewEdits();
+          reelMessage(root, editState.effect === 'none' ? 'Effect removed' : editState.effect.charAt(0).toUpperCase() + editState.effect.slice(1) + ' effect');
+        } else if (name === 'stickers') {
+          editState.sticker = stickers[(stickers.indexOf(editState.sticker) + 1) % stickers.length];
+          applyPreviewEdits();
+        } else if (name === 'captions') {
+          editState.captions = !editState.captions;
+          applyPreviewEdits();
+          reelMessage(root, editState.captions ? 'Captions enabled' : 'Captions removed');
+        } else if (name === 'overlay') {
+          editState.overlay = !editState.overlay;
+          applyPreviewEdits();
+          reelMessage(root, editState.overlay ? 'Overlay added' : 'Overlay removed');
+        } else if (name === 'text') {
+          const wrap = document.createElement('div');
+          const input = document.createElement('input');
+          input.className = 'reel-tool-text-input'; input.maxLength = 100; input.placeholder = 'Add text to your reel'; input.value = editState.text;
+          const save = document.createElement('button'); save.type = 'button'; save.className = 'reel-tool-save'; save.textContent = 'Apply text';
+          save.addEventListener('click', function () { editState.text = input.value.trim(); applyPreviewEdits(); closeToolPanel(); });
+          wrap.append(input, save); openToolPanel('Text', wrap); input.focus();
+        } else if (name === 'adjust') {
+          const wrap = document.createElement('div');
+          wrap.append(rangeControl('Brightness', 'brightness', .5, 1.5, .05), rangeControl('Contrast', 'contrast', .5, 1.5, .05), rangeControl('Saturation', 'saturation', 0, 2, .05));
+          openToolPanel('Adjust', wrap);
+        } else if (name === 'edit') {
+          const wrap = document.createElement('div');
+          const duration = Number.isFinite(editVideo.duration) ? editVideo.duration : 60;
+          editState.trimEnd = editState.trimEnd || Math.floor(duration);
+          wrap.append(rangeControl('Start', 'trimStart', 0, Math.max(0, duration - .1), .1), rangeControl('End', 'trimEnd', .1, duration, .1));
+          openToolPanel('Trim video', wrap);
+        } else if (name === 'autocut') {
+          const duration = Number.isFinite(previewVideos[0].duration) ? previewVideos[0].duration : 15;
+          editState.trimStart = 0; editState.trimEnd = Math.min(duration, 15);
+          reelMessage(root, 'AutoCut set to ' + Math.round(editState.trimEnd) + ' seconds');
+        } else if (name === 'add-clip') {
+          file.click();
+        } else if (name === 'story') {
+          reelMessage(root, 'Use Next to add a caption and post your video.');
+        }
       }
     });
     flow.querySelectorAll('input[name="reelAudience"]').forEach(function (radio) {
@@ -945,6 +1151,12 @@
       });
     });
     allowComments.addEventListener('change', function () { commentsLabel.textContent = allowComments.checked ? 'Allowed' : 'Turned off'; });
+    caption.addEventListener('input', applyPreviewEdits);
+    publishedVideo.addEventListener('timeupdate', function () {
+      const start = Number(publishedVideo.dataset.trimStart || 0);
+      const end = Number(publishedVideo.dataset.trimEnd || 0);
+      if (end > start && publishedVideo.currentTime >= end) publishedVideo.currentTime = start;
+    });
     settings.addEventListener('click', function (event) {
       if (event.target === settings) {
         settings.classList.remove('is-open');

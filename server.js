@@ -84,11 +84,13 @@ async function ensureDatabase() {
       mime_type VARCHAR(120) NOT NULL,
       visibility VARCHAR(20) NOT NULL DEFAULT 'followers',
       allow_comments BOOLEAN NOT NULL DEFAULT TRUE,
+      edit_data JSONB NOT NULL DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
   await pool.query("ALTER TABLE reels ADD COLUMN IF NOT EXISTS visibility VARCHAR(20) NOT NULL DEFAULT 'followers'");
   await pool.query('ALTER TABLE reels ADD COLUMN IF NOT EXISTS allow_comments BOOLEAN NOT NULL DEFAULT TRUE');
+  await pool.query("ALTER TABLE reels ADD COLUMN IF NOT EXISTS edit_data JSONB NOT NULL DEFAULT '{}'::jsonb");
   await pool.query(`
     CREATE TABLE IF NOT EXISTS stories (
       id BIGSERIAL PRIMARY KEY,
@@ -215,6 +217,28 @@ function validVideoData(value) {
 
 function validNumericId(value) {
   return /^\d+$/.test(String(value || ''));
+}
+
+function normalizeReelEdits(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const number = (input, minimum, maximum, fallback) => {
+    const parsed = Number(input);
+    return Number.isFinite(parsed) ? Math.min(maximum, Math.max(minimum, parsed)) : fallback;
+  };
+  const effects = new Set(['none', 'warm', 'cool', 'mono', 'vivid']);
+  return {
+    trimStart: number(source.trimStart, 0, 3600, 0),
+    trimEnd: number(source.trimEnd, 0, 3600, 0),
+    brightness: number(source.brightness, 0.5, 1.5, 1),
+    contrast: number(source.contrast, 0.5, 1.5, 1),
+    saturation: number(source.saturation, 0, 2, 1),
+    effect: effects.has(source.effect) ? source.effect : 'none',
+    text: String(source.text || '').slice(0, 100),
+    sticker: String(source.sticker || '').slice(0, 8),
+    captions: Boolean(source.captions),
+    overlay: Boolean(source.overlay),
+    fit: source.fit === 'cover' ? 'cover' : 'contain'
+  };
 }
 
 function validProfileFrame(name, svg) {
@@ -553,7 +577,7 @@ app.get('/api/reels', requireApiAuth, async (request, response) => {
       ), my_likes AS (
         SELECT reel_id FROM reel_likes WHERE user_id = $1
       )
-      SELECT r.id, r.user_id, r.caption, r.video_data, r.mime_type, r.visibility, r.allow_comments, r.created_at, u.full_name, u.profile_photo,
+      SELECT r.id, r.user_id, r.caption, r.video_data, r.mime_type, r.visibility, r.allow_comments, r.edit_data, r.created_at, u.full_name, u.profile_photo,
              COALESCE(lc.like_count, 0)::int AS like_count,
              (ml.reel_id IS NOT NULL) AS liked_by_me
       FROM reels r
@@ -590,6 +614,7 @@ app.get('/api/reels', requireApiAuth, async (request, response) => {
       mimeType: row.mime_type,
       visibility: row.visibility,
       allowComments: Boolean(row.allow_comments),
+      editData: normalizeReelEdits(row.edit_data),
       createdAt: row.created_at,
       author: row.full_name,
       profilePhoto: row.profile_photo || '',
@@ -610,6 +635,7 @@ app.post('/api/reels', requireApiAuth, async (request, response) => {
   const mimeType = String(request.body?.mimeType || detectedType).trim().toLowerCase();
   const visibility = String(request.body?.visibility || 'followers').trim().toLowerCase();
   const allowComments = request.body?.allowComments !== false;
+  const editData = normalizeReelEdits(request.body?.editData);
   if (!validVideoData(video)) return response.status(400).json({ error: 'Choose a valid video smaller than 7 MB.' });
   if (!/^video\/[a-z0-9.+-]+$/i.test(mimeType) || !video.toLowerCase().startsWith(`data:${mimeType};base64,`)) {
     return response.status(400).json({ error: 'The selected video format is not supported.' });
@@ -619,10 +645,10 @@ app.post('/api/reels', requireApiAuth, async (request, response) => {
   try {
     await ensureDatabase();
     const result = await pool.query(
-      `INSERT INTO reels (user_id, caption, video_data, mime_type, visibility, allow_comments)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, user_id, caption, video_data, mime_type, visibility, allow_comments, created_at`,
-      [request.user.id, caption, video, mimeType, visibility, allowComments]
+      `INSERT INTO reels (user_id, caption, video_data, mime_type, visibility, allow_comments, edit_data)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, user_id, caption, video_data, mime_type, visibility, allow_comments, edit_data, created_at`,
+      [request.user.id, caption, video, mimeType, visibility, allowComments, editData]
     );
     response.status(201).json({ ok: true, reel: result.rows[0] });
   } catch (error) {
