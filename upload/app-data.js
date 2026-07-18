@@ -792,12 +792,15 @@
     const video = root.querySelector('#reelsVideo');
     const empty = root.querySelector('.reels-empty-state');
     const avatar = root.querySelector('.reels-avatar');
-    const caption = root.querySelector('#reelsCaption');
+    const caption = root.querySelector('#reelsCaptionDisplay');
     video.src = reel.video;
     video.classList.add('has-source');
     if (empty) empty.style.display = 'none';
     root.querySelector('#reelsCreatorName').textContent = reel.author || 'Facebook user';
-    if (caption) caption.value = reel.caption || '';
+    if (caption) {
+      caption.textContent = reel.caption || '';
+      caption.hidden = !reel.caption;
+    }
     if (avatar) {
       const image = document.createElement('img');
       image.src = reel.profilePhoto || fallbackAvatar;
@@ -810,6 +813,11 @@
     setReelCount(root, 'like', reel.likeCount);
     setReelCount(root, 'comments', reel.comments.length);
     renderReelComments(root, reel.comments);
+    const commentForm = root.querySelector('.reels-comment-form');
+    if (commentForm) {
+      commentForm.querySelectorAll('input,button').forEach(function (control) { control.disabled = reel.allowComments === false; });
+      if (reel.allowComments === false && !reel.comments.length) root.querySelector('.reels-comments-list').textContent = 'Comments are turned off for this Reel.';
+    }
     video.play().catch(function () {});
   }
 
@@ -838,19 +846,58 @@
     if (!root || root.dataset.persistenceReady) return;
     root.dataset.persistenceReady = 'true';
     const file = root.querySelector('#reelsFile');
-    const publish = root.querySelector('#reelsPublish');
-    const caption = root.querySelector('#reelsCaption');
+    const flow = root.querySelector('#reelCreateFlow');
+    const publish = flow.querySelector('#reelCreatePublish');
+    const caption = flow.querySelector('#reelCreateCaption');
+    const settings = flow.querySelector('#reelSettingsLayer');
+    const allowComments = flow.querySelector('#reelAllowComments');
+    const audienceLabel = flow.querySelector('#reelAudienceLabel');
+    const commentsLabel = flow.querySelector('#reelCommentsLabel');
+    const previewVideos = Array.from(flow.querySelectorAll('video'));
     const form = root.querySelector('.reels-comment-form');
+    let previewUrl = '';
+    const editVideo = flow.querySelector('#reelEditVideo');
+    const editTime = flow.querySelector('#reelEditTime');
+    function previewTime(value) {
+      value = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+      return String(Math.floor(value / 60)).padStart(2, '0') + ':' + String(value % 60).padStart(2, '0');
+    }
+    editVideo.addEventListener('loadedmetadata', function () { editTime.textContent = previewTime(0) + '/' + previewTime(editVideo.duration); });
+    editVideo.addEventListener('timeupdate', function () { editTime.textContent = previewTime(editVideo.currentTime) + '/' + previewTime(editVideo.duration); });
+    function showStage(name) {
+      flow.querySelectorAll('[data-reel-create-stage]').forEach(function (stage) { stage.classList.toggle('is-active', stage.dataset.reelCreateStage === name); });
+      if (name === 'edit') flow.querySelector('#reelEditVideo').play().catch(function () {});
+      else if (name === 'preview') flow.querySelector('#reelCreateVideo').play().catch(function () {});
+    }
+    function openFlow() {
+      flow.classList.add('is-open');
+      flow.setAttribute('aria-hidden', 'false');
+      document.body.classList.add('reel-create-open');
+      showStage('preview');
+    }
+    function closeFlow() {
+      flow.classList.remove('is-open');
+      flow.setAttribute('aria-hidden', 'true');
+      settings.classList.remove('is-open');
+      document.body.classList.remove('reel-create-open');
+      previewVideos.forEach(function (video) { video.pause(); video.removeAttribute('src'); });
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewUrl = '';
+      file.value = '';
+      caption.value = '';
+    }
     file.addEventListener('change', function () {
       const selected = file.files && file.files[0];
       if (!selected) return;
-      currentReel = null;
-      setReelCount(root, 'like', 0);
-      setReelCount(root, 'comments', 0);
-      renderReelComments(root, []);
-      publish.classList.add('is-visible');
-      publish.disabled = selected.size > 7 * 1024 * 1024;
-      if (publish.disabled) reelMessage(root, 'Choose a video smaller than 7 MB.');
+      if (selected.size > 7 * 1024 * 1024) {
+        file.value = '';
+        reelMessage(root, 'Choose a video smaller than 7 MB.');
+        return;
+      }
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewUrl = URL.createObjectURL(selected);
+      previewVideos.forEach(function (video) { video.src = previewUrl; });
+      openFlow();
     });
     publish.addEventListener('click', async function () {
       const selected = file.files && file.files[0];
@@ -859,16 +906,49 @@
       publish.textContent = 'Posting…';
       try {
         const video = await fileData(selected);
-        await api('/api/reels', { method: 'POST', body: JSON.stringify({ video: video, mimeType: selected.type, caption: caption.value.trim() }) });
-        file.value = '';
-        publish.classList.remove('is-visible');
-        reelMessage(root, 'Reel posted');
+        const audience = flow.querySelector('input[name="reelAudience"]:checked')?.value || 'followers';
+        await api('/api/reels', { method: 'POST', body: JSON.stringify({ video: video, mimeType: selected.type, caption: caption.value.trim(), visibility: audience, allowComments: allowComments.checked }) });
         await loadLatestReel();
+        closeFlow();
+        reelMessage(root, 'Reel posted');
       } catch (error) {
         reelMessage(root, error.message);
       } finally {
         publish.textContent = 'Post reel';
         publish.disabled = false;
+      }
+    });
+    flow.addEventListener('click', function (event) {
+      const action = event.target.closest('[data-reel-flow-action]');
+      const tool = event.target.closest('[data-reel-tool]');
+      if (action) {
+        const name = action.dataset.reelFlowAction;
+        if (name === 'close') closeFlow();
+        else if (name === 'preview' || name === 'edit' || name === 'caption') showStage(name);
+        else if (name === 'settings') { settings.classList.add('is-open'); settings.setAttribute('aria-hidden', 'false'); }
+        else if (name === 'close-settings') { settings.classList.remove('is-open'); settings.setAttribute('aria-hidden', 'true'); }
+        else if (name === 'share') {
+          if (typeof window.openReelsShareMenu === 'function') window.openReelsShareMenu();
+          else reelMessage(root, 'Share menu is unavailable.');
+        } else if (name === 'toggle-edit-play') {
+          const video = flow.querySelector('#reelEditVideo');
+          if (video.paused) video.play().catch(function () {}); else video.pause();
+        }
+      } else if (tool) {
+        reelMessage(root, tool.dataset.reelTool === 'story' ? 'Use Next to finish your video.' : 'Editing option selected');
+      }
+    });
+    flow.querySelectorAll('input[name="reelAudience"]').forEach(function (radio) {
+      radio.addEventListener('change', function () {
+        const names = { followers: 'Followers', friends: 'Friends', 'only-me': 'Only you' };
+        audienceLabel.textContent = names[radio.value];
+      });
+    });
+    allowComments.addEventListener('change', function () { commentsLabel.textContent = allowComments.checked ? 'Allowed' : 'Turned off'; });
+    settings.addEventListener('click', function (event) {
+      if (event.target === settings) {
+        settings.classList.remove('is-open');
+        settings.setAttribute('aria-hidden', 'true');
       }
     });
     root.addEventListener('click', async function (event) {

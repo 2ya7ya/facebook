@@ -82,9 +82,13 @@ async function ensureDatabase() {
       caption VARCHAR(500) NOT NULL DEFAULT '',
       video_data TEXT NOT NULL,
       mime_type VARCHAR(120) NOT NULL,
+      visibility VARCHAR(20) NOT NULL DEFAULT 'followers',
+      allow_comments BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query("ALTER TABLE reels ADD COLUMN IF NOT EXISTS visibility VARCHAR(20) NOT NULL DEFAULT 'followers'");
+  await pool.query('ALTER TABLE reels ADD COLUMN IF NOT EXISTS allow_comments BOOLEAN NOT NULL DEFAULT TRUE');
   await pool.query(`
     CREATE TABLE IF NOT EXISTS stories (
       id BIGSERIAL PRIMARY KEY,
@@ -549,7 +553,7 @@ app.get('/api/reels', requireApiAuth, async (request, response) => {
       ), my_likes AS (
         SELECT reel_id FROM reel_likes WHERE user_id = $1
       )
-      SELECT r.id, r.user_id, r.caption, r.video_data, r.mime_type, r.created_at, u.full_name, u.profile_photo,
+      SELECT r.id, r.user_id, r.caption, r.video_data, r.mime_type, r.visibility, r.allow_comments, r.created_at, u.full_name, u.profile_photo,
              COALESCE(lc.like_count, 0)::int AS like_count,
              (ml.reel_id IS NOT NULL) AS liked_by_me
       FROM reels r
@@ -584,6 +588,8 @@ app.get('/api/reels', requireApiAuth, async (request, response) => {
       caption: row.caption,
       video: row.video_data,
       mimeType: row.mime_type,
+      visibility: row.visibility,
+      allowComments: Boolean(row.allow_comments),
       createdAt: row.created_at,
       author: row.full_name,
       profilePhoto: row.profile_photo || '',
@@ -602,18 +608,21 @@ app.post('/api/reels', requireApiAuth, async (request, response) => {
   const caption = String(request.body?.caption || '').trim();
   const detectedType = /^data:(video\/[a-z0-9.+-]+);base64,/i.exec(video)?.[1] || '';
   const mimeType = String(request.body?.mimeType || detectedType).trim().toLowerCase();
+  const visibility = String(request.body?.visibility || 'followers').trim().toLowerCase();
+  const allowComments = request.body?.allowComments !== false;
   if (!validVideoData(video)) return response.status(400).json({ error: 'Choose a valid video smaller than 7 MB.' });
   if (!/^video\/[a-z0-9.+-]+$/i.test(mimeType) || !video.toLowerCase().startsWith(`data:${mimeType};base64,`)) {
     return response.status(400).json({ error: 'The selected video format is not supported.' });
   }
   if (caption.length > 500) return response.status(400).json({ error: 'Reel caption is too long.' });
+  if (!['followers', 'friends', 'only-me'].includes(visibility)) return response.status(400).json({ error: 'Choose a valid Reel audience.' });
   try {
     await ensureDatabase();
     const result = await pool.query(
-      `INSERT INTO reels (user_id, caption, video_data, mime_type)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, user_id, caption, video_data, mime_type, created_at`,
-      [request.user.id, caption, video, mimeType]
+      `INSERT INTO reels (user_id, caption, video_data, mime_type, visibility, allow_comments)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, user_id, caption, video_data, mime_type, visibility, allow_comments, created_at`,
+      [request.user.id, caption, video, mimeType, visibility, allowComments]
     );
     response.status(201).json({ ok: true, reel: result.rows[0] });
   } catch (error) {
@@ -649,6 +658,9 @@ app.post('/api/reels/:reelId/comments', requireApiAuth, async (request, response
   if (!body || body.length > 1000) return response.status(400).json({ error: 'Write a comment up to 1,000 characters.' });
   try {
     await ensureDatabase();
+    const reel = await pool.query('SELECT allow_comments FROM reels WHERE id = $1 LIMIT 1', [reelId]);
+    if (!reel.rows[0]) return response.status(404).json({ error: 'Reel not found.' });
+    if (!reel.rows[0].allow_comments) return response.status(403).json({ error: 'Comments are turned off for this Reel.' });
     const result = await pool.query(
       `INSERT INTO reel_comments (reel_id, user_id, body)
        VALUES ($1, $2, $3)
