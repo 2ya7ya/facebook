@@ -940,7 +940,7 @@
     if (!document.getElementById('reelLiveScrubFixStyles')) {
       const liveScrubStyles = document.createElement('style');
       liveScrubStyles.id = 'reelLiveScrubFixStyles';
-      liveScrubStyles.textContent = '.reel-timeline-sound-label{position:absolute;z-index:8;top:82px;left:calc(50% + 10px);height:50px;display:flex;align-items:center;color:#fff;font-size:15px;font-weight:700;white-space:nowrap;pointer-events:none;text-shadow:0 1px 2px #000}.reel-timeline-audio{padding-left:0!important}.reel-timeline-playhead{z-index:9!important}';
+      liveScrubStyles.textContent = '.reel-timeline-sound-label{position:absolute;z-index:8;top:82px;left:calc(50% + 10px);height:50px;display:flex;align-items:center;color:#fff;font-size:15px;font-weight:700;white-space:nowrap;pointer-events:none;text-shadow:0 1px 2px #000}.reel-timeline-audio{padding-left:0!important}.reel-timeline-playhead{z-index:9!important}.reel-timeline-scroll{touch-action:none!important;overscroll-behavior:none!important;user-select:none!important;-webkit-user-select:none!important}';
       document.head.appendChild(liveScrubStyles);
     }
     timelinePlayhead.className = 'reel-timeline-playhead';
@@ -1184,30 +1184,57 @@
     }
     function requestDecodedTimelineFrame() {
       if (!timelineDragging || timelineScrubInFlight || timelinePendingScrub === null || !editVideo.seekable.length) return;
+
+      // Consume only the newest requested finger position. Any newer pointermove
+      // received during this seek is kept in timelinePendingScrub for the next pass.
       const target = timelinePendingScrub;
       timelinePendingScrub = null;
-      if (Math.abs((editVideo.currentTime || 0) - target) < .012) {
+
+      if (Math.abs((editVideo.currentTime || 0) - target) < .006) {
         timelineDecodedScrubTime = target;
+        if (timelineDragging && timelinePendingScrub !== null) requestDecodedTimelineFrame();
         return;
       }
+
       timelineScrubInFlight = true;
       let completed = false;
+
       const finish = function () {
         if (completed) return;
         completed = true;
+        editVideo.removeEventListener('seeked', onSeeked);
+        window.clearTimeout(timelineScrubTimer);
         timelineScrubInFlight = false;
         timelineDecodedScrubTime = editVideo.currentTime || target;
-        editVideo.removeEventListener('seeked', finish);
-        window.clearTimeout(timelineScrubTimer);
-        if (timelineDragging && timelinePendingScrub !== null) requestDecodedTimelineFrame();
+
+        // Let Android paint the decoded frame before starting the next exact seek.
+        requestAnimationFrame(function () {
+          if (timelineDragging && timelinePendingScrub !== null) requestDecodedTimelineFrame();
+        });
       };
-      editVideo.addEventListener('seeked', finish, { once: true });
-      timelineScrubTimer = window.setTimeout(finish, 180);
+
+      const onSeeked = function () {
+        // requestVideoFrameCallback confirms that the newly decoded frame reached
+        // the visible video compositor. Fall back to RAF on older Android browsers.
+        if (typeof editVideo.requestVideoFrameCallback === 'function') {
+          editVideo.requestVideoFrameCallback(function () { finish(); });
+        } else {
+          requestAnimationFrame(function () { finish(); });
+        }
+      };
+
+      editVideo.addEventListener('seeked', onSeeked, { once: true });
+
+      // A long watchdog is only for broken media seeks. The old 180 ms timeout
+      // interrupted normal Android decoding and caused random/inaccurate frames.
+      timelineScrubTimer = window.setTimeout(function () {
+        finish();
+      }, 1200);
+
       try {
-        // Android Chrome paints paused video frames only after a seek completes.
-        // Keep one decoded seek active and always jump next to the newest finger position.
-        if (typeof editVideo.fastSeek === 'function') editVideo.fastSeek(target);
-        else editVideo.currentTime = target;
+        // Never use fastSeek here: it is deliberately keyframe-based and can show
+        // a nearby frame instead of the exact timestamp under the user's finger.
+        editVideo.currentTime = target;
       } catch (error) {
         finish();
       }
@@ -1323,7 +1350,9 @@
     function moveTimelineDrag(event) {
       if (!timelinePointerDown || event.target.closest('.reel-trim-handle')) return;
       event.preventDefault();
-      const nextTime = Math.min(timelineDuration, Math.max(0, timelineDragStartTime + (timelineDragStartX - event.clientX) / pixelsPerSecond));
+      const samples = typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : null;
+      const latestEvent = samples && samples.length ? samples[samples.length - 1] : event;
+      const nextTime = Math.min(timelineDuration, Math.max(0, timelineDragStartTime + (timelineDragStartX - latestEvent.clientX) / pixelsPerSecond));
       scrubTimelineTo(nextTime);
       renderTimelineAt(nextTime);
       editTime.textContent = previewTime(nextTime) + '/' + previewTime(timelineDuration);
