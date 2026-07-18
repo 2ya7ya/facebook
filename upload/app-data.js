@@ -968,12 +968,17 @@
     document.body.appendChild(timelineMuteButton);
     function positionTimelineMuteButton() {
       const timelineRect = timeline.getBoundingClientRect();
-      const iconWidth = 44;
-      const left = Math.max(8, timelineRect.left + 8);
+      const iconSize = 42;
+      const playheadX = timelineRect.left + (timelineRect.width / 2);
+      // Keep the mute control in one fixed screen position beside the playhead,
+      // matching the reference layout. Only timelineContent is translated.
+      const left = playheadX - 128;
       const top = timelineRect.top + 61;
-      timelineMuteButton.style.left = left + 'px';
-      timelineMuteButton.style.top = top + 'px';
-      timelineMuteButton.style.width = iconWidth + 'px';
+      timelineMuteButton.style.left = Math.round(left) + 'px';
+      timelineMuteButton.style.top = Math.round(top) + 'px';
+      timelineMuteButton.style.width = iconSize + 'px';
+      timelineMuteButton.style.height = iconSize + 'px';
+      timelineMuteButton.style.transform = 'none';
     }
     function syncTimelineMuteVisibility() {
       const open = flow.classList.contains('is-open');
