@@ -958,7 +958,7 @@
     timelineScroll.appendChild(timelineContent);
     timeline.replaceChildren(timelineScroll, timelinePlayhead, timelineSoundLabel);
     if (timelineAdd) timeline.appendChild(timelineAdd);
-    flow.querySelector('.reel-edit-controls').appendChild(timelineMuteButton);
+    timeline.appendChild(timelineMuteButton);
     function syncTimelineMuteButton() {
       const muted = Boolean(editVideo.muted);
       timelineMuteButton.setAttribute('aria-pressed', muted ? 'true' : 'false');
