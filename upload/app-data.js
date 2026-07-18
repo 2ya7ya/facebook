@@ -962,8 +962,26 @@
     // The timeline content is translated during dragging/playback; placing this
     // button as a sibling prevents it from inheriting any current or future
     // timeline transforms/animations.
-    const timelineControlsLayer = timeline.parentElement;
-    if (timelineControlsLayer) timelineControlsLayer.appendChild(timelineMuteButton);
+    // Attach the mute button to the top-level fixed reel flow, not to any
+    // timeline/editor container. Its screen position is calculated from the
+    // visible timeline viewport, so translated timeline content cannot move it.
+    flow.appendChild(timelineMuteButton);
+    function positionTimelineMuteButton() {
+      const timelineRect = timeline.getBoundingClientRect();
+      const iconWidth = 44;
+      const left = Math.max(8, timelineRect.left + 8);
+      const top = timelineRect.top + 61;
+      timelineMuteButton.style.left = left + 'px';
+      timelineMuteButton.style.top = top + 'px';
+      timelineMuteButton.style.width = iconWidth + 'px';
+    }
+    positionTimelineMuteButton();
+    window.addEventListener('resize', positionTimelineMuteButton, { passive: true });
+    window.addEventListener('orientationchange', positionTimelineMuteButton, { passive: true });
+    if (window.ResizeObserver) {
+      const timelineMuteObserver = new ResizeObserver(positionTimelineMuteButton);
+      timelineMuteObserver.observe(timeline);
+    }
     function syncTimelineMuteButton() {
       const muted = Boolean(editVideo.muted);
       timelineMuteButton.setAttribute('aria-pressed', muted ? 'true' : 'false');
