@@ -893,9 +893,9 @@
     const previewVideos = Array.from(flow.querySelectorAll('video'));
     const form = root.querySelector('.reels-comment-form');
     const publishedVideo = root.querySelector('#reelsVideo');
-    let previewUrls = [];
     let selectedVideo = null;
-    let previewReadyTimer = 0;
+    let selectedVideoData = '';
+    let videoLoadGeneration = 0;
     let editState = freshEditState();
     const editVideo = flow.querySelector('#reelEditVideo');
     const editTime = flow.querySelector('#reelEditTime');
@@ -906,12 +906,12 @@
     toolPanel.className = 'reel-tool-panel';
     toolPanel.setAttribute('aria-hidden', 'true');
     flow.appendChild(toolPanel);
+    const loadingIndicator = document.createElement('div');
+    loadingIndicator.className = 'reel-video-loading';
+    loadingIndicator.innerHTML = '<span></span><strong>Loading video…</strong>';
+    flow.appendChild(loadingIndicator);
     function freshEditState() {
       return { trimStart: 0, trimEnd: 0, brightness: 1, contrast: 1, saturation: 1, effect: 'none', text: '', sticker: '', captions: false, overlay: false, fit: 'contain' };
-    }
-    function clearPreviewUrls() {
-      previewUrls.forEach(function (url) { URL.revokeObjectURL(url); });
-      previewUrls = [];
     }
     function ensureUserOverlay(video) {
       const panel = video.closest('[data-reel-create-stage]');
@@ -984,18 +984,44 @@
       if (editState.trimEnd > editState.trimStart && editVideo.currentTime >= editState.trimEnd) editVideo.currentTime = editState.trimStart;
       editTime.textContent = previewTime(editVideo.currentTime) + '/' + previewTime(editVideo.duration);
     });
-    function showStage(name) {
-      flow.querySelectorAll('[data-reel-create-stage]').forEach(function (stage) { stage.classList.toggle('is-active', stage.dataset.reelCreateStage === name); });
-      if (name === 'edit') {
-        const video = flow.querySelector('#reelEditVideo');
-        if (video.readyState >= 1 && video.currentTime === 0) video.currentTime = Math.min(.05, (video.duration || .5) / 10);
-        video.play().catch(function () {});
-      } else if (name === 'preview') flow.querySelector('#reelCreateVideo').play().catch(function () {});
-      else if (name === 'caption') {
-        const video = flow.querySelector('#reelCaptionVideo');
-        if (video.readyState >= 1 && video.currentTime === 0) video.currentTime = Math.min(.05, (video.duration || .5) / 10);
+    function loadVisibleVideo(video) {
+      if (!selectedVideoData) return;
+      const generation = videoLoadGeneration;
+      flow.classList.add('is-video-loading');
+      loadingIndicator.classList.remove('is-error');
+      loadingIndicator.querySelector('strong').textContent = 'Loading video…';
+      let settled = false;
+      function ready() {
+        if (settled || generation !== videoLoadGeneration) return;
+        settled = true;
+        flow.classList.remove('is-video-loading');
+        if (video.duration && video.currentTime === 0) {
+          try { video.currentTime = Math.min(.05, video.duration / 10); } catch (error) {}
+        }
+        applyPreviewEdits();
         video.play().catch(function () {});
       }
+      function failed() {
+        if (settled || generation !== videoLoadGeneration) return;
+        settled = true;
+        loadingIndicator.classList.add('is-error');
+        loadingIndicator.querySelector('strong').textContent = 'This video format cannot be previewed.';
+      }
+      if (video.__reelSource !== selectedVideoData) {
+        video.__reelSource = selectedVideoData;
+        video.src = selectedVideoData;
+      }
+      if (video.readyState >= 2 && Number.isFinite(video.duration) && video.duration > 0) return ready();
+      video.addEventListener('loadeddata', ready, { once: true });
+      video.addEventListener('canplay', ready, { once: true });
+      video.addEventListener('error', failed, { once: true });
+      video.load();
+    }
+    function showStage(name) {
+      flow.querySelectorAll('[data-reel-create-stage]').forEach(function (stage) { stage.classList.toggle('is-active', stage.dataset.reelCreateStage === name); });
+      const videos = { preview: '#reelCreateVideo', edit: '#reelEditVideo', caption: '#reelCaptionVideo' };
+      const video = flow.querySelector(videos[name]);
+      if (video) loadVisibleVideo(video);
     }
     function openFlow() {
       flow.classList.add('is-open');
@@ -1008,16 +1034,17 @@
       flow.setAttribute('aria-hidden', 'true');
       settings.classList.remove('is-open');
       closeToolPanel();
+      flow.classList.remove('is-video-loading');
       document.body.classList.remove('reel-create-open');
-      previewVideos.forEach(function (video) { video.pause(); video.removeAttribute('src'); });
-      window.clearTimeout(previewReadyTimer);
-      clearPreviewUrls();
+      videoLoadGeneration += 1;
+      previewVideos.forEach(function (video) { video.pause(); video.removeAttribute('src'); video.__reelSource = ''; video.load(); });
       selectedVideo = null;
+      selectedVideoData = '';
       editState = freshEditState();
       file.value = '';
       caption.value = '';
     }
-    file.addEventListener('change', function () {
+    file.addEventListener('change', async function () {
       const selected = file.files && file.files[0];
       if (!selected) return;
       if (selected.size > 7 * 1024 * 1024) {
@@ -1025,36 +1052,29 @@
         reelMessage(root, 'Choose a video smaller than 7 MB.');
         return;
       }
-      clearPreviewUrls();
       selectedVideo = selected;
+      selectedVideoData = '';
+      videoLoadGeneration += 1;
       editState = freshEditState();
-      let opened = false;
-      function revealWhenDecoded() {
-        if (opened || selectedVideo !== selected) return;
-        opened = true;
-        window.clearTimeout(previewReadyTimer);
+      reelMessage(root, 'Preparing video…');
+      try {
+        const data = await fileData(selected);
+        if (selectedVideo !== selected) return;
+        selectedVideoData = data;
         previewVideos.forEach(function (video) {
-          if (video.readyState >= 1 && video.duration && video.currentTime === 0) {
-            try { video.currentTime = Math.min(.05, video.duration / 10); } catch (error) {}
-          }
+          video.muted = true;
+          video.playsInline = true;
+          video.preload = 'auto';
+          video.removeAttribute('src');
+          video.__reelSource = '';
         });
         applyPreviewEdits();
         openFlow();
+      } catch (error) {
+        file.value = '';
+        selectedVideo = null;
+        reelMessage(root, error.message);
       }
-      previewVideos.forEach(function (video, index) {
-        const url = URL.createObjectURL(selected);
-        previewUrls.push(url);
-        video.muted = true;
-        video.playsInline = true;
-        video.preload = 'auto';
-        video.src = url;
-        video.load();
-        if (index === 0) {
-          video.addEventListener('loadeddata', revealWhenDecoded, { once: true });
-          video.addEventListener('canplay', revealWhenDecoded, { once: true });
-        }
-      });
-      previewReadyTimer = window.setTimeout(revealWhenDecoded, 1400);
     });
     publish.addEventListener('click', async function () {
       const selected = file.files && file.files[0];
@@ -1062,9 +1082,10 @@
       publish.disabled = true;
       publish.textContent = 'Posting…';
       try {
-        const video = await fileData(selected);
+        const video = selectedVideoData || await fileData(selected);
+        const detectedMimeType = /^data:([^;,]+)/i.exec(video)?.[1] || selected.type || 'video/mp4';
         const audience = flow.querySelector('input[name="reelAudience"]:checked')?.value || 'followers';
-        await api('/api/reels', { method: 'POST', body: JSON.stringify({ video: video, mimeType: selected.type, caption: caption.value.trim(), visibility: audience, allowComments: allowComments.checked, editData: editState }) });
+        await api('/api/reels', { method: 'POST', body: JSON.stringify({ video: video, mimeType: detectedMimeType, caption: caption.value.trim(), visibility: audience, allowComments: allowComments.checked, editData: editState }) });
         await loadLatestReel();
         closeFlow();
         reelMessage(root, 'Reel posted');
