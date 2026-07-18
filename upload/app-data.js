@@ -908,6 +908,7 @@
     const timelineAudio = document.createElement('div');
     const timelineSoundLabel = document.createElement('div');
     const timelinePlayhead = document.createElement('div');
+    const timelineMuteButton = document.createElement('button');
     const timelineSelection = document.createElement('div');
     const trimStartHandle = document.createElement('button');
     const trimEndHandle = document.createElement('button');
@@ -933,6 +934,11 @@
     timelineSoundLabel.className = 'reel-timeline-sound-label';
     timelineSoundLabel.innerHTML = '<span>♪&nbsp; Add sound</span>';
     timelinePlayhead.className = 'reel-timeline-playhead';
+    timelineMuteButton.className = 'reel-timeline-mute';
+    timelineMuteButton.type = 'button';
+    timelineMuteButton.setAttribute('aria-label', 'Mute video');
+    timelineMuteButton.setAttribute('aria-pressed', 'false');
+    timelineMuteButton.innerHTML = '<img src="/reel-volume-on.png" alt="">';
     timelineSelection.className = 'reel-timeline-selection';
     trimStartHandle.className = 'reel-trim-handle reel-trim-start';
     trimEndHandle.className = 'reel-trim-handle reel-trim-end';
@@ -945,8 +951,26 @@
     timelineSelection.append(trimStartHandle, trimDurationLabel, trimEndHandle);
     timelineContent.append(timelineTicks, timelineFilmstrip, timelineAudio, timelineSelection);
     timelineScroll.appendChild(timelineContent);
-    timeline.replaceChildren(timelineScroll, timelinePlayhead, timelineSoundLabel);
+    timeline.replaceChildren(timelineScroll, timelinePlayhead, timelineSoundLabel, timelineMuteButton);
     if (timelineAdd) timeline.appendChild(timelineAdd);
+    function syncTimelineMuteButton() {
+      const muted = Boolean(editVideo.muted);
+      timelineMuteButton.setAttribute('aria-pressed', muted ? 'true' : 'false');
+      timelineMuteButton.setAttribute('aria-label', muted ? 'Unmute video' : 'Mute video');
+      const image = timelineMuteButton.querySelector('img');
+      if (image) image.src = muted ? '/reel-volume-muted.png' : '/reel-volume-on.png';
+    }
+    timelineMuteButton.addEventListener('pointerdown', function (event) {
+      event.stopPropagation();
+    });
+    timelineMuteButton.addEventListener('click', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      const nextMuted = !editVideo.muted;
+      previewVideos.forEach(function (video) { video.muted = nextMuted; });
+      syncTimelineMuteButton();
+    });
+    syncTimelineMuteButton();
     const effectOrder = ['none', 'warm', 'cool', 'mono', 'vivid'];
     const stickers = ['', '✨', '❤️', '🔥', '😊'];
     const effectFilters = { none: '', warm: 'sepia(.22) hue-rotate(-8deg)', cool: 'hue-rotate(18deg) saturate(.9)', mono: 'grayscale(1)', vivid: 'saturate(1.45) contrast(1.08)' };
@@ -1055,6 +1079,7 @@
         event.preventDefault();
         event.stopPropagation();
         setTimelineSelected(true);
+        editVideo.pause();
         timelineDragging = true;
         timelinePointerDown = true;
         cancelTimelineFollow();
@@ -1100,6 +1125,7 @@
       if (!timelineSelected) return;
       // Playing or pausing the preview must not close the active trim controls.
       if (event.target.closest('[data-reel-flow-action="toggle-edit-play"]')) return;
+      if (event.target.closest('.reel-timeline-mute')) return;
       if (event.target.closest('.reel-trim-handle')) return;
       // The timeline surface handles its own tap-vs-drag decision. A drag on
       // the black area must remain available even though a plain tap closes it.
@@ -1320,7 +1346,9 @@
     function beginTimelineDrag(event) {
       if (event.target.closest('.reel-trim-handle')) return;
       if (event.target.closest('.reel-timeline-add')) return;
+      if (event.target.closest('.reel-timeline-mute')) return;
       cancelTimelineInertia();
+      editVideo.pause();
       timelinePointerStartedVisible = isInsideVisibleTimeline(event.clientX, event.clientY);
       timelinePointerMoved = false;
       if (timelinePointerStartedVisible) setTimelineSelected(true);
