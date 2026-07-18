@@ -908,6 +908,9 @@
     const timelineAudio = document.createElement('div');
     const timelineSoundLabel = document.createElement('div');
     const timelinePlayhead = document.createElement('div');
+    document.querySelectorAll('#reelTimelineMuteFixed, .reel-timeline-mute').forEach(function (oldMute) {
+      oldMute.remove();
+    });
     const timelineMuteButton = document.createElement('button');
     const timelineSelection = document.createElement('div');
     const trimStartHandle = document.createElement('button');
@@ -973,8 +976,8 @@
         return;
       }
       const playheadX = rect.left + rect.width / 2;
-      timelineMuteButton.style.left = Math.round(playheadX - 112) + 'px';
-      timelineMuteButton.style.top = Math.round(rect.top + 82 + 3) + 'px';
+      timelineMuteButton.style.setProperty('--mute-fixed-left', Math.round(playheadX - 112) + 'px');
+      timelineMuteButton.style.setProperty('--mute-fixed-top', Math.round(rect.top + 85) + 'px');
       timelineMuteButton.style.display = 'grid';
     }
     window.addEventListener('resize', positionTimelineMuteButton, { passive: true });
