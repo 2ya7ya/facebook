@@ -1083,9 +1083,23 @@
     }
     installTrimHandle(trimStartHandle, 'start');
     installTrimHandle(trimEndHandle, 'end');
+    function isInsideVisibleTimeline(clientX, clientY) {
+      const viewportRect = timeline.getBoundingClientRect();
+      const ticksRect = timelineTicks.getBoundingClientRect();
+      const filmstripRect = timelineFilmstrip.getBoundingClientRect();
+      const audioRect = timelineAudio.getBoundingClientRect();
+      const left = Math.max(viewportRect.left, Math.min(filmstripRect.left, audioRect.left));
+      const right = Math.min(viewportRect.right, Math.max(filmstripRect.right, audioRect.right));
+      const top = Math.max(viewportRect.top, Math.min(ticksRect.top, filmstripRect.top));
+      const bottom = Math.min(viewportRect.bottom, Math.max(filmstripRect.bottom, audioRect.bottom));
+      return clientX >= left && clientX <= right && clientY >= top && clientY <= bottom;
+    }
     document.addEventListener('pointerdown', function (event) {
       if (!timelineSelected) return;
-      if (event.target.closest('.reel-timeline-scroll, .reel-trim-handle')) return;
+      // Playing or pausing the preview must not close the active trim controls.
+      if (event.target.closest('[data-reel-flow-action="toggle-edit-play"]')) return;
+      if (event.target.closest('.reel-trim-handle')) return;
+      if (isInsideVisibleTimeline(event.clientX, event.clientY)) return;
       setTimelineSelected(false);
     }, true);
     function seekThumbnailVideo(video, time) {
@@ -1298,6 +1312,13 @@
 
     function beginTimelineDrag(event) {
       if (event.target.closest('.reel-trim-handle')) return;
+      // The scroll layer covers the whole controls area; only the visible
+      // timeline rows should activate dragging/selection.
+      if (!isInsideVisibleTimeline(event.clientX, event.clientY)) {
+        cancelTimelineInertia();
+        setTimelineSelected(false);
+        return;
+      }
       cancelTimelineInertia();
       setTimelineSelected(true);
       timelinePointerDown = true;
