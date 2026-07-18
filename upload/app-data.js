@@ -10,7 +10,6 @@
   const wiredEditFrames = new WeakSet();
   let photoSaveTimer = 0;
   let frameSaveTimer = 0;
-  let storyPhotoRequest = 0;
 
   function readCachedProfile() {
     try {
@@ -161,59 +160,9 @@
   function applyCreateStoryPhoto(source) {
     const target = document.querySelector('.app-page[data-page-content="home"] .fb-create-story .fb-story-photo');
     if (!target || !source) return;
-    const request = ++storyPhotoRequest;
-    function showStoryPhoto(value) {
-      target.src = value;
-      if (window.__facebookPrepaintProfile) {
-        window.__facebookPrepaintProfile.storyPhoto = value;
-        window.__facebookPrepaintProfile.storyPhotoReady = true;
-      }
-      target.classList.remove('fb-prepaint-story-crop');
-    }
-    const image = new Image();
-    image.onload = function () {
-      if (request !== storyPhotoRequest) return;
-      try {
-        const width = image.naturalWidth;
-        const height = image.naturalHeight;
-        if (!width || !height) throw new Error('Empty image');
-        const probe = document.createElement('canvas');
-        probe.width = width;
-        probe.height = height;
-        const probeContext = probe.getContext('2d', { willReadFrequently: true });
-        probeContext.drawImage(image, 0, 0);
-        const marginX = Math.max(1, Math.floor(width * 0.03));
-        const marginY = Math.max(1, Math.floor(height * 0.03));
-        const points = [
-          [marginX, marginY], [width - marginX - 1, marginY],
-          [marginX, height - marginY - 1], [width - marginX - 1, height - marginY - 1]
-        ];
-        const hasTransparentCorners = points.some(function (point) {
-          return probeContext.getImageData(point[0], point[1], 1, 1).data[3] < 32;
-        });
-        if (!hasTransparentCorners) {
-          showStoryPhoto(source);
-          return;
-        }
-        const side = (Math.min(width, height) / Math.SQRT2) * 0.98;
-        const sourceX = (width - side) / 2;
-        const sourceY = (height - side) / 2;
-        const output = document.createElement('canvas');
-        const outputSize = Math.min(900, Math.max(320, Math.round(side)));
-        output.width = outputSize;
-        output.height = outputSize;
-        output.getContext('2d', { alpha: false }).drawImage(
-          image, sourceX, sourceY, side, side, 0, 0, outputSize, outputSize
-        );
-        showStoryPhoto(output.toDataURL('image/jpeg', 0.9));
-      } catch (_error) {
-        showStoryPhoto(source);
-      }
-    };
-    image.onerror = function () {
-      if (request === storyPhotoRequest) showStoryPhoto(source);
-    };
-    image.src = source;
+    target.src = source;
+    target.classList.toggle('fb-prepaint-story-crop', Boolean(profile && profile.profilePhoto));
+    if (window.__facebookPrepaintProfile) window.__facebookPrepaintProfile.storyPhoto = source;
   }
 
   function readSavedPage() {
