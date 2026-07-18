@@ -3,11 +3,14 @@
 
   const fallbackAvatar = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="#e4e6eb"/><circle cx="100" cy="76" r="40" fill="#7b8087"/><path d="M30 200c5-54 36-80 70-80s65 26 70 80" fill="#7b8087"/></svg>');
   const profileCacheKey = 'facebookProfileCacheV2';
+  const pageStateKey = 'facebookActivePageV1';
+  const supportedPages = new Set(['home', 'reels', 'friends', 'marketplace', 'notifications', 'profile']);
   let profile = null;
   const wiredEditDocuments = new WeakSet();
   const wiredEditFrames = new WeakSet();
   let photoSaveTimer = 0;
   let frameSaveTimer = 0;
+  let storyPhotoRequest = 0;
 
   function readCachedProfile() {
     try {
@@ -52,8 +55,8 @@
       '.fb-framed-avatar>img:not(.fb-global-profile-frame){width:100%!important;height:100%!important;object-fit:cover!important;border-radius:50%!important}',
       '.fb-create-story{background:#fff!important;border:1px solid #d8dadf!important}',
       '.fb-create-story::after{display:none!important}',
-      '.fb-create-story .fb-story-photo{top:0!important;bottom:auto!important;height:50%!important;width:100%!important;object-fit:cover!important}',
-      '.fb-create-story .fb-story-plus{display:grid!important;left:50%!important;top:50%!important;transform:translate(-50%,-50%)!important}',
+      '.fb-create-story .fb-story-photo{top:0!important;bottom:auto!important;height:75%!important;width:100%!important;object-fit:cover!important;object-position:center!important;border-radius:0!important;clip-path:none!important;transform:none!important}',
+      '.fb-create-story .fb-story-plus{display:grid!important;left:50%!important;top:75%!important;transform:translate(-50%,-50%)!important}',
       '.fb-create-story .fb-story-label{display:block!important;color:#050505!important;text-shadow:none!important;text-align:center!important;left:4px!important;right:4px!important;bottom:10px!important}'
     ].join('\n');
     document.head.appendChild(style);
@@ -91,8 +94,8 @@
   function applyPhotos() {
     if (!profile) return;
     const avatar = profile.profilePhoto || fallbackAvatar;
-    document.querySelectorAll('[data-home-avatar]').forEach(function (image) { image.src = avatar; });
-    document.querySelectorAll('.exact-bottom-nav img[alt="Profile"]').forEach(function (image) { image.src = avatar; });
+    document.querySelectorAll('[data-home-avatar]:not(.fb-story-photo)').forEach(function (image) { image.src = avatar; });
+    applyCreateStoryPhoto(avatar);
     const mainPhoto = document.querySelector('#profile .avatar-default-photo');
     const avatarContainer = document.querySelector('#profile .avatar-container');
     if (mainPhoto) {
@@ -150,7 +153,117 @@
       overlay.src = url;
       overlay.hidden = !url;
     }
-    document.querySelectorAll('[data-home-avatar]:not(.fb-story-photo),.exact-bottom-nav img[alt="Profile"],.stored-user-post .fb-post-avatar[data-current-user-avatar]').forEach(frameAvatar);
+    document.querySelectorAll('[data-home-avatar]:not(.fb-story-photo),.stored-user-post .fb-post-avatar[data-current-user-avatar]').forEach(frameAvatar);
+  }
+
+  function applyCreateStoryPhoto(source) {
+    const target = document.querySelector('.app-page[data-page-content="home"] .fb-create-story .fb-story-photo');
+    if (!target || !source) return;
+    const request = ++storyPhotoRequest;
+    const image = new Image();
+    image.onload = function () {
+      if (request !== storyPhotoRequest) return;
+      try {
+        const width = image.naturalWidth;
+        const height = image.naturalHeight;
+        if (!width || !height) throw new Error('Empty image');
+        const probe = document.createElement('canvas');
+        probe.width = width;
+        probe.height = height;
+        const probeContext = probe.getContext('2d', { willReadFrequently: true });
+        probeContext.drawImage(image, 0, 0);
+        const marginX = Math.max(1, Math.floor(width * 0.03));
+        const marginY = Math.max(1, Math.floor(height * 0.03));
+        const points = [
+          [marginX, marginY], [width - marginX - 1, marginY],
+          [marginX, height - marginY - 1], [width - marginX - 1, height - marginY - 1]
+        ];
+        const hasTransparentCorners = points.some(function (point) {
+          return probeContext.getImageData(point[0], point[1], 1, 1).data[3] < 32;
+        });
+        if (!hasTransparentCorners) {
+          target.src = source;
+          return;
+        }
+        const side = (Math.min(width, height) / Math.SQRT2) * 0.98;
+        const sourceX = (width - side) / 2;
+        const sourceY = (height - side) / 2;
+        const output = document.createElement('canvas');
+        const outputSize = Math.min(900, Math.max(320, Math.round(side)));
+        output.width = outputSize;
+        output.height = outputSize;
+        output.getContext('2d', { alpha: false }).drawImage(
+          image, sourceX, sourceY, side, side, 0, 0, outputSize, outputSize
+        );
+        target.src = output.toDataURL('image/jpeg', 0.9);
+      } catch (_error) {
+        target.src = source;
+      }
+    };
+    image.onerror = function () {
+      if (request === storyPhotoRequest) target.src = source;
+    };
+    image.src = source;
+  }
+
+  function readSavedPage() {
+    try {
+      const page = sessionStorage.getItem(pageStateKey) || '';
+      return supportedPages.has(page) ? page : '';
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  function savePage(page) {
+    if (!supportedPages.has(page)) return;
+    try { sessionStorage.setItem(pageStateKey, page); } catch (_error) {}
+  }
+
+  function setActivePage(page, resetScroll) {
+    if (!supportedPages.has(page)) page = 'home';
+    document.body.dataset.page = page;
+    document.querySelectorAll('.exact-bottom-nav .nav-item[data-page]').forEach(function (item) {
+      const active = item.dataset.page === page;
+      item.classList.toggle('is-active', active);
+      item.classList.toggle('active', active);
+      item.classList.toggle('profile-active', active && page === 'profile');
+    });
+    savePage(page);
+    if (resetScroll) window.scrollTo({ top: 0, behavior: 'instant' });
+  }
+
+  function installPagePersistence() {
+    const savedPage = readSavedPage();
+    if (savedPage) setActivePage(savedPage, false);
+
+    document.querySelectorAll('.exact-bottom-nav .nav-item[data-page]').forEach(function (item) {
+      item.addEventListener('click', function () {
+        setActivePage(item.dataset.page, true);
+      }, true);
+    });
+
+    const profileBack = document.querySelector('.app-page[data-page-content="profile"] .back-icon');
+    if (profileBack) {
+      profileBack.setAttribute('role', 'button');
+      profileBack.setAttribute('tabindex', '0');
+      profileBack.setAttribute('aria-label', 'Back to Home');
+      const goHome = function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        setActivePage('home', true);
+      };
+      profileBack.addEventListener('click', goHome, true);
+      profileBack.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter' || event.key === ' ') goHome(event);
+      }, true);
+    }
+
+    new MutationObserver(function () {
+      const page = document.body.dataset.page;
+      if (supportedPages.has(page)) savePage(page);
+    }).observe(document.body, { attributes: true, attributeFilter: ['data-page'] });
   }
 
   function readImage(file, callback) {
@@ -530,6 +643,7 @@
 
   async function start() {
     installRuntimeStyles();
+    installPagePersistence();
     try {
       const freshProfile = await api('/api/profile');
       profile = freshProfile;
@@ -547,6 +661,8 @@
   }
 
   installRuntimeStyles();
+  const savedPageBeforePaint = readSavedPage();
+  if (savedPageBeforePaint) setActivePage(savedPageBeforePaint, false);
   profile = readCachedProfile();
   if (profile) {
     applyName();
