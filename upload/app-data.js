@@ -2,10 +2,62 @@
   'use strict';
 
   const fallbackAvatar = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="#e4e6eb"/><circle cx="100" cy="76" r="40" fill="#7b8087"/><path d="M30 200c5-54 36-80 70-80s65 26 70 80" fill="#7b8087"/></svg>');
+  const profileCacheKey = 'facebookProfileCacheV2';
   let profile = null;
   const wiredEditDocuments = new WeakSet();
   const wiredEditFrames = new WeakSet();
   let photoSaveTimer = 0;
+  let frameSaveTimer = 0;
+
+  function readCachedProfile() {
+    try {
+      const cached = JSON.parse(localStorage.getItem(profileCacheKey) || 'null');
+      if (!cached || typeof cached !== 'object') return null;
+      cached.profilePhoto = localStorage.getItem('profilePhoto') || cached.profilePhoto || '';
+      cached.coverPhoto = localStorage.getItem('coverPhoto') || cached.coverPhoto || '';
+      return cached;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function cacheProfile() {
+    if (!profile) return;
+    try {
+      localStorage.setItem(profileCacheKey, JSON.stringify({
+        id: profile.id,
+        name: profile.name,
+        profileFrameName: profile.profileFrameName || '',
+        profileFrameSvg: profile.profileFrameSvg || ''
+      }));
+      putStoredPhoto('profilePhoto', profile.profilePhoto || '');
+      putStoredPhoto('coverPhoto', profile.coverPhoto || '');
+    } catch (_error) {}
+  }
+
+  function profileFrameUrl() {
+    return profile && profile.profileFrameSvg
+      ? 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(profile.profileFrameSvg)
+      : '';
+  }
+
+  function installRuntimeStyles() {
+    if (document.getElementById('fbPersistedProfileStyles')) return;
+    const style = document.createElement('style');
+    style.id = 'fbPersistedProfileStyles';
+    style.textContent = [
+      '#profile .avatar-container.has-selected-profile-photo .avatar-camera-icon,#profile .avatar-container.has-selected-profile-photo .avatar-add-text{display:none!important}',
+      '.fb-global-profile-frame{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;object-fit:contain!important;border-radius:50%!important;pointer-events:none!important;z-index:20!important}',
+      '.fb-framed-avatar{position:relative!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;flex:0 0 auto!important}',
+      '.fb-framed-avatar>img:not(.fb-global-profile-frame){width:100%!important;height:100%!important;object-fit:cover!important;border-radius:50%!important}',
+      '.fb-create-story{background:#fff!important;border:1px solid #d8dadf!important}',
+      '.fb-create-story::after{display:none!important}',
+      '.fb-create-story .fb-story-photo{top:0!important;bottom:auto!important;height:50%!important;width:100%!important;object-fit:cover!important}',
+      '.fb-create-story .fb-story-plus{display:grid!important;left:50%!important;top:50%!important;transform:translate(-50%,-50%)!important}',
+      '.fb-create-story .fb-story-label{display:block!important;color:#050505!important;text-shadow:none!important;text-align:center!important;left:4px!important;right:4px!important;bottom:10px!important}'
+    ].join('\n');
+    document.head.appendChild(style);
+  }
 
   async function api(url, options) {
     const response = await fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' } }, options || {}));
@@ -42,14 +94,63 @@
     document.querySelectorAll('[data-home-avatar]').forEach(function (image) { image.src = avatar; });
     document.querySelectorAll('.exact-bottom-nav img[alt="Profile"]').forEach(function (image) { image.src = avatar; });
     const mainPhoto = document.querySelector('#profile .avatar-default-photo');
-    if (mainPhoto && profile.profilePhoto) {
-      mainPhoto.src = profile.profilePhoto;
+    const avatarContainer = document.querySelector('#profile .avatar-container');
+    if (mainPhoto) {
+      mainPhoto.src = profile.profilePhoto || fallbackAvatar;
       mainPhoto.style.filter = 'none';
+    }
+    if (avatarContainer) {
+      avatarContainer.classList.toggle('has-selected-profile-photo', Boolean(profile.profilePhoto));
     }
     const cover = document.querySelector('#profile > .cover');
     if (cover && profile.coverPhoto) {
       cover.style.backgroundImage = 'url("' + profile.coverPhoto + '")';
     }
+    applyFrames();
+  }
+
+  function frameAvatar(image) {
+    if (!image || image.classList.contains('fb-story-photo')) return;
+    let host = image.parentElement;
+    if (!host || !host.classList.contains('fb-framed-avatar')) {
+      const rect = image.getBoundingClientRect();
+      const computed = getComputedStyle(image);
+      host = document.createElement('span');
+      host.className = 'fb-framed-avatar';
+      host.style.width = computed.width !== 'auto' ? computed.width : Math.max(1, rect.width) + 'px';
+      host.style.height = computed.height !== 'auto' ? computed.height : Math.max(1, rect.height) + 'px';
+      image.parentNode.insertBefore(host, image);
+      host.appendChild(image);
+    }
+    let overlay = host.querySelector(':scope > .fb-global-profile-frame');
+    if (!overlay) {
+      overlay = document.createElement('img');
+      overlay.className = 'fb-global-profile-frame';
+      overlay.alt = '';
+      overlay.setAttribute('aria-hidden', 'true');
+      host.appendChild(overlay);
+    }
+    overlay.src = profileFrameUrl();
+    overlay.hidden = !profileFrameUrl();
+  }
+
+  function applyFrames() {
+    if (!profile) return;
+    const url = profileFrameUrl();
+    const container = document.querySelector('#profile .avatar-container');
+    if (container) {
+      let overlay = container.querySelector(':scope > .fb-global-profile-frame');
+      if (!overlay) {
+        overlay = document.createElement('img');
+        overlay.className = 'fb-global-profile-frame';
+        overlay.alt = '';
+        overlay.setAttribute('aria-hidden', 'true');
+        container.appendChild(overlay);
+      }
+      overlay.src = url;
+      overlay.hidden = !url;
+    }
+    document.querySelectorAll('[data-home-avatar]:not(.fb-story-photo),.exact-bottom-nav img[alt="Profile"],.stored-user-post .fb-post-avatar[data-current-user-avatar]').forEach(frameAvatar);
   }
 
   function readImage(file, callback) {
@@ -105,6 +206,8 @@
     putStoredPhoto('profilePhoto', profile.profilePhoto || '');
     putStoredPhoto('pendingProfilePhoto', profile.profilePhoto || '');
     putStoredPhoto('coverPhoto', profile.coverPhoto || '');
+    putStoredPhoto('selectedProfileFrameName', profile.profileFrameName || '');
+    putStoredPhoto('selectedProfileFrameSvg', profile.profileFrameSvg || '');
 
     const doc = context.pageDocument;
     const profileContainer = doc.getElementById('profilePhotoContainer');
@@ -120,7 +223,10 @@
       image.src = profile.profilePhoto;
       image.style.display = 'block';
       const overlay = doc.getElementById('profileOverlay');
-      if (overlay) overlay.classList.add('hidden');
+      if (overlay) {
+        overlay.classList.add('hidden');
+        overlay.style.display = 'none';
+      }
       profileContainer.classList.add('has-selected-profile-photo');
     }
 
@@ -150,14 +256,89 @@
     try {
       const result = await api('/api/profile', { method: 'PUT', body: JSON.stringify(changes) });
       profile = Object.assign(profile, result);
+      cacheProfile();
       putStoredPhoto('profilePhoto', profile.profilePhoto || '');
       putStoredPhoto('pendingProfilePhoto', profile.profilePhoto || '');
       putStoredPhoto('coverPhoto', profile.coverPhoto || '');
       applyPhotos();
+      const currentContext = editContext();
+      if (currentContext) hydrateEditPhotos(currentContext);
       message(changes.profilePhoto ? 'Profile picture saved' : 'Cover photo saved');
     } catch (error) {
       message(error.message);
     }
+  }
+
+  async function persistEditFrame() {
+    if (!profile) return;
+    let name = '';
+    let svg = '';
+    try {
+      name = localStorage.getItem('selectedProfileFrameName') || '';
+      svg = localStorage.getItem('selectedProfileFrameSvg') || '';
+    } catch (_error) {}
+    if (name === (profile.profileFrameName || '') && svg === (profile.profileFrameSvg || '')) return;
+    const previousName = profile.profileFrameName || '';
+    const previousSvg = profile.profileFrameSvg || '';
+    profile.profileFrameName = name;
+    profile.profileFrameSvg = svg;
+    cacheProfile();
+    applyFrames();
+    try {
+      const result = await api('/api/profile', {
+        method: 'PUT',
+        body: JSON.stringify({ profileFrameName: name, profileFrameSvg: svg })
+      });
+      profile = Object.assign(profile, result);
+      cacheProfile();
+      applyFrames();
+    } catch (error) {
+      profile.profileFrameName = previousName;
+      profile.profileFrameSvg = previousSvg;
+      cacheProfile();
+      applyFrames();
+      message(error.message);
+    }
+  }
+
+  function scheduleFrameSave(delay) {
+    clearTimeout(frameSaveTimer);
+    frameSaveTimer = setTimeout(persistEditFrame, delay || 80);
+  }
+
+  function handleFrameChoice(event, context) {
+    const row = event.target.closest && event.target.closest('#profileFramesScreen .pf-row');
+    if (!row) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    const doc = context.pageDocument;
+    const isDefault = row.classList.contains('pf-default-frame');
+    let name = '';
+    let svg = '';
+    if (!isDefault) {
+      name = (row.querySelector('.pf-name')?.textContent || '').trim();
+      const source = row.querySelector('.pf-thumb-frame')?.src || '';
+      if (source.startsWith('data:image/svg+xml')) {
+        try { svg = decodeURIComponent(source.slice(source.indexOf(',') + 1)); } catch (_error) {}
+      }
+    }
+    putStoredPhoto('selectedProfileFrameName', name);
+    putStoredPhoto('selectedProfileFrameSvg', svg);
+    doc.querySelectorAll('#profilePreviewFrameOverlay,#profilePhotoFrameOverlay').forEach(function (overlay) { overlay.remove(); });
+    if (svg) {
+      const wrap = doc.querySelector('#profilePreviewScreen .preview-circle-wrap');
+      if (wrap) {
+        const overlay = doc.createElement('img');
+        overlay.id = 'profilePreviewFrameOverlay';
+        overlay.alt = '';
+        overlay.src = 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg);
+        wrap.appendChild(overlay);
+      }
+    }
+    doc.getElementById('profileFramesScreen')?.classList.remove('active');
+    doc.body.style.overflow = '';
+    scheduleFrameSave(20);
   }
 
   function schedulePhotoSave(delay) {
@@ -169,6 +350,9 @@
     if (!context || wiredEditDocuments.has(context.pageDocument)) return;
     wiredEditDocuments.add(context.pageDocument);
     hydrateEditPhotos(context);
+    context.pageDocument.addEventListener('click', function (event) {
+      handleFrameChoice(event, context);
+    }, true);
     context.pageDocument.addEventListener('click', function (event) {
       const save = event.target.closest && event.target.closest('#profilePreviewScreen .preview-save-btn, #coverPicturePreviewScreen .cover-preview-save, .profile-preview-screen .preview-save-btn, .cover-picture-preview-screen .cover-preview-save');
       if (save) {
@@ -204,11 +388,17 @@
     const layer = document.getElementById('mergedEditProfileLayer');
     if (layer) {
       new MutationObserver(function () {
-        if (!layer.classList.contains('is-open')) schedulePhotoSave(120);
+        if (!layer.classList.contains('is-open')) {
+          schedulePhotoSave(120);
+          scheduleFrameSave(120);
+        }
       }).observe(layer, { attributes: true, attributeFilter: ['class', 'aria-hidden'] });
     }
     window.addEventListener('message', function (event) {
-      if (event.data && event.data.type === 'closeMergedEditProfile') schedulePhotoSave(120);
+      if (event.data && event.data.type === 'closeMergedEditProfile') {
+        schedulePhotoSave(120);
+        scheduleFrameSave(120);
+      }
     });
   }
 
@@ -278,6 +468,9 @@
     article.dataset.postId = post.id;
     article.innerHTML = '<div class="fb-post-head"><img class="fb-post-avatar" alt=""><div class="fb-post-meta"><div class="fb-post-name-row"><span class="fb-post-name"></span></div><div class="fb-post-time">Posted recently · ●</div></div></div><div class="fb-post-text"></div><img class="fb-post-media" alt="Post photo"><div class="fb-post-stats">Be the first to react</div><div class="fb-post-actions"><button class="fb-action-button" type="button" data-stored-action="like">Like</button><button class="fb-action-button" type="button" data-stored-action="comment">Comment</button><button class="fb-action-button" type="button" data-stored-action="share">Share</button></div>';
     article.querySelector('.fb-post-avatar').src = post.profilePhoto || fallbackAvatar;
+    if (String(post.userId) === String(profile.id)) {
+      article.querySelector('.fb-post-avatar').setAttribute('data-current-user-avatar', 'true');
+    }
     article.querySelector('.fb-post-name').textContent = post.author;
     const body = article.querySelector('.fb-post-text');
     body.textContent = post.body || '';
@@ -336,20 +529,30 @@
   }
 
   async function start() {
+    installRuntimeStyles();
     try {
-      profile = await api('/api/profile');
+      const freshProfile = await api('/api/profile');
+      profile = freshProfile;
+      cacheProfile();
       applyName();
       applyPhotos();
       installPhotoControls();
       installPostSaving();
       await loadPosts();
-      new MutationObserver(function () { applyName(); applyPhotos(); }).observe(document.body, { childList: true, subtree: true });
+      new MutationObserver(function () { applyName(); applyPhotos(); applyFrames(); }).observe(document.body, { childList: true, subtree: true });
     } catch (error) {
       console.error(error);
       message(error.message);
     }
   }
 
+  installRuntimeStyles();
+  profile = readCachedProfile();
+  if (profile) {
+    applyName();
+    applyPhotos();
+    applyFrames();
+  }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
   else start();
 })();

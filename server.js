@@ -47,6 +47,8 @@ async function ensureDatabase() {
   `);
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_photo TEXT');
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS cover_photo TEXT');
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_frame_name VARCHAR(120)');
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_frame_svg TEXT');
   await pool.query(`
     CREATE TABLE IF NOT EXISTS posts (
       id BIGSERIAL PRIMARY KEY,
@@ -144,6 +146,15 @@ function validImageData(value) {
   return typeof value === 'string' && value.length <= 8 * 1024 * 1024 && /^data:image\/(?:png|jpe?g|webp|gif);base64,[a-z0-9+/=\s]+$/i.test(value);
 }
 
+function validProfileFrame(name, svg) {
+  if (name !== undefined && name !== null && (typeof name !== 'string' || name.length > 120)) return false;
+  if (svg === undefined || svg === null || svg === '') return true;
+  return typeof svg === 'string'
+    && svg.length <= 30000
+    && /^\s*<svg(?:\s|>)/i.test(svg)
+    && !/<script|javascript:|on\w+\s*=/i.test(svg);
+}
+
 const loginAttempts = new Map();
 function loginAllowed(ip) {
   const now = Date.now();
@@ -224,7 +235,7 @@ app.get('/api/profile', requireApiAuth, async (request, response) => {
   try {
     await ensureDatabase();
     const result = await pool.query(
-      'SELECT id, full_name, profile_photo, cover_photo FROM users WHERE id = $1 LIMIT 1',
+      'SELECT id, full_name, profile_photo, cover_photo, profile_frame_name, profile_frame_svg FROM users WHERE id = $1 LIMIT 1',
       [request.user.id]
     );
     const user = result.rows[0];
@@ -233,7 +244,9 @@ app.get('/api/profile', requireApiAuth, async (request, response) => {
       id: String(user.id),
       name: user.full_name,
       profilePhoto: user.profile_photo || '',
-      coverPhoto: user.cover_photo || ''
+      coverPhoto: user.cover_photo || '',
+      profileFrameName: user.profile_frame_name || '',
+      profileFrameSvg: user.profile_frame_svg || ''
     });
   } catch (error) {
     console.error('Profile load failed:', error.message);
@@ -244,24 +257,39 @@ app.get('/api/profile', requireApiAuth, async (request, response) => {
 app.put('/api/profile', requireApiAuth, async (request, response) => {
   const profilePhoto = request.body?.profilePhoto;
   const coverPhoto = request.body?.coverPhoto;
-  if (profilePhoto === undefined && coverPhoto === undefined) return response.status(400).json({ error: 'No profile changes supplied.' });
+  const profileFrameName = request.body?.profileFrameName;
+  const profileFrameSvg = request.body?.profileFrameSvg;
+  if (profilePhoto === undefined && coverPhoto === undefined && profileFrameName === undefined && profileFrameSvg === undefined) {
+    return response.status(400).json({ error: 'No profile changes supplied.' });
+  }
   if (!validImageData(profilePhoto) || !validImageData(coverPhoto)) return response.status(400).json({ error: 'Choose a valid image smaller than 6 MB.' });
+  if (!validProfileFrame(profileFrameName, profileFrameSvg)) return response.status(400).json({ error: 'Choose a valid profile frame.' });
   try {
     await ensureDatabase();
     const result = await pool.query(
       `UPDATE users
        SET profile_photo = CASE WHEN $2::boolean THEN $3 ELSE profile_photo END,
-           cover_photo = CASE WHEN $4::boolean THEN $5 ELSE cover_photo END
+           cover_photo = CASE WHEN $4::boolean THEN $5 ELSE cover_photo END,
+           profile_frame_name = CASE WHEN $6::boolean THEN $7 ELSE profile_frame_name END,
+           profile_frame_svg = CASE WHEN $8::boolean THEN $9 ELSE profile_frame_svg END
        WHERE id = $1
-       RETURNING id, full_name, profile_photo, cover_photo`,
-      [request.user.id, profilePhoto !== undefined, profilePhoto || null, coverPhoto !== undefined, coverPhoto || null]
+       RETURNING id, full_name, profile_photo, cover_photo, profile_frame_name, profile_frame_svg`,
+      [
+        request.user.id,
+        profilePhoto !== undefined, profilePhoto || null,
+        coverPhoto !== undefined, coverPhoto || null,
+        profileFrameName !== undefined, profileFrameName || null,
+        profileFrameSvg !== undefined, profileFrameSvg || null
+      ]
     );
     const user = result.rows[0];
     response.json({
       ok: true,
       name: user.full_name,
       profilePhoto: user.profile_photo || '',
-      coverPhoto: user.cover_photo || ''
+      coverPhoto: user.cover_photo || '',
+      profileFrameName: user.profile_frame_name || '',
+      profileFrameSvg: user.profile_frame_svg || ''
     });
   } catch (error) {
     console.error('Profile update failed:', error.message);
