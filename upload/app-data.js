@@ -898,14 +898,6 @@
     let videoLoadGeneration = 0;
     let editState = freshEditState();
     const editVideo = flow.querySelector('#reelEditVideo');
-    const editStage = flow.querySelector('[data-reel-create-stage="edit"]');
-    const scrubPreviewVideo = document.createElement('video');
-    scrubPreviewVideo.className = 'reel-scrub-preview';
-    scrubPreviewVideo.muted = true;
-    scrubPreviewVideo.playsInline = true;
-    scrubPreviewVideo.preload = 'auto';
-    scrubPreviewVideo.setAttribute('aria-hidden', 'true');
-    editStage.appendChild(scrubPreviewVideo);
     const editTime = flow.querySelector('#reelEditTime');
     const editPlayButton = flow.querySelector('[data-reel-flow-action="toggle-edit-play"]');
     const timeline = flow.querySelector('.reel-timeline');
@@ -916,10 +908,17 @@
     const timelineAudio = document.createElement('div');
     const timelinePlayhead = document.createElement('div');
     const timelineSelection = document.createElement('div');
+    const timelineSoundLabel = document.createElement('div');
     const trimStartHandle = document.createElement('button');
     const trimEndHandle = document.createElement('button');
     const trimDurationLabel = document.createElement('span');
     const timelineAdd = timeline.querySelector('.reel-timeline-add');
+    const editPanel = flow.querySelector('[data-reel-create-stage="edit"]');
+    const scrubPreviewCanvas = document.createElement('canvas');
+    scrubPreviewCanvas.className = 'reel-scrub-preview-canvas';
+    scrubPreviewCanvas.setAttribute('aria-hidden', 'true');
+    editPanel.insertBefore(scrubPreviewCanvas, editPanel.querySelector('.reel-edit-controls'));
+    const scrubPreviewContext = scrubPreviewCanvas.getContext('2d', { alpha: false });
     const pixelsPerSecond = 82;
     let timelineDuration = 0;
     let timelineSyncing = false;
@@ -931,18 +930,31 @@
     let timelinePendingScrub = null;
     let timelineScrubInFlight = false;
     let timelineScrubTimer = 0;
-    let timelineScrubFrame = 0;
-    let timelineLastScrubTarget = 0;
+    let timelineDecodedScrubTime = 0;
     let timelineDragging = false;
     let timelinePointerDown = false;
     let timelineSettleTimer = 0;
     let timelineSelected = false;
+    let scrubPreviewGeneration = 0;
+    let scrubPreviewFrames = [];
+    let scrubPreviewStep = .125;
+    let scrubPreviewReadyCount = 0;
+    let scrubPreviewBuildPromise = null;
+    let scrubPreviewDrawToken = 0;
     timelineScroll.className = 'reel-timeline-scroll';
     timelineContent.className = 'reel-timeline-content';
     timelineTicks.className = 'reel-timeline-ticks';
     timelineFilmstrip.className = 'reel-timeline-filmstrip';
     timelineAudio.className = 'reel-timeline-audio';
-    timelineAudio.innerHTML = '<span>♪&nbsp; Add sound</span>';
+    timelineAudio.setAttribute('aria-hidden', 'true');
+    timelineSoundLabel.className = 'reel-timeline-sound-label';
+    timelineSoundLabel.innerHTML = '<span>♪&nbsp; Add sound</span>';
+    if (!document.getElementById('reelLiveScrubFixStyles')) {
+      const liveScrubStyles = document.createElement('style');
+      liveScrubStyles.id = 'reelLiveScrubFixStyles';
+      liveScrubStyles.textContent = '.reel-timeline-sound-label{position:absolute;z-index:8;top:82px;left:calc(50% + 10px);height:50px;display:flex;align-items:center;color:#fff;font-size:15px;font-weight:700;white-space:nowrap;pointer-events:none;text-shadow:0 1px 2px #000}.reel-timeline-audio{padding-left:0!important}.reel-timeline-playhead{z-index:9!important}.reel-timeline-scroll{touch-action:none!important;overscroll-behavior:none!important;user-select:none!important;-webkit-user-select:none!important}.reel-scrub-preview-canvas{position:absolute;z-index:3;inset:0;width:100%;height:53%;display:none;background:#000;object-fit:contain;pointer-events:none}.reel-create-edit.is-scrubbing .reel-scrub-preview-canvas{display:block}.reel-create-edit.is-scrubbing #reelEditVideo{visibility:hidden!important}';
+      document.head.appendChild(liveScrubStyles);
+    }
     timelinePlayhead.className = 'reel-timeline-playhead';
     timelineSelection.className = 'reel-timeline-selection';
     trimStartHandle.className = 'reel-trim-handle reel-trim-start';
@@ -956,7 +968,7 @@
     timelineSelection.append(trimStartHandle, trimDurationLabel, trimEndHandle);
     timelineContent.append(timelineTicks, timelineFilmstrip, timelineAudio, timelineSelection);
     timelineScroll.appendChild(timelineContent);
-    timeline.replaceChildren(timelineScroll, timelinePlayhead);
+    timeline.replaceChildren(timelineScroll, timelinePlayhead, timelineSoundLabel);
     if (timelineAdd) timeline.appendChild(timelineAdd);
     const effectOrder = ['none', 'warm', 'cool', 'mono', 'vivid'];
     const stickers = ['', '✨', '❤️', '🔥', '😊'];
@@ -1170,58 +1182,199 @@
       }
       source.remove();
     }
+    function sizeScrubPreviewCanvas() {
+      const rect = editVideo.getBoundingClientRect();
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      const width = Math.max(2, Math.round(rect.width * dpr));
+      const height = Math.max(2, Math.round(rect.height * dpr));
+      if (scrubPreviewCanvas.width !== width || scrubPreviewCanvas.height !== height) {
+        scrubPreviewCanvas.width = width;
+        scrubPreviewCanvas.height = height;
+      }
+    }
+    function drawVideoCover(context, source, width, height) {
+      const sourceWidth = source.videoWidth || source.width || 1;
+      const sourceHeight = source.videoHeight || source.height || 1;
+      const sourceRatio = sourceWidth / sourceHeight;
+      const targetRatio = width / height;
+      let sx = 0, sy = 0, sw = sourceWidth, sh = sourceHeight;
+      if (editState.fit === 'cover') {
+        if (sourceRatio > targetRatio) { sw = sourceHeight * targetRatio; sx = (sourceWidth - sw) / 2; }
+        else { sh = sourceWidth / targetRatio; sy = (sourceHeight - sh) / 2; }
+      }
+      context.fillStyle = '#000';
+      context.fillRect(0, 0, width, height);
+      if (editState.fit === 'cover') context.drawImage(source, sx, sy, sw, sh, 0, 0, width, height);
+      else {
+        const scale = Math.min(width / sourceWidth, height / sourceHeight);
+        const dw = sourceWidth * scale, dh = sourceHeight * scale;
+        context.drawImage(source, 0, 0, sourceWidth, sourceHeight, (width - dw) / 2, (height - dh) / 2, dw, dh);
+      }
+    }
+    function releaseScrubPreviewFrames() {
+      scrubPreviewFrames.forEach(function (frame) {
+        if (frame && typeof frame.close === 'function') frame.close();
+      });
+      scrubPreviewFrames = [];
+      scrubPreviewReadyCount = 0;
+    }
+    async function buildScrubPreviewFrames(duration) {
+      const generation = ++scrubPreviewGeneration;
+      releaseScrubPreviewFrames();
+      if (!selectedVideoData || !Number.isFinite(duration) || duration <= 0) return;
+      const maxFrames = 300;
+      scrubPreviewStep = Math.max(.1, duration / maxFrames);
+      const frameCount = Math.max(2, Math.ceil(duration / scrubPreviewStep) + 1);
+      scrubPreviewFrames = new Array(frameCount);
+      const source = document.createElement('video');
+      source.muted = true;
+      source.playsInline = true;
+      source.preload = 'auto';
+      source.src = selectedVideoData;
+      source.style.cssText = 'position:absolute;width:2px;height:2px;opacity:.001;pointer-events:none;left:-9999px;top:-9999px';
+      editPanel.appendChild(source);
+      await new Promise(function (resolve) {
+        if (source.readyState >= 2) return resolve();
+        source.addEventListener('loadeddata', resolve, { once: true });
+        source.addEventListener('error', resolve, { once: true });
+        source.load();
+      });
+      if (generation !== scrubPreviewGeneration || !source.videoWidth) { source.remove(); return; }
+      const targetHeight = 320;
+      const targetWidth = Math.max(120, Math.round(targetHeight * source.videoWidth / source.videoHeight));
+      const canvas = document.createElement('canvas');
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      const context = canvas.getContext('2d', { alpha: false });
+      for (let index = 0; index < frameCount; index += 1) {
+        if (generation !== scrubPreviewGeneration) break;
+        const time = Math.min(Math.max(0, duration - .001), index * scrubPreviewStep);
+        await seekThumbnailVideo(source, time);
+        if (generation !== scrubPreviewGeneration) break;
+        drawVideoCover(context, source, canvas.width, canvas.height);
+        try {
+          let frame;
+          if (typeof createImageBitmap === 'function') frame = await createImageBitmap(canvas);
+          else {
+            frame = new Image();
+            frame.src = canvas.toDataURL('image/jpeg', .72);
+            if (frame.decode) await frame.decode().catch(function () {});
+          }
+          if (generation !== scrubPreviewGeneration) { if (frame.close) frame.close(); break; }
+          scrubPreviewFrames[index] = frame;
+          scrubPreviewReadyCount += 1;
+        } catch (error) {}
+        if (index % 6 === 0) await new Promise(function (resolve) { requestAnimationFrame(resolve); });
+      }
+      source.remove();
+    }
+    function nearestReadyScrubFrameIndex(time) {
+      if (!scrubPreviewFrames.length) return -1;
+      let index = Math.max(0, Math.min(scrubPreviewFrames.length - 1, Math.round(time / scrubPreviewStep)));
+      if (scrubPreviewFrames[index]) return index;
+      for (let distance = 1; distance < scrubPreviewFrames.length; distance += 1) {
+        const before = index - distance, after = index + distance;
+        if (before >= 0 && scrubPreviewFrames[before]) return before;
+        if (after < scrubPreviewFrames.length && scrubPreviewFrames[after]) return after;
+      }
+      return -1;
+    }
+    function drawScrubPreviewAt(time) {
+      sizeScrubPreviewCanvas();
+      const index = nearestReadyScrubFrameIndex(time);
+      if (index < 0 || !scrubPreviewContext) return false;
+      const frame = scrubPreviewFrames[index];
+      const width = scrubPreviewCanvas.width, height = scrubPreviewCanvas.height;
+      scrubPreviewContext.fillStyle = '#000';
+      scrubPreviewContext.fillRect(0, 0, width, height);
+      const sourceWidth = frame.width || frame.naturalWidth || 1;
+      const sourceHeight = frame.height || frame.naturalHeight || 1;
+      const scale = editState.fit === 'cover' ? Math.max(width / sourceWidth, height / sourceHeight) : Math.min(width / sourceWidth, height / sourceHeight);
+      const dw = sourceWidth * scale, dh = sourceHeight * scale;
+      scrubPreviewContext.drawImage(frame, (width - dw) / 2, (height - dh) / 2, dw, dh);
+      return true;
+    }
     function setupTimeline(duration) {
       timelineDuration = Number.isFinite(duration) ? duration : 0;
-      if (selectedVideoData && scrubPreviewVideo.__reelSource !== selectedVideoData) {
-        scrubPreviewVideo.__reelSource = selectedVideoData;
-        scrubPreviewVideo.src = selectedVideoData;
-        scrubPreviewVideo.load();
-      }
       if (!editState.trimEnd || editState.trimEnd > timelineDuration) editState.trimEnd = timelineDuration;
       editTime.textContent = previewTime(editVideo.currentTime) + '/' + previewTime(timelineDuration);
       updateTrimSelection();
       buildTimelineThumbnails(timelineDuration).catch(function (error) { console.error(error); });
+      scrubPreviewBuildPromise = buildScrubPreviewFrames(timelineDuration).catch(function (error) { console.error(error); });
     }
     editVideo.addEventListener('loadedmetadata', function () { setupTimeline(editVideo.duration); });
     function renderTimelineAt(time) {
       const offset = Math.max(0, Math.min(timelineDuration, Number(time) || 0)) * pixelsPerSecond;
       timelineContent.style.transform = 'translate3d(' + (-offset) + 'px,0,0)';
     }
-    function applyPendingTimelineScrub() {
-      if (timelinePendingScrub === null) return;
+    function requestDecodedTimelineFrame() {
+      if (!timelineDragging || timelineScrubInFlight || timelinePendingScrub === null || !editVideo.seekable.length) return;
+
+      // Consume only the newest requested finger position. Any newer pointermove
+      // received during this seek is kept in timelinePendingScrub for the next pass.
       const target = timelinePendingScrub;
       timelinePendingScrub = null;
-      timelineLastScrubTarget = target;
-      if (selectedVideoData && scrubPreviewVideo.__reelSource !== selectedVideoData) {
-        scrubPreviewVideo.__reelSource = selectedVideoData;
-        scrubPreviewVideo.src = selectedVideoData;
-        scrubPreviewVideo.load();
+
+      if (Math.abs((editVideo.currentTime || 0) - target) < .006) {
+        timelineDecodedScrubTime = target;
+        if (timelineDragging && timelinePendingScrub !== null) requestDecodedTimelineFrame();
+        return;
       }
+
+      timelineScrubInFlight = true;
+      let completed = false;
+
+      const finish = function () {
+        if (completed) return;
+        completed = true;
+        editVideo.removeEventListener('seeked', onSeeked);
+        window.clearTimeout(timelineScrubTimer);
+        timelineScrubInFlight = false;
+        timelineDecodedScrubTime = editVideo.currentTime || target;
+
+        // Let Android paint the decoded frame before starting the next exact seek.
+        requestAnimationFrame(function () {
+          if (timelineDragging && timelinePendingScrub !== null) requestDecodedTimelineFrame();
+        });
+      };
+
+      const onSeeked = function () {
+        // requestVideoFrameCallback confirms that the newly decoded frame reached
+        // the visible video compositor. Fall back to RAF on older Android browsers.
+        if (typeof editVideo.requestVideoFrameCallback === 'function') {
+          editVideo.requestVideoFrameCallback(function () { finish(); });
+        } else {
+          requestAnimationFrame(function () { finish(); });
+        }
+      };
+
+      editVideo.addEventListener('seeked', onSeeked, { once: true });
+
+      // A long watchdog is only for broken media seeks. The old 180 ms timeout
+      // interrupted normal Android decoding and caused random/inaccurate frames.
+      timelineScrubTimer = window.setTimeout(function () {
+        finish();
+      }, 1200);
+
       try {
-        scrubPreviewVideo.pause();
-        if (scrubPreviewVideo.readyState >= 2) scrubPreviewVideo.classList.add('is-active');
-        scrubPreviewVideo.currentTime = target;
-      } catch (error) {}
+        // Never use fastSeek here: it is deliberately keyframe-based and can show
+        // a nearby frame instead of the exact timestamp under the user's finger.
+        editVideo.currentTime = target;
+      } catch (error) {
+        finish();
+      }
+    }
+    function applyPendingTimelineScrub() {
+      requestDecodedTimelineFrame();
     }
     function scrubTimelineTo(time) {
-      timelinePendingScrub = Math.min(Math.max(0, timelineDuration - .01), Math.max(0, time));
-      timelineLastScrubTarget = timelinePendingScrub;
-      if (!timelineScrubFrame) {
-        timelineScrubFrame = requestAnimationFrame(function () {
-          timelineScrubFrame = 0;
-          applyPendingTimelineScrub();
-        });
-      }
+      timelinePendingScrub = Math.min(Math.max(0, timelineDuration - .001), Math.max(0, time));
+      if (timelineAnimationFrame) return;
+      timelineAnimationFrame = requestAnimationFrame(function applyLiveScrub() {
+        timelineAnimationFrame = 0;
+        requestDecodedTimelineFrame();
+      });
     }
-    scrubPreviewVideo.addEventListener('seeked', function () {
-      if (!timelineDragging) return;
-      scrubPreviewVideo.classList.add('is-active');
-    });
-    scrubPreviewVideo.addEventListener('loadeddata', function () {
-      if (!timelineDragging) return;
-      try { scrubPreviewVideo.currentTime = timelineLastScrubTarget; } catch (error) {}
-      scrubPreviewVideo.classList.add('is-active');
-    });
     function syncEditPlayback(forceText) {
       if (!timelineDragging && editState.trimEnd > editState.trimStart && editState.trimEnd < timelineDuration && editVideo.currentTime >= editState.trimEnd) {
         editVideo.currentTime = Math.max(editState.trimStart, editState.trimEnd - .01);
@@ -1278,37 +1431,35 @@
     });
     function finishTimelineDrag() {
       if (timelinePointerDown) return;
-      if (timelineScrubFrame) {
-        cancelAnimationFrame(timelineScrubFrame);
-        timelineScrubFrame = 0;
-      }
-      if (timelinePendingScrub !== null) applyPendingTimelineScrub();
-      const finalTarget = Math.min(Math.max(0, timelineDuration - .01), Math.max(0, timelineLastScrubTarget));
+      const finalScrubTime = timelinePendingScrub !== null ? timelinePendingScrub : editVideo.currentTime;
       timelineDragging = false;
-      renderTimelineAt(finalTarget);
+      timelinePendingScrub = null;
       let revealed = false;
-      function revealMainVideo() {
+      const revealVideo = function () {
         if (revealed) return;
         revealed = true;
-        editVideo.removeEventListener('seeked', mainVideoSeeked);
-        window.clearTimeout(timelineScrubTimer);
-        scrubPreviewVideo.classList.remove('is-active');
-        if (!editVideo.paused) scheduleTimelineFollow();
-      }
-      function mainVideoSeeked() {
-        if (typeof editVideo.requestVideoFrameCallback === 'function') editVideo.requestVideoFrameCallback(revealMainVideo);
-        else requestAnimationFrame(function () { requestAnimationFrame(revealMainVideo); });
-      }
-      editVideo.addEventListener('seeked', mainVideoSeeked, { once: true });
-      try { editVideo.currentTime = finalTarget; } catch (error) { revealMainVideo(); }
-      timelineScrubTimer = window.setTimeout(revealMainVideo, 350);
+        editVideo.removeEventListener('seeked', revealVideo);
+        editPanel.classList.remove('is-scrubbing');
+        renderTimelineAt(finalScrubTime);
+        syncEditPlayback(true);
+        if (timelineWasPlayingBeforeDrag) {
+          timelineWasPlayingBeforeDrag = false;
+          editVideo.play().catch(function () {});
+        } else if (!editVideo.paused) {
+          scheduleTimelineFollow();
+        }
+      };
+      editVideo.addEventListener('seeked', revealVideo, { once: true });
+      try { editVideo.currentTime = finalScrubTime; } catch (error) { revealVideo(); }
+      window.setTimeout(revealVideo, 700);
     }
     function scheduleTimelineDragFinish() {
       window.clearTimeout(timelineSettleTimer);
-      timelineSettleTimer = window.setTimeout(finishTimelineDrag, 0);
+      timelineSettleTimer = window.setTimeout(finishTimelineDrag, 160);
     }
     let timelineDragStartX = 0;
     let timelineDragStartTime = 0;
+    let timelineWasPlayingBeforeDrag = false;
     function beginTimelineDrag(event) {
       setTimelineSelected(true);
       timelinePointerDown = true;
@@ -1317,17 +1468,28 @@
       timelineSyncing = false;
       timelineDragStartX = event.clientX;
       timelineDragStartTime = editVideo.currentTime;
-      timelineLastScrubTarget = editVideo.currentTime;
+      timelineWasPlayingBeforeDrag = !editVideo.paused;
+      if (timelineWasPlayingBeforeDrag) editVideo.pause();
+      editVideo.preload = 'auto';
+      editVideo.playsInline = true;
+      editVideo.removeAttribute('poster');
+      timelinePendingScrub = editVideo.currentTime || 0;
+      timelineDecodedScrubTime = editVideo.currentTime || 0;
+      editPanel.classList.add('is-scrubbing');
+      drawScrubPreviewAt(editVideo.currentTime || 0);
+      timelineScrubInFlight = false;
       cancelTimelineFollow();
       renderTimelineAt(editVideo.currentTime);
-      scrubTimelineTo(editVideo.currentTime);
       try { timelineScroll.setPointerCapture(event.pointerId); } catch (error) {}
     }
     function moveTimelineDrag(event) {
       if (!timelinePointerDown || event.target.closest('.reel-trim-handle')) return;
       event.preventDefault();
-      const nextTime = Math.min(timelineDuration, Math.max(0, timelineDragStartTime + (timelineDragStartX - event.clientX) / pixelsPerSecond));
-      scrubTimelineTo(nextTime);
+      const samples = typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : null;
+      const latestEvent = samples && samples.length ? samples[samples.length - 1] : event;
+      const nextTime = Math.min(timelineDuration, Math.max(0, timelineDragStartTime + (timelineDragStartX - latestEvent.clientX) / pixelsPerSecond));
+      if (!drawScrubPreviewAt(nextTime)) scrubTimelineTo(nextTime);
+      else timelinePendingScrub = nextTime;
       renderTimelineAt(nextTime);
       editTime.textContent = previewTime(nextTime) + '/' + previewTime(timelineDuration);
     }
@@ -1391,8 +1553,6 @@
       cancelTimelineFollow();
       window.clearTimeout(timelineSettleTimer);
       window.clearTimeout(timelineScrubTimer);
-      cancelAnimationFrame(timelineScrubFrame);
-      timelineScrubFrame = 0;
       timelinePendingScrub = null;
       timelineScrubInFlight = false;
       timelineDragging = false;
@@ -1404,11 +1564,6 @@
       timelineContent.style.transform = 'translate3d(0,0,0)';
       timelineTicks.replaceChildren();
       timelineFilmstrip.replaceChildren();
-      scrubPreviewVideo.pause();
-      scrubPreviewVideo.classList.remove('is-active');
-      scrubPreviewVideo.removeAttribute('src');
-      scrubPreviewVideo.__reelSource = '';
-      scrubPreviewVideo.load();
       previewVideos.forEach(function (video) { video.pause(); video.removeAttribute('src'); video.__reelSource = ''; video.load(); });
       selectedVideo = null;
       selectedVideoData = '';
