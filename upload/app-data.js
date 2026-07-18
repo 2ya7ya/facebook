@@ -958,7 +958,12 @@
     timelineScroll.appendChild(timelineContent);
     timeline.replaceChildren(timelineScroll, timelinePlayhead, timelineSoundLabel);
     if (timelineAdd) timeline.appendChild(timelineAdd);
-    timeline.appendChild(timelineMuteButton);
+    // Keep the mute control completely outside the timeline DOM tree.
+    // The timeline content is translated during dragging/playback; placing this
+    // button as a sibling prevents it from inheriting any current or future
+    // timeline transforms/animations.
+    const timelineControlsLayer = timeline.parentElement;
+    if (timelineControlsLayer) timelineControlsLayer.appendChild(timelineMuteButton);
     function syncTimelineMuteButton() {
       const muted = Boolean(editVideo.muted);
       timelineMuteButton.setAttribute('aria-pressed', muted ? 'true' : 'false');
