@@ -3,7 +3,6 @@
 
   const fallbackAvatar = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="#e4e6eb"/><circle cx="100" cy="76" r="40" fill="#7b8087"/><path d="M30 200c5-54 36-80 70-80s65 26 70 80" fill="#7b8087"/></svg>');
   const profileCacheKey = 'facebookProfileCacheV2';
-  const storyPhotoCacheKey = 'facebookCreateStoryPhotoCacheV1';
   const pageStateKey = 'facebookActivePageV1';
   const supportedPages = new Set(['home', 'reels', 'friends', 'marketplace', 'notifications', 'profile']);
   let profile = null;
@@ -170,9 +169,6 @@
         window.__facebookPrepaintProfile.storyPhotoReady = true;
       }
       target.classList.remove('fb-prepaint-story-crop');
-      try {
-        if (/^data:image\//.test(value)) localStorage.setItem(storyPhotoCacheKey, value);
-      } catch (_error) {}
     }
     const image = new Image();
     image.onload = function () {
