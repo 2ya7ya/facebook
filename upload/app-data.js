@@ -106,6 +106,8 @@
     if (avatarContainer) {
       avatarContainer.classList.toggle('has-selected-profile-photo', Boolean(profile.profilePhoto));
     }
+    if (profile.profilePhoto) document.body.dataset.hasCachedProfilePhoto = 'true';
+    else delete document.body.dataset.hasCachedProfilePhoto;
     const cover = document.querySelector('#profile > .cover');
     if (cover && profile.coverPhoto) {
       cover.style.backgroundImage = 'url("' + profile.coverPhoto + '")';
