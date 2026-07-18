@@ -901,6 +901,7 @@
     const editTime = flow.querySelector('#reelEditTime');
     const editPlayButton = flow.querySelector('[data-reel-flow-action="toggle-edit-play"]');
     const timeline = flow.querySelector('.reel-timeline');
+    const editControls = flow.querySelector('.reel-edit-controls');
     const timelineScroll = document.createElement('div');
     const timelineContent = document.createElement('div');
     const timelineTicks = document.createElement('div');
@@ -908,9 +909,10 @@
     const timelineAudio = document.createElement('div');
     const timelineSoundLabel = document.createElement('div');
     const timelinePlayhead = document.createElement('div');
-    document.querySelectorAll('#reelTimelineMuteFixed, .reel-timeline-mute').forEach(function (oldMute) {
+    document.querySelectorAll('#reelTimelineMuteFixed, .reel-timeline-mute, .reel-mute-overlay').forEach(function (oldMute) {
       oldMute.remove();
     });
+    const timelineMuteOverlay = document.createElement('div');
     const timelineMuteButton = document.createElement('button');
     const timelineSelection = document.createElement('div');
     const trimStartHandle = document.createElement('button');
@@ -937,6 +939,7 @@
     timelineSoundLabel.className = 'reel-timeline-sound-label';
     timelineSoundLabel.innerHTML = '<span>♪&nbsp; Add sound</span>';
     timelinePlayhead.className = 'reel-timeline-playhead';
+    timelineMuteOverlay.className = 'reel-mute-overlay';
     timelineMuteButton.className = 'reel-timeline-mute';
     timelineMuteButton.type = 'button';
     timelineMuteButton.setAttribute('aria-label', 'Mute video');
@@ -961,29 +964,11 @@
     timelineScroll.appendChild(timelineContent);
     timeline.replaceChildren(timelineScroll, timelinePlayhead, timelineSoundLabel);
     if (timelineAdd) timeline.appendChild(timelineAdd);
-    // Put the mute control directly under <body>. This keeps it outside every
-    // reel/timeline ancestor that can be translated during dragging or inertia.
+    // Keep mute control in a dedicated overlay that is a sibling of the
+    // scrolling timeline. The overlay never receives timeline transforms.
     timelineMuteButton.id = 'reelTimelineMuteFixed';
-    document.body.appendChild(timelineMuteButton);
-    function positionTimelineMuteButton() {
-      if (!flow.classList.contains('is-open') || !flow.querySelector('.reel-create-edit.is-active')) {
-        timelineMuteButton.style.display = 'none';
-        return;
-      }
-      const rect = timeline.getBoundingClientRect();
-      if (!rect.width || !rect.height) {
-        timelineMuteButton.style.display = 'none';
-        return;
-      }
-      const playheadX = rect.left + rect.width / 2;
-      timelineMuteButton.style.setProperty('--mute-fixed-left', Math.round(playheadX - 112) + 'px');
-      timelineMuteButton.style.setProperty('--mute-fixed-top', Math.round(rect.top + 85) + 'px');
-      timelineMuteButton.style.display = 'grid';
-    }
-    window.addEventListener('resize', positionTimelineMuteButton, { passive: true });
-    window.addEventListener('orientationchange', function () {
-      requestAnimationFrame(positionTimelineMuteButton);
-    }, { passive: true });
+    timelineMuteOverlay.appendChild(timelineMuteButton);
+    editControls.appendChild(timelineMuteOverlay);
     function syncTimelineMuteButton() {
       const muted = Boolean(editVideo.muted);
       timelineMuteButton.setAttribute('aria-pressed', muted ? 'true' : 'false');
@@ -1473,7 +1458,6 @@
       const videos = { preview: '#reelCreateVideo', edit: '#reelEditVideo', caption: '#reelCaptionVideo' };
       const video = flow.querySelector(videos[name]);
       if (video) loadVisibleVideo(video);
-      requestAnimationFrame(positionTimelineMuteButton);
     }
     function openFlow() {
       flow.classList.add('is-open');
@@ -1488,7 +1472,6 @@
       closeToolPanel();
       flow.classList.remove('is-video-loading');
       document.body.classList.remove('reel-create-open');
-      timelineMuteButton.style.display = 'none';
       videoLoadGeneration += 1;
       cancelTimelineFollow();
       cancelTimelineInertia();
