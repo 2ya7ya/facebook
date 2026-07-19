@@ -960,11 +960,10 @@
     timelineSelection.append(trimStartHandle, trimDurationLabel, trimEndHandle);
     timelineContent.append(timelineTicks, timelineFilmstrip, timelineAudio, timelineSelection);
     timelineScroll.appendChild(timelineContent);
-    timeline.replaceChildren(timelineScroll, timelinePlayhead, timelineSoundLabel);
-    if (timelineAdd) timeline.appendChild(timelineAdd);
     timelineMuteRail.appendChild(timelineMuteButton);
+    timeline.replaceChildren(timelineMuteRail, timelineScroll, timelinePlayhead, timelineSoundLabel);
+    if (timelineAdd) timeline.appendChild(timelineAdd);
     timelineMuteRail.hidden = true;
-    flow.appendChild(timelineMuteRail);
     function syncTimelineMuteButton() {
       const muted = Boolean(editVideo.muted);
       timelineMuteButton.setAttribute('aria-pressed', muted ? 'true' : 'false');
@@ -1313,6 +1312,7 @@
       if (timelinePointerDown) return;
       if (timelinePointerOnSound && timelinePointerMoved) editVideo.currentTime = timelineDragVisualTime;
       timelineDragging = false;
+      timeline.classList.remove('is-dragging');
       renderTimelineAt(timelinePointerOnSound && timelinePointerMoved ? timelineDragVisualTime : editVideo.currentTime);
       if (!editVideo.paused) scheduleTimelineFollow();
     }
@@ -1381,6 +1381,7 @@
       cancelTimelineInertia();
       if (timelinePointerOnSound && timelinePointerMoved) editVideo.currentTime = timelineDragVisualTime;
       timelineDragging = false;
+      timeline.classList.remove('is-dragging');
       renderTimelineAt(timelinePointerOnSound && timelinePointerMoved ? timelineDragVisualTime : editVideo.currentTime);
       if (!editVideo.paused) scheduleTimelineFollow();
     }
@@ -1388,6 +1389,7 @@
     function startTimelineInertia() {
       const minimumVelocity = 0.0007;
       if (Math.abs(timelineVelocity) < minimumVelocity) {
+        timeline.classList.remove('is-dragging');
         scheduleTimelineDragFinish();
         return;
       }
@@ -1454,6 +1456,7 @@
       const now = performance.now();
       if (Math.abs(event.clientX - timelineDragStartX) >= 5 && !timelinePointerMoved) {
         timelinePointerMoved = true;
+        timeline.classList.add('is-dragging');
         if (timelinePointerOnSound) editVideo.pause();
       }
       const elapsed = Math.max(1, now - timelineLastPointerAt);
