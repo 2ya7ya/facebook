@@ -1335,6 +1335,8 @@
     let timelinePointerOnSound = false;
     let suppressTimelineSoundClick = false;
     let timelineDragVisualTime = 0;
+    let timelineSoundDragFrame = 0;
+    let timelineSoundPendingTime = null;
 
     function cancelTimelineInertia() {
       if (timelineInertiaFrame) cancelAnimationFrame(timelineInertiaFrame);
@@ -1351,6 +1353,31 @@
       renderTimelineAt(boundedTime);
       updateEditTimeDisplay(boundedTime);
       return boundedTime;
+    }
+
+    function queueSoundTimelineTime(nextTime) {
+      const bounds = activeTrimBounds();
+      timelineDragVisualTime = Math.min(bounds.end, Math.max(bounds.start, nextTime));
+      timelineSoundPendingTime = timelineDragVisualTime;
+      if (timelineSoundDragFrame) return timelineDragVisualTime;
+      timelineSoundDragFrame = requestAnimationFrame(function () {
+        timelineSoundDragFrame = 0;
+        const time = timelineSoundPendingTime;
+        timelineSoundPendingTime = null;
+        renderTimelineAt(time);
+        updateEditTimeDisplay(time);
+      });
+      return timelineDragVisualTime;
+    }
+
+    function flushSoundTimelineFrame() {
+      if (timelineSoundDragFrame) cancelAnimationFrame(timelineSoundDragFrame);
+      timelineSoundDragFrame = 0;
+      if (timelineSoundPendingTime === null) return;
+      const time = timelineSoundPendingTime;
+      timelineSoundPendingTime = null;
+      renderTimelineAt(time);
+      updateEditTimeDisplay(time);
     }
 
     function finishTimelineInertia() {
@@ -1402,6 +1429,7 @@
       timelinePointerOnSound = Boolean(event.target.closest('.reel-timeline-audio,.reel-timeline-sound-label'));
       const stoppedSoundInertia = Boolean(timelineInertiaFrame && timelinePointerOnSound);
       cancelTimelineInertia();
+      flushSoundTimelineFrame();
       if (stoppedSoundInertia) editVideo.currentTime = timelineDragVisualTime;
       if (!timelinePointerOnSound) editVideo.pause();
       timelinePointerStartedVisible = !timelinePointerOnSound && isInsideVisibleTimeline(event.clientX, event.clientY);
@@ -1442,10 +1470,12 @@
       // Seeking a video on every touch sample blocks the main thread on many
       // Android browsers. The Add sound row therefore moves the lightweight
       // timeline layer immediately and seeks the video once the gesture ends.
-      applyTimelineTime(nextTime, !timelinePointerOnSound);
+      if (timelinePointerOnSound) queueSoundTimelineTime(nextTime);
+      else applyTimelineTime(nextTime, true);
     }
     function endTimelineDrag(cancelled) {
       if (!timelinePointerDown) return;
+      flushSoundTimelineFrame();
       timelinePointerDown = false;
       if (cancelled) {
         cancelTimelineInertia();
