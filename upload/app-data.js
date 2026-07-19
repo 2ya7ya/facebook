@@ -907,6 +907,9 @@
     const redoButton = flow.querySelector('#reelRedoButton');
     const fullscreenButton = flow.querySelector('#reelFullscreenButton');
     const minimizeButton = flow.querySelector('#reelMinimizeButton');
+    const fullscreenExitButton = flow.querySelector('#reelFullscreenExitButton');
+    const editMeta = flow.querySelector('.reel-edit-meta');
+    if (editMeta && fullscreenButton && fullscreenButton.parentElement !== editMeta) editMeta.appendChild(fullscreenButton);
     const fullscreenProgress = flow.querySelector('#reelFullscreenProgress');
     const fullscreenCurrent = flow.querySelector('#reelFullscreenCurrent');
     const fullscreenTotal = flow.querySelector('#reelFullscreenTotal');
@@ -1210,6 +1213,14 @@
     });
     fullscreenButton.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); enterEditorFullscreen(); });
     minimizeButton.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); exitEditorFullscreen(); });
+    if (fullscreenExitButton) fullscreenExitButton.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); exitEditorFullscreen(); });
+    editVideo.addEventListener('click', function (event) {
+      if (!editStage.classList.contains('is-editor-fullscreen') && !editorFullscreenElement()) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (editVideo.paused) editVideo.play().catch(function () {});
+      else editVideo.pause();
+    });
     fullscreenProgress.addEventListener('input', function () {
       const bounds = activeTrimBounds();
       editVideo.pause();
