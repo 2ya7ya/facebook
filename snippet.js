@@ -263,7 +263,7 @@
       // Keep the mute button immediately before the trimmed video strip. Because
       // it lives inside timelineContent, it follows timeline dragging; because
       // its left value follows trimStart, it also follows the left trim handle.
-      timelineMuteRail.style.left = (trimLeftPx - 44) + 'px';
+      timelineMuteRail.style.left = (trimLeftPx - 50) + 'px';
       // Keep the seconds badge fixed. Its value is captured once when the
       // source video loads and is never recalculated from trim bounds.
       trimDurationLabel.textContent = staticTrimDurationText;
