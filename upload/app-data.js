@@ -1314,8 +1314,9 @@
     });
     function finishTimelineDrag() {
       if (timelinePointerDown) return;
+      if (timelinePointerOnSound && timelinePointerMoved) editVideo.currentTime = timelineDragVisualTime;
       timelineDragging = false;
-      renderTimelineAt(editVideo.currentTime);
+      renderTimelineAt(timelinePointerOnSound && timelinePointerMoved ? timelineDragVisualTime : editVideo.currentTime);
       if (!editVideo.paused) scheduleTimelineFollow();
     }
     function scheduleTimelineDragFinish() {
@@ -1333,6 +1334,7 @@
     let timelinePointerMoved = false;
     let timelinePointerOnSound = false;
     let suppressTimelineSoundClick = false;
+    let timelineDragVisualTime = 0;
 
     function cancelTimelineInertia() {
       if (timelineInertiaFrame) cancelAnimationFrame(timelineInertiaFrame);
@@ -1341,10 +1343,11 @@
       timelineVelocity = 0;
     }
 
-    function applyTimelineTime(nextTime) {
+    function applyTimelineTime(nextTime, syncVideo) {
       const bounds = activeTrimBounds();
       const boundedTime = Math.min(bounds.end, Math.max(bounds.start, nextTime));
-      editVideo.currentTime = boundedTime;
+      if (syncVideo !== false) editVideo.currentTime = boundedTime;
+      timelineDragVisualTime = boundedTime;
       renderTimelineAt(boundedTime);
       updateEditTimeDisplay(boundedTime);
       return boundedTime;
@@ -1352,8 +1355,9 @@
 
     function finishTimelineInertia() {
       cancelTimelineInertia();
+      if (timelinePointerOnSound && timelinePointerMoved) editVideo.currentTime = timelineDragVisualTime;
       timelineDragging = false;
-      renderTimelineAt(editVideo.currentTime);
+      renderTimelineAt(timelinePointerOnSound && timelinePointerMoved ? timelineDragVisualTime : editVideo.currentTime);
       if (!editVideo.paused) scheduleTimelineFollow();
     }
 
@@ -1375,8 +1379,8 @@
         }
         const elapsed = Math.min(34, Math.max(1, now - timelineInertiaTime));
         timelineInertiaTime = now;
-        const previousTime = editVideo.currentTime;
-        const nextTime = applyTimelineTime(previousTime + timelineVelocity * elapsed);
+        const previousTime = timelinePointerOnSound ? timelineDragVisualTime : editVideo.currentTime;
+        const nextTime = applyTimelineTime(previousTime + timelineVelocity * elapsed, !timelinePointerOnSound);
 
         // Exponential ease-out gives a native-feeling, frame-rate-independent slowdown.
         timelineVelocity *= Math.exp(-elapsed / 260);
@@ -1396,7 +1400,9 @@
       if (event.target.closest('.reel-timeline-add')) return;
       if (event.target.closest('.reel-timeline-mute')) return;
       timelinePointerOnSound = Boolean(event.target.closest('.reel-timeline-audio,.reel-timeline-sound-label'));
+      const stoppedSoundInertia = Boolean(timelineInertiaFrame && timelinePointerOnSound);
       cancelTimelineInertia();
+      if (stoppedSoundInertia) editVideo.currentTime = timelineDragVisualTime;
       if (!timelinePointerOnSound) editVideo.pause();
       timelinePointerStartedVisible = !timelinePointerOnSound && isInsideVisibleTimeline(event.clientX, event.clientY);
       timelinePointerMoved = false;
@@ -1408,6 +1414,7 @@
       timelineSyncing = false;
       timelineDragStartX = event.clientX;
       timelineDragStartTime = editVideo.currentTime;
+      timelineDragVisualTime = timelineDragStartTime;
       timelineLastPointerX = event.clientX;
       timelineLastPointerAt = performance.now();
       timelineVelocity = 0;
@@ -1432,7 +1439,10 @@
       timelineLastPointerX = event.clientX;
       timelineLastPointerAt = now;
       const nextTime = timelineDragStartTime + (timelineDragStartX - event.clientX) / pixelsPerSecond;
-      applyTimelineTime(nextTime);
+      // Seeking a video on every touch sample blocks the main thread on many
+      // Android browsers. The Add sound row therefore moves the lightweight
+      // timeline layer immediately and seeks the video once the gesture ends.
+      applyTimelineTime(nextTime, !timelinePointerOnSound);
     }
     function endTimelineDrag(cancelled) {
       if (!timelinePointerDown) return;
