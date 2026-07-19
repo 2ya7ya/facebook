@@ -927,6 +927,7 @@
     let timelinePointerDown = false;
     let timelineSettleTimer = 0;
     let timelineSelected = false;
+    let timelineStageVisible = false;
     timelineScroll.className = 'reel-timeline-scroll';
     timelineContent.className = 'reel-timeline-content';
     timelineTicks.className = 'reel-timeline-ticks';
@@ -1254,9 +1255,14 @@
       buildTimelineThumbnails(timelineDuration).catch(function (error) { console.error(error); });
     }
     editVideo.addEventListener('loadedmetadata', function () { setupTimeline(editVideo.duration); });
+    function syncTimelineMuteVisibility(time) {
+      const relativeTime = Math.max(0, (Number(time) || 0) - (editState.trimStart || 0));
+      timelineMuteRail.hidden = !timelineStageVisible || relativeTime >= 2;
+    }
     function renderTimelineAt(time) {
       const offset = Math.max(0, Math.min(timelineDuration, Number(time) || 0)) * pixelsPerSecond;
       timelineContent.style.transform = 'translate3d(' + (-offset) + 'px,0,0)';
+      syncTimelineMuteVisibility(time);
     }
     function syncEditPlayback(forceText) {
       if (!timelineDragging && editState.trimEnd > editState.trimStart && editState.trimEnd < timelineDuration && editVideo.currentTime >= editState.trimEnd) {
@@ -1264,6 +1270,7 @@
         editVideo.pause();
       }
       const now = performance.now();
+      syncTimelineMuteVisibility(editVideo.currentTime);
       if (forceText || now - timelineLastTextUpdate > 90) {
         timelineLastTextUpdate = now;
         updateEditTimeDisplay(editVideo.currentTime);
@@ -1543,7 +1550,8 @@
     }
     function showStage(name) {
       flow.querySelectorAll('[data-reel-create-stage]').forEach(function (stage) { stage.classList.toggle('is-active', stage.dataset.reelCreateStage === name); });
-      timelineMuteRail.hidden = name !== 'edit';
+      timelineStageVisible = name === 'edit';
+      syncTimelineMuteVisibility(editVideo.currentTime);
       const videos = { preview: '#reelCreateVideo', edit: '#reelEditVideo', caption: '#reelCaptionVideo' };
       const video = flow.querySelector(videos[name]);
       if (video) loadVisibleVideo(video);
