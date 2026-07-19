@@ -721,6 +721,12 @@ app.get('/app-data.js', requireAuth, (_request, response) => {
   response.type('application/javascript').sendFile(path.join(publicDirectory, 'app-data.js'));
 });
 
+app.get('/reel-ui/:asset', requireAuth, (request, response) => {
+  const allowed = new Set(['reel-undo.png', 'reel-redo.png', 'reel-fullscreen.png', 'reel-minimize.png']);
+  if (!allowed.has(request.params.asset)) return response.sendStatus(404);
+  response.sendFile(path.join(publicDirectory, request.params.asset));
+});
+
 app.get('*splat', (request, response) => response.redirect(readSession(request) ? '/app' : '/'));
 
 const server = app.listen(port, '0.0.0.0', async () => {

@@ -1184,15 +1184,30 @@
       fullscreenProgress.value = relative;
     }
     function editorFullscreenElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
+    function setEditorFullscreenUi(enabled) {
+      if (!editStage) return;
+      editStage.classList.toggle('is-editor-fullscreen', Boolean(enabled));
+      document.body.classList.toggle('reel-fullscreen-open', Boolean(enabled));
+      if (enabled) updateEditTimeDisplay(editVideo.currentTime);
+    }
     function enterEditorFullscreen() {
       if (!editStage) return;
+      setEditorFullscreenUi(true);
       const request = editStage.requestFullscreen || editStage.webkitRequestFullscreen;
-      if (request) Promise.resolve(request.call(editStage)).catch(function () {});
+      if (request) Promise.resolve(request.call(editStage)).catch(function () {
+        // The CSS fullscreen overlay remains active when native fullscreen is unavailable.
+      });
     }
     function exitEditorFullscreen() {
+      setEditorFullscreenUi(false);
       const exit = document.exitFullscreen || document.webkitExitFullscreen;
       if (exit && editorFullscreenElement()) Promise.resolve(exit.call(document)).catch(function () {});
     }
+    ['fullscreenchange', 'webkitfullscreenchange'].forEach(function (eventName) {
+      document.addEventListener(eventName, function () {
+        if (!editorFullscreenElement()) setEditorFullscreenUi(false);
+      });
+    });
     fullscreenButton.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); enterEditorFullscreen(); });
     minimizeButton.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); exitEditorFullscreen(); });
     fullscreenProgress.addEventListener('input', function () {
