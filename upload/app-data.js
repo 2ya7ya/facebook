@@ -910,6 +910,7 @@
     const timelinePlayhead = document.createElement('div');
     const timelineMuteRail = document.createElement('div');
     const timelineMuteButton = document.createElement('button');
+    const timelineMutedIndicator = document.createElement('span');
     const timelineSelection = document.createElement('div');
     const trimStartHandle = document.createElement('button');
     const trimEndHandle = document.createElement('button');
@@ -947,6 +948,9 @@
     timelineMuteButton.setAttribute('aria-label', 'Mute video');
     timelineMuteButton.setAttribute('aria-pressed', 'false');
     timelineMuteButton.innerHTML = '';
+    timelineMutedIndicator.className = 'reel-timeline-muted-indicator';
+    timelineMutedIndicator.setAttribute('aria-hidden', 'true');
+    timelineMutedIndicator.innerHTML = '<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 12h5l7-6v20l-7-6H5z"/><path d="M21 11l7 10M28 11l-7 10" class="mute-cross"/></svg>';
     function muteIconSvg(muted) {
       return muted
         ? '<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 12h5l7-6v20l-7-6H5z"/><path d="M21 11l7 10M28 11l-7 10" class="mute-cross"/></svg>'
@@ -965,7 +969,7 @@
     timelineMuteRail.appendChild(timelineMuteButton);
     timelineContent.append(timelineFilmstrip, timelineAudio, timelineSelection, timelineMuteRail);
     timelineScroll.appendChild(timelineContent);
-    timeline.replaceChildren(timelineScroll, timelineTicks, timelinePlayhead, timelineSoundLabel, trimDurationLabel);
+    timeline.replaceChildren(timelineScroll, timelineTicks, timelinePlayhead, timelineSoundLabel, trimDurationLabel, timelineMutedIndicator);
     if (timelineAdd) timeline.appendChild(timelineAdd);
     timelineMuteRail.hidden = true;
     function syncTimelineMuteButton() {
@@ -978,6 +982,25 @@
       timelineMuteButton.setAttribute('aria-pressed', muted ? 'true' : 'false');
       timelineMuteButton.setAttribute('aria-label', muted ? 'Unmute video' : 'Mute video');
       timelineMuteButton.innerHTML = muteIconSvg(muted);
+      updateMutedIndicatorPosition();
+    }
+    function updateMutedIndicatorPosition() {
+      const muted = Boolean(editVideo.muted);
+      timelineMutedIndicator.classList.toggle('is-visible', muted);
+      if (!muted) return;
+      const durationVisible = trimDurationLabel.classList.contains('is-active');
+      timelineMutedIndicator.classList.toggle('is-beside-duration', durationVisible);
+      timelineMutedIndicator.classList.toggle('is-top-left', !durationVisible);
+      if (durationVisible) {
+        requestAnimationFrame(function () {
+          if (!editVideo.muted || !trimDurationLabel.classList.contains('is-active')) return;
+          timelineMutedIndicator.style.left = (trimDurationLabel.offsetLeft + trimDurationLabel.offsetWidth + 5) + 'px';
+          timelineMutedIndicator.style.top = (trimDurationLabel.offsetTop + Math.max(0, (trimDurationLabel.offsetHeight - 18) / 2)) + 'px';
+        });
+      } else {
+        timelineMutedIndicator.style.left = '8px';
+        timelineMutedIndicator.style.top = '3px';
+      }
     }
     ['pointerdown', 'pointerup', 'touchstart', 'touchend'].forEach(function (type) {
       timelineMuteButton.addEventListener(type, function (event) {
@@ -1122,6 +1145,7 @@
       // Show the pending trimmed duration live while a handle is moving.
       // The committed trim values are still written only on pointer release.
       trimDurationLabel.textContent = (end - start).toFixed(1).replace(/\.0$/, '') + 's';
+      updateMutedIndicatorPosition();
       const hiddenRight = Math.max(0, (timelineDuration - end) * pixelsPerSecond);
       const hiddenLeft = Math.max(0, start * pixelsPerSecond);
       const clip = 'inset(0 ' + hiddenRight + 'px 0 ' + hiddenLeft + 'px)';
@@ -1131,6 +1155,7 @@
       timelineAudio.style.clipPath = clip;
       timelineSelection.classList.toggle('is-active', timelineSelected);
       trimDurationLabel.classList.toggle('is-active', timelineSelected);
+      updateMutedIndicatorPosition();
     }
     function setTimelineSelected(selected) {
       timelineSelected = Boolean(selected);
