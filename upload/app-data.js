@@ -958,11 +958,11 @@
     trimStartHandle.textContent = '‹';
     trimEndHandle.textContent = '›';
     trimDurationLabel.className = 'reel-trim-duration';
-    timelineSelection.append(trimStartHandle, trimDurationLabel, trimEndHandle);
+    timelineSelection.append(trimStartHandle, trimEndHandle);
     timelineMuteRail.appendChild(timelineMuteButton);
     timelineContent.append(timelineTicks, timelineFilmstrip, timelineAudio, timelineSelection, timelineMuteRail);
     timelineScroll.appendChild(timelineContent);
-    timeline.replaceChildren(timelineScroll, timelinePlayhead, timelineSoundLabel);
+    timeline.replaceChildren(timelineScroll, timelinePlayhead, timelineSoundLabel, trimDurationLabel);
     if (timelineAdd) timeline.appendChild(timelineAdd);
     timelineMuteRail.hidden = true;
     function syncTimelineMuteButton() {
@@ -1108,6 +1108,7 @@
       timelineFilmstrip.style.clipPath = clip;
       timelineAudio.style.clipPath = clip;
       timelineSelection.classList.toggle('is-active', timelineSelected);
+      trimDurationLabel.classList.toggle('is-active', timelineSelected);
     }
     function setTimelineSelected(selected) {
       timelineSelected = Boolean(selected);
