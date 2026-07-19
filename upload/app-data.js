@@ -1101,12 +1101,17 @@
         timelineTicks.appendChild(tick);
       }
     }
-    function updateTrimSelection() {
+    function updateTrimSelection(previewStart, previewEnd) {
       if (!timelineDuration) return;
-      const start = Math.min(timelineDuration, Math.max(0, Number(editState.trimStart) || 0));
-      const end = Math.min(timelineDuration, Math.max(start + .1, Number(editState.trimEnd) || timelineDuration));
-      editState.trimStart = start;
-      editState.trimEnd = end;
+      const isPreview = Number.isFinite(previewStart) && Number.isFinite(previewEnd);
+      const startSource = isPreview ? previewStart : editState.trimStart;
+      const endSource = isPreview ? previewEnd : editState.trimEnd;
+      const start = Math.min(timelineDuration, Math.max(0, Number(startSource) || 0));
+      const end = Math.min(timelineDuration, Math.max(start + .1, Number(endSource) || timelineDuration));
+      if (!isPreview) {
+        editState.trimStart = start;
+        editState.trimEnd = end;
+      }
       const trimLeftPx = start * pixelsPerSecond;
       timelineSelection.style.left = trimLeftPx + 'px';
       timelineSelection.style.width = Math.max(2, (end - start) * pixelsPerSecond) + 'px';
@@ -1116,7 +1121,7 @@
       timelineMuteRail.style.left = (trimLeftPx - 44) + 'px';
       // Keep the seconds badge fixed. Its value is captured once when the
       // source video loads and is never recalculated from trim bounds.
-      trimDurationLabel.textContent = (end - start).toFixed(1).replace(/\.0$/, '') + 's';
+      if (!isPreview) trimDurationLabel.textContent = (end - start).toFixed(1).replace(/\.0$/, '') + 's';
       const hiddenRight = Math.max(0, (timelineDuration - end) * pixelsPerSecond);
       const hiddenLeft = Math.max(0, start * pixelsPerSecond);
       const clip = 'inset(0 ' + hiddenRight + 'px 0 ' + hiddenLeft + 'px)';
@@ -1148,22 +1153,29 @@
         const startX = event.clientX;
         const initialStart = editState.trimStart;
         const initialEnd = editState.trimEnd || timelineDuration;
+        let pendingStart = initialStart;
+        let pendingEnd = initialEnd;
         function move(moveEvent) {
           moveEvent.preventDefault();
           const delta = (moveEvent.clientX - startX) / pixelsPerSecond;
-          if (edge === 'start') editState.trimStart = Math.min(initialEnd - .1, Math.max(0, initialStart + delta));
-          else editState.trimEnd = Math.max(initialStart + .1, Math.min(timelineDuration, initialEnd + delta));
-          if (editVideo.currentTime < editState.trimStart) editVideo.currentTime = editState.trimStart;
-          if (editVideo.currentTime > editState.trimEnd) editVideo.currentTime = editState.trimEnd;
-          updateTrimSelection();
-          updateEditTimeDisplay(editState.trimStart);
+          if (edge === 'start') pendingStart = Math.min(initialEnd - .1, Math.max(0, initialStart + delta));
+          else pendingEnd = Math.max(initialStart + .1, Math.min(timelineDuration, initialEnd + delta));
+          // Preview only: move the handles and clip masks, but do not alter the
+          // committed trim bounds, video time, or Add sound data until release.
+          updateTrimSelection(pendingStart, pendingEnd);
         }
-        function finish() {
+        function finish(finishEvent) {
           window.removeEventListener('pointermove', move);
           window.removeEventListener('pointerup', finish);
           window.removeEventListener('pointercancel', finish);
           timelinePointerDown = false;
           trimCounterFrozen = false;
+          if (finishEvent && finishEvent.type === 'pointerup') {
+            editState.trimStart = pendingStart;
+            editState.trimEnd = pendingEnd;
+          }
+          // pointercancel restores the previous committed trim; pointerup commits.
+          updateTrimSelection();
           editVideo.currentTime = editState.trimStart;
           renderTimelineAt(editState.trimStart);
           updateEditTimeDisplay(editState.trimStart);
