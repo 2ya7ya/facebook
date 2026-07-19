@@ -1119,9 +1119,9 @@
       // it lives inside timelineContent, it follows timeline dragging; because
       // its left value follows trimStart, it also follows the left trim handle.
       timelineMuteRail.style.left = (trimLeftPx - 44) + 'px';
-      // Keep the seconds badge fixed. Its value is captured once when the
-      // source video loads and is never recalculated from trim bounds.
-      if (!isPreview) trimDurationLabel.textContent = (end - start).toFixed(1).replace(/\.0$/, '') + 's';
+      // Show the pending trimmed duration live while a handle is moving.
+      // The committed trim values are still written only on pointer release.
+      trimDurationLabel.textContent = (end - start).toFixed(1).replace(/\.0$/, '') + 's';
       const hiddenRight = Math.max(0, (timelineDuration - end) * pixelsPerSecond);
       const hiddenLeft = Math.max(0, start * pixelsPerSecond);
       const clip = 'inset(0 ' + hiddenRight + 'px 0 ' + hiddenLeft + 'px)';
