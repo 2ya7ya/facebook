@@ -932,7 +932,12 @@
     timelineTicks.className = 'reel-timeline-ticks';
     timelineFilmstrip.className = 'reel-timeline-filmstrip';
     timelineAudio.className = 'reel-timeline-audio';
+    timelineAudio.dataset.reelTool = 'sound';
     timelineSoundLabel.className = 'reel-timeline-sound-label';
+    timelineSoundLabel.dataset.reelTool = 'sound';
+    timelineSoundLabel.setAttribute('role', 'button');
+    timelineSoundLabel.setAttribute('aria-label', 'Add sound');
+    timelineSoundLabel.tabIndex = 0;
     timelineSoundLabel.innerHTML = '<span>♪&nbsp; Add sound</span>';
     timelinePlayhead.className = 'reel-timeline-playhead';
     timelineMuteRail.className = 'reel-timeline-mute-rail';
@@ -1083,7 +1088,7 @@
       timelineSelected = Boolean(selected);
       timeline.classList.toggle('is-selected', timelineSelected);
       flow.classList.toggle('is-timeline-selected', timelineSelected);
-      editTime.setAttribute('aria-hidden', timelineSelected ? 'false' : 'true');
+      editTime.setAttribute('aria-hidden', 'false');
       updateTrimSelection();
     }
     function installTrimHandle(handle, edge) {
@@ -1135,6 +1140,10 @@
     }
     document.addEventListener('pointerdown', function (event) {
       if (!timelineSelected) return;
+      if (event.target.closest('.reel-timeline-audio,.reel-timeline-sound-label')) {
+        setTimelineSelected(false);
+        return;
+      }
       // Playing or pausing the preview must not close the active trim controls.
       if (event.target.closest('[data-reel-flow-action="toggle-edit-play"]')) return;
       if (event.target.closest('.reel-timeline-mute')) return;
@@ -1308,7 +1317,10 @@
     }
 
     function applyTimelineTime(nextTime) {
-      const boundedTime = Math.min(timelineDuration, Math.max(0, nextTime));
+      const trimStart = Math.min(timelineDuration, Math.max(0, Number(editState.trimStart) || 0));
+      const requestedEnd = Number(editState.trimEnd);
+      const trimEnd = requestedEnd > trimStart ? Math.min(timelineDuration, requestedEnd) : timelineDuration;
+      const boundedTime = Math.min(trimEnd, Math.max(trimStart, nextTime));
       editVideo.currentTime = boundedTime;
       renderTimelineAt(boundedTime);
       editTime.textContent = previewTime(boundedTime) + '/' + previewTime(timelineDuration);
@@ -1345,7 +1357,10 @@
 
         // Exponential ease-out gives a native-feeling, frame-rate-independent slowdown.
         timelineVelocity *= Math.exp(-elapsed / 260);
-        const reachedBoundary = (nextTime <= 0 && timelineVelocity < 0) || (nextTime >= timelineDuration && timelineVelocity > 0);
+        const trimStart = Math.min(timelineDuration, Math.max(0, Number(editState.trimStart) || 0));
+        const requestedEnd = Number(editState.trimEnd);
+        const trimEnd = requestedEnd > trimStart ? Math.min(timelineDuration, requestedEnd) : timelineDuration;
+        const reachedBoundary = (nextTime <= trimStart && timelineVelocity < 0) || (nextTime >= trimEnd && timelineVelocity > 0);
         if (reachedBoundary || Math.abs(timelineVelocity) < 0.00018) {
           finishTimelineInertia();
           return;
@@ -1359,6 +1374,10 @@
       if (event.target.closest('.reel-trim-handle')) return;
       if (event.target.closest('.reel-timeline-add')) return;
       if (event.target.closest('.reel-timeline-mute')) return;
+      if (event.target.closest('.reel-timeline-audio,.reel-timeline-sound-label')) {
+        setTimelineSelected(false);
+        return;
+      }
       cancelTimelineInertia();
       editVideo.pause();
       timelinePointerStartedVisible = isInsideVisibleTimeline(event.clientX, event.clientY);
