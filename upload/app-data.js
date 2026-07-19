@@ -1491,21 +1491,18 @@
     function scheduleTimelineFollow() {
       if (editVideo.paused) return;
       cancelTimelineFollow();
-      const start = Math.max(editState.trimStart || 0, editVideo.currentTime || 0);
-      const end = editState.trimEnd > start ? editState.trimEnd : timelineDuration;
-      renderTimelineAt(start);
-      if (end <= start || typeof timelineContent.animate !== 'function') {
-        timelineAnimationFrame = requestAnimationFrame(function fallbackFollow() {
-          if (editVideo.paused || timelineDragging) return;
-          renderTimelineAt(editVideo.currentTime);
-          timelineAnimationFrame = requestAnimationFrame(fallbackFollow);
-        });
-        return;
+
+      // Follow the decoded video time on every painted frame. This keeps the
+      // moving second labels and filmstrip locked to the fixed white playhead,
+      // instead of letting a separate CSS animation drift away from playback.
+      function followFrame() {
+        if (editVideo.paused || timelineDragging) return;
+        renderTimelineAt(editVideo.currentTime);
+        updateEditTimeDisplay(editVideo.currentTime);
+        timelineAnimationFrame = requestAnimationFrame(followFrame);
       }
-      timelinePlaybackAnimation = timelineContent.animate([
-        { transform: 'translate3d(' + (-(start * pixelsPerSecond)) + 'px,0,0)' },
-        { transform: 'translate3d(' + (-(end * pixelsPerSecond)) + 'px,0,0)' }
-      ], { duration: ((end - start) * 1000) / Math.max(.1, Math.abs(editVideo.playbackRate || 1)), easing: 'linear', fill: 'forwards' });
+      renderTimelineAt(editVideo.currentTime);
+      timelineAnimationFrame = requestAnimationFrame(followFrame);
     }
     editVideo.addEventListener('timeupdate', function () { syncEditPlayback(editVideo.paused); });
     editVideo.addEventListener('play', function () {
