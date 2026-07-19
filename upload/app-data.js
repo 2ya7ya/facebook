@@ -959,10 +959,12 @@
     trimEndHandle.textContent = '›';
     trimDurationLabel.className = 'reel-trim-duration';
     timelineSelection.append(trimStartHandle, trimDurationLabel, trimEndHandle);
-    timelineContent.append(timelineTicks, timelineFilmstrip, timelineAudio, timelineSelection);
-    timelineScroll.appendChild(timelineContent);
     timelineMuteRail.appendChild(timelineMuteButton);
-    timeline.replaceChildren(timelineMuteRail, timelineScroll, timelinePlayhead, timelineSoundLabel);
+    // Keep the mute control immediately before the timeline content so it
+    // travels with the timeline instead of floating over the viewport.
+    timelineContent.append(timelineMuteRail, timelineTicks, timelineFilmstrip, timelineAudio, timelineSelection);
+    timelineScroll.appendChild(timelineContent);
+    timeline.replaceChildren(timelineScroll, timelinePlayhead, timelineSoundLabel);
     if (timelineAdd) timeline.appendChild(timelineAdd);
     timelineMuteRail.hidden = true;
     function syncTimelineMuteButton() {
