@@ -967,9 +967,9 @@
     trimDurationLabel.className = 'reel-trim-duration';
     timelineSelection.append(trimStartHandle, trimEndHandle);
     timelineMuteRail.appendChild(timelineMuteButton);
-    timelineContent.append(timelineFilmstrip, timelineAudio, timelineSelection, timelineMuteRail);
+    timelineContent.append(timelineFilmstrip, timelineAudio, timelineSelection, timelineMuteRail, trimDurationLabel, timelineMutedIndicator);
     timelineScroll.appendChild(timelineContent);
-    timeline.replaceChildren(timelineScroll, timelineTicks, timelinePlayhead, timelineSoundLabel, trimDurationLabel, timelineMutedIndicator);
+    timeline.replaceChildren(timelineScroll, timelineTicks, timelinePlayhead, timelineSoundLabel);
     if (timelineAdd) timeline.appendChild(timelineAdd);
     timelineMuteRail.hidden = true;
     function syncTimelineMuteButton() {
@@ -998,7 +998,8 @@
           timelineMutedIndicator.style.top = (trimDurationLabel.offsetTop + Math.max(0, (trimDurationLabel.offsetHeight - 18) / 2)) + 'px';
         });
       } else {
-        timelineMutedIndicator.style.left = '8px';
+        const bounds = activeTrimBounds();
+        timelineMutedIndicator.style.left = (bounds.start * pixelsPerSecond + 8) + 'px';
         timelineMutedIndicator.style.top = '3px';
       }
     }
@@ -1145,6 +1146,9 @@
       // Show the pending trimmed duration live while a handle is moving.
       // The committed trim values are still written only on pointer release.
       trimDurationLabel.textContent = (end - start).toFixed(1).replace(/\.0$/, '') + 's';
+      // Keep the duration badge attached to the trimmed clip so it moves with
+      // timelineContent during dragging and momentum.
+      trimDurationLabel.style.left = (trimLeftPx + 9) + 'px';
       updateMutedIndicatorPosition();
       const hiddenRight = Math.max(0, (timelineDuration - end) * pixelsPerSecond);
       const hiddenLeft = Math.max(0, start * pixelsPerSecond);
