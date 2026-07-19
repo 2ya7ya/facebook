@@ -963,9 +963,9 @@
     trimDurationLabel.className = 'reel-trim-duration';
     timelineSelection.append(trimStartHandle, trimEndHandle);
     timelineMuteRail.appendChild(timelineMuteButton);
-    timelineContent.append(timelineTicks, timelineFilmstrip, timelineAudio, timelineSelection, timelineMuteRail);
+    timelineContent.append(timelineFilmstrip, timelineAudio, timelineSelection, timelineMuteRail);
     timelineScroll.appendChild(timelineContent);
-    timeline.replaceChildren(timelineScroll, timelinePlayhead, timelineSoundLabel, trimDurationLabel);
+    timeline.replaceChildren(timelineScroll, timelineTicks, timelinePlayhead, timelineSoundLabel, trimDurationLabel);
     if (timelineAdd) timeline.appendChild(timelineAdd);
     timelineMuteRail.hidden = true;
     function syncTimelineMuteButton() {
@@ -1079,10 +1079,27 @@
       const end = requestedEnd > start ? Math.min(timelineDuration, requestedEnd) : timelineDuration;
       return { start: start, end: end };
     }
-    function updateEditTimeDisplay() {
-      // This counter is intentionally static. Playback and trimming must never
-      // change either its position or its displayed value.
-      editTime.textContent = staticCounterText;
+    function updateEditTimeDisplay(time) {
+      const bounds = activeTrimBounds();
+      const relative = Math.max(0, Math.min(bounds.end - bounds.start, (Number(time) || editVideo.currentTime || bounds.start) - bounds.start));
+      editTime.textContent = previewTime(relative) + '/' + previewTime(bounds.end - bounds.start);
+    }
+    function updateTimelineRuler(time) {
+      if (!timelineDuration) return;
+      const bounds = activeTrimBounds();
+      const relative = Math.max(0, Math.min(bounds.end - bounds.start, (Number(time) || bounds.start) - bounds.start));
+      const viewportWidth = Math.max(1, timeline.clientWidth || 430);
+      const center = viewportWidth / 2;
+      const first = Math.max(0, Math.floor(relative - center / pixelsPerSecond) - 1);
+      const last = Math.ceil(relative + center / pixelsPerSecond) + 1;
+      timelineTicks.replaceChildren();
+      for (let second = first; second <= last; second += 1) {
+        if (second > Math.ceil(bounds.end - bounds.start)) break;
+        const tick = document.createElement('span');
+        tick.textContent = previewTime(second);
+        tick.style.left = (center + (second - relative) * pixelsPerSecond) + 'px';
+        timelineTicks.appendChild(tick);
+      }
     }
     function updateTrimSelection() {
       if (!timelineDuration) return;
@@ -1090,12 +1107,6 @@
       const end = Math.min(timelineDuration, Math.max(start + .1, Number(editState.trimEnd) || timelineDuration));
       editState.trimStart = start;
       editState.trimEnd = end;
-      timelineTicks.querySelectorAll('span[data-timeline-second]').forEach(function (tick) {
-        const sourceSecond = Number(tick.dataset.timelineSecond);
-        const outsideKeptRange = sourceSecond < start || sourceSecond > end;
-        tick.hidden = outsideKeptRange;
-        if (!outsideKeptRange) tick.textContent = previewTime(sourceSecond - start);
-      });
       const trimLeftPx = start * pixelsPerSecond;
       timelineSelection.style.left = trimLeftPx + 'px';
       timelineSelection.style.width = Math.max(2, (end - start) * pixelsPerSecond) + 'px';
@@ -1105,7 +1116,7 @@
       timelineMuteRail.style.left = (trimLeftPx - 44) + 'px';
       // Keep the seconds badge fixed. Its value is captured once when the
       // source video loads and is never recalculated from trim bounds.
-      trimDurationLabel.textContent = staticTrimDurationText;
+      trimDurationLabel.textContent = (end - start).toFixed(1).replace(/\.0$/, '') + 's';
       const hiddenRight = Math.max(0, (timelineDuration - end) * pixelsPerSecond);
       const hiddenLeft = Math.max(0, start * pixelsPerSecond);
       const clip = 'inset(0 ' + hiddenRight + 'px 0 ' + hiddenLeft + 'px)';
@@ -1145,6 +1156,7 @@
           if (editVideo.currentTime < editState.trimStart) editVideo.currentTime = editState.trimStart;
           if (editVideo.currentTime > editState.trimEnd) editVideo.currentTime = editState.trimEnd;
           updateTrimSelection();
+          updateEditTimeDisplay(editState.trimStart);
         }
         function finish() {
           window.removeEventListener('pointermove', move);
@@ -1155,6 +1167,7 @@
           editVideo.currentTime = editState.trimStart;
           renderTimelineAt(editState.trimStart);
           updateEditTimeDisplay(editState.trimStart);
+          updateTimelineRuler(editState.trimStart);
           scheduleTimelineDragFinish();
         }
         window.addEventListener('pointermove', move, { passive: false });
@@ -1216,13 +1229,6 @@
       timelineContent.style.width = width + 'px';
       timelineTicks.replaceChildren();
       timelineFilmstrip.replaceChildren();
-      for (let second = 0; second <= Math.ceil(duration); second += 1) {
-        const tick = document.createElement('span');
-        tick.style.left = (second * pixelsPerSecond) + 'px';
-        tick.dataset.timelineSecond = String(second);
-        tick.textContent = previewTime(second);
-        timelineTicks.appendChild(tick);
-      }
       updateTrimSelection();
       const frameCount = Math.min(120, Math.max(1, Math.ceil(duration)));
       const frameDuration = 1;
@@ -1270,9 +1276,8 @@
       timelineDuration = Number.isFinite(duration) ? duration : 0;
       if (!editState.trimEnd || editState.trimEnd > timelineDuration) editState.trimEnd = timelineDuration;
       trimCounterFrozen = false;
-      staticCounterText = '00:00/' + previewTime(timelineDuration);
-      staticTrimDurationText = timelineDuration.toFixed(1).replace(/\.0$/, '') + 's';
-      updateEditTimeDisplay();
+      updateEditTimeDisplay(editState.trimStart);
+      updateTimelineRuler(editState.trimStart);
       updateTrimSelection();
       buildTimelineThumbnails(timelineDuration).catch(function (error) { console.error(error); });
     }
@@ -1284,6 +1289,7 @@
     function renderTimelineAt(time) {
       const offset = Math.max(0, Math.min(timelineDuration, Number(time) || 0)) * pixelsPerSecond;
       timelineContent.style.transform = 'translate3d(' + (-offset) + 'px,0,0)';
+      updateTimelineRuler(time);
       syncTimelineMuteVisibility(time);
     }
     function syncEditPlayback(forceText) {
