@@ -960,14 +960,17 @@
     trimDurationLabel.className = 'reel-trim-duration';
     timelineSelection.append(trimStartHandle, trimDurationLabel, trimEndHandle);
     timelineMuteRail.appendChild(timelineMuteButton);
-    // Keep the mute control immediately before the timeline content so it
-    // travels with the timeline instead of floating over the viewport.
-    timelineContent.append(timelineMuteRail, timelineTicks, timelineFilmstrip, timelineAudio, timelineSelection);
+    timelineContent.append(timelineTicks, timelineFilmstrip, timelineAudio, timelineSelection, timelineMuteRail);
     timelineScroll.appendChild(timelineContent);
     timeline.replaceChildren(timelineScroll, timelinePlayhead, timelineSoundLabel);
     if (timelineAdd) timeline.appendChild(timelineAdd);
     timelineMuteRail.hidden = true;
     function syncTimelineMuteButton() {
+      // The audio row is visual only; keep the single playhead-anchored label.
+      if (timelineAudio.textContent) timelineAudio.textContent = '';
+      timeline.querySelectorAll('.reel-timeline-sound-label').forEach(function (label, index) {
+        if (index > 0) label.remove();
+      });
       const muted = Boolean(editVideo.muted);
       timelineMuteButton.setAttribute('aria-pressed', muted ? 'true' : 'false');
       timelineMuteButton.setAttribute('aria-label', muted ? 'Unmute video' : 'Mute video');
@@ -1091,8 +1094,13 @@
         tick.hidden = outsideKeptRange;
         if (!outsideKeptRange) tick.textContent = previewTime(sourceSecond - start);
       });
-      timelineSelection.style.left = (start * pixelsPerSecond) + 'px';
+      const trimLeftPx = start * pixelsPerSecond;
+      timelineSelection.style.left = trimLeftPx + 'px';
       timelineSelection.style.width = Math.max(2, (end - start) * pixelsPerSecond) + 'px';
+      // Keep the mute button immediately before the trimmed video strip. Because
+      // it lives inside timelineContent, it follows timeline dragging; because
+      // its left value follows trimStart, it also follows the left trim handle.
+      timelineMuteRail.style.left = (trimLeftPx - 30) + 'px';
       trimDurationLabel.textContent = (end - start).toFixed(1).replace(/\.0$/, '') + 's';
       const hiddenRight = Math.max(0, (timelineDuration - end) * pixelsPerSecond);
       const hiddenLeft = Math.max(0, start * pixelsPerSecond);
