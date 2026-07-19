@@ -908,7 +908,7 @@
     const timelineAudio = document.createElement('div');
     const timelineSoundLabel = document.createElement('div');
     const timelinePlayhead = document.createElement('div');
-    const timelineMuteLayer = document.createElement('div');
+    const timelineMuteRail = document.createElement('div');
     const timelineMuteButton = document.createElement('button');
     const timelineSelection = document.createElement('div');
     const trimStartHandle = document.createElement('button');
@@ -935,7 +935,7 @@
     timelineSoundLabel.className = 'reel-timeline-sound-label';
     timelineSoundLabel.innerHTML = '<span>♪&nbsp; Add sound</span>';
     timelinePlayhead.className = 'reel-timeline-playhead';
-    timelineMuteLayer.className = 'reel-timeline-mute-layer';
+    timelineMuteRail.className = 'reel-timeline-mute-rail';
     timelineMuteButton.className = 'reel-timeline-mute';
     timelineMuteButton.type = 'button';
     timelineMuteButton.setAttribute('aria-label', 'Mute video');
@@ -960,9 +960,9 @@
     timelineScroll.appendChild(timelineContent);
     timeline.replaceChildren(timelineScroll, timelinePlayhead, timelineSoundLabel);
     if (timelineAdd) timeline.appendChild(timelineAdd);
-    timelineMuteLayer.appendChild(timelineMuteButton);
-    timelineMuteLayer.hidden = true;
-    flow.appendChild(timelineMuteLayer);
+    timelineMuteRail.appendChild(timelineMuteButton);
+    timelineMuteRail.hidden = true;
+    flow.appendChild(timelineMuteRail);
     function syncTimelineMuteButton() {
       const muted = Boolean(editVideo.muted);
       timelineMuteButton.setAttribute('aria-pressed', muted ? 'true' : 'false');
@@ -1449,7 +1449,7 @@
     }
     function showStage(name) {
       flow.querySelectorAll('[data-reel-create-stage]').forEach(function (stage) { stage.classList.toggle('is-active', stage.dataset.reelCreateStage === name); });
-      timelineMuteLayer.hidden = name !== 'edit';
+      timelineMuteRail.hidden = name !== 'edit';
       const videos = { preview: '#reelCreateVideo', edit: '#reelEditVideo', caption: '#reelCaptionVideo' };
       const video = flow.querySelector(videos[name]);
       if (video) loadVisibleVideo(video);
