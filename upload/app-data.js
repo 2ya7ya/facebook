@@ -900,6 +900,20 @@
     const editVideo = flow.querySelector('#reelEditVideo');
     const editTime = flow.querySelector('#reelEditTime');
     const editPlayButton = flow.querySelector('[data-reel-flow-action="toggle-edit-play"]');
+    const editStage = flow.querySelector('[data-reel-create-stage="edit"]');
+    const editCurrentLabel = flow.querySelector('#reelEditCurrent');
+    const editTotalLabel = flow.querySelector('#reelEditTotal');
+    const undoButton = flow.querySelector('#reelUndoButton');
+    const redoButton = flow.querySelector('#reelRedoButton');
+    const fullscreenButton = flow.querySelector('#reelFullscreenButton');
+    const minimizeButton = flow.querySelector('#reelMinimizeButton');
+    const fullscreenProgress = flow.querySelector('#reelFullscreenProgress');
+    const fullscreenCurrent = flow.querySelector('#reelFullscreenCurrent');
+    const fullscreenTotal = flow.querySelector('#reelFullscreenTotal');
+    const undoStack = [];
+    const redoStack = [];
+    let restoringHistory = false;
+
     const timeline = flow.querySelector('.reel-timeline');
     const timelineScroll = document.createElement('div');
     const timelineContent = document.createElement('div');
@@ -1015,9 +1029,11 @@
       event.preventDefault();
       event.stopPropagation();
       const stayedPaused = editVideo.paused;
+      const historyBeforeMute = captureEditorSnapshot();
       editVideo.muted = !editVideo.muted;
       if (stayedPaused && !editVideo.paused) editVideo.pause();
       syncTimelineMuteButton();
+      recordEditorChange(historyBeforeMute);
     });
     syncTimelineMuteButton();
     const effectOrder = ['none', 'warm', 'cool', 'mono', 'vivid'];
@@ -1034,6 +1050,55 @@
     function freshEditState() {
       return { trimStart: 0, trimEnd: 0, brightness: 1, contrast: 1, saturation: 1, effect: 'none', text: '', sticker: '', captions: false, overlay: false, fit: 'contain' };
     }
+    function captureEditorSnapshot() {
+      return { state: JSON.parse(JSON.stringify(editState)), muted: Boolean(editVideo.muted) };
+    }
+    function snapshotsEqual(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+    function updateHistoryButtons() {
+      undoButton.disabled = undoStack.length === 0;
+      redoButton.disabled = redoStack.length === 0;
+    }
+    function recordEditorChange(previousSnapshot) {
+      if (restoringHistory) return;
+      const previous = previousSnapshot || captureEditorSnapshot();
+      const current = captureEditorSnapshot();
+      if (snapshotsEqual(previous, current)) return;
+      undoStack.push(previous);
+      if (undoStack.length > 60) undoStack.shift();
+      redoStack.length = 0;
+      updateHistoryButtons();
+    }
+    function restoreEditorSnapshot(snapshot) {
+      if (!snapshot) return;
+      restoringHistory = true;
+      editState = JSON.parse(JSON.stringify(snapshot.state));
+      editVideo.muted = Boolean(snapshot.muted);
+      previewVideos.forEach(function (video) { video.muted = Boolean(snapshot.muted); });
+      applyPreviewEdits();
+      updateTrimSelection();
+      const bounds = activeTrimBounds();
+      editVideo.currentTime = Math.max(bounds.start, Math.min(bounds.end, editVideo.currentTime || bounds.start));
+      renderTimelineAt(editVideo.currentTime);
+      updateEditTimeDisplay(editVideo.currentTime);
+      updateTimelineRuler(editVideo.currentTime);
+      syncTimelineMuteButton();
+      restoringHistory = false;
+      updateHistoryButtons();
+    }
+    undoButton.addEventListener('click', function (event) {
+      event.preventDefault(); event.stopPropagation();
+      if (!undoStack.length) return;
+      redoStack.push(captureEditorSnapshot());
+      restoreEditorSnapshot(undoStack.pop());
+    });
+    redoButton.addEventListener('click', function (event) {
+      event.preventDefault(); event.stopPropagation();
+      if (!redoStack.length) return;
+      undoStack.push(captureEditorSnapshot());
+      restoreEditorSnapshot(redoStack.pop());
+    });
+    updateHistoryButtons();
+
     function ensureUserOverlay(video) {
       const panel = video.closest('[data-reel-create-stage]');
       let overlay = panel.querySelector('.reel-user-overlay');
@@ -1109,8 +1174,36 @@
     function updateEditTimeDisplay(time) {
       const bounds = activeTrimBounds();
       const relative = Math.max(0, Math.min(bounds.end - bounds.start, (Number(time) || editVideo.currentTime || bounds.start) - bounds.start));
-      editTime.textContent = previewTime(relative) + '/' + previewTime(bounds.end - bounds.start);
+      const currentText = previewTime(relative);
+      const totalText = previewTime(bounds.end - bounds.start);
+      editCurrentLabel.textContent = currentText;
+      editTotalLabel.textContent = totalText;
+      fullscreenCurrent.textContent = currentText;
+      fullscreenTotal.textContent = totalText;
+      fullscreenProgress.max = Math.max(.01, bounds.end - bounds.start);
+      fullscreenProgress.value = relative;
     }
+    function editorFullscreenElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
+    function enterEditorFullscreen() {
+      if (!editStage) return;
+      const request = editStage.requestFullscreen || editStage.webkitRequestFullscreen;
+      if (request) Promise.resolve(request.call(editStage)).catch(function () {});
+    }
+    function exitEditorFullscreen() {
+      const exit = document.exitFullscreen || document.webkitExitFullscreen;
+      if (exit && editorFullscreenElement()) Promise.resolve(exit.call(document)).catch(function () {});
+    }
+    fullscreenButton.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); enterEditorFullscreen(); });
+    minimizeButton.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); exitEditorFullscreen(); });
+    fullscreenProgress.addEventListener('input', function () {
+      const bounds = activeTrimBounds();
+      editVideo.pause();
+      editVideo.currentTime = bounds.start + Number(fullscreenProgress.value || 0);
+      renderTimelineAt(editVideo.currentTime);
+      updateEditTimeDisplay(editVideo.currentTime);
+      updateTimelineRuler(editVideo.currentTime);
+    });
+
     function updateTimelineRuler(time) {
       if (!timelineDuration) return;
       const bounds = activeTrimBounds();
@@ -1205,8 +1298,10 @@
           timelinePointerDown = false;
           trimCounterFrozen = false;
           if (finishEvent && finishEvent.type === 'pointerup') {
+            const historyBeforeTrim = captureEditorSnapshot();
             editState.trimStart = pendingStart;
             editState.trimEnd = pendingEnd;
+            recordEditorChange(historyBeforeTrim);
           }
           // pointercancel restores the previous committed trim; pointerup commits.
           updateTrimSelection();
@@ -1656,6 +1751,7 @@
       selectedVideo = null;
       selectedVideoData = '';
       editState = freshEditState();
+      undoStack.length = 0; redoStack.length = 0; updateHistoryButtons();
       file.value = '';
       caption.value = '';
     }
@@ -1671,6 +1767,7 @@
       selectedVideoData = '';
       videoLoadGeneration += 1;
       editState = freshEditState();
+      undoStack.length = 0; redoStack.length = 0; updateHistoryButtons();
       reelMessage(root, 'Preparing video…');
       try {
         const data = await fileData(selected);
@@ -1734,30 +1831,40 @@
           previewVideos.forEach(function (video) { video.muted = muted; });
           tool.textContent = muted ? '♪  Add sound' : '🔊  Sound on';
         } else if (name === 'layout') {
+          const historyBefore = captureEditorSnapshot();
           editState.fit = editState.fit === 'contain' ? 'cover' : 'contain';
           applyPreviewEdits();
+          recordEditorChange(historyBefore);
           reelMessage(root, editState.fit === 'cover' ? 'Video fills the frame' : 'Full video is visible');
         } else if (name === 'effects' || name === 'filters' || name === 'magic') {
+          const historyBefore = captureEditorSnapshot();
           editState.effect = effectOrder[(effectOrder.indexOf(editState.effect) + 1) % effectOrder.length];
           applyPreviewEdits();
+          recordEditorChange(historyBefore);
           reelMessage(root, editState.effect === 'none' ? 'Effect removed' : editState.effect.charAt(0).toUpperCase() + editState.effect.slice(1) + ' effect');
         } else if (name === 'stickers') {
+          const historyBefore = captureEditorSnapshot();
           editState.sticker = stickers[(stickers.indexOf(editState.sticker) + 1) % stickers.length];
           applyPreviewEdits();
+          recordEditorChange(historyBefore);
         } else if (name === 'captions') {
+          const historyBefore = captureEditorSnapshot();
           editState.captions = !editState.captions;
           applyPreviewEdits();
+          recordEditorChange(historyBefore);
           reelMessage(root, editState.captions ? 'Captions enabled' : 'Captions removed');
         } else if (name === 'overlay') {
+          const historyBefore = captureEditorSnapshot();
           editState.overlay = !editState.overlay;
           applyPreviewEdits();
+          recordEditorChange(historyBefore);
           reelMessage(root, editState.overlay ? 'Overlay added' : 'Overlay removed');
         } else if (name === 'text') {
           const wrap = document.createElement('div');
           const input = document.createElement('input');
           input.className = 'reel-tool-text-input'; input.maxLength = 100; input.placeholder = 'Add text to your reel'; input.value = editState.text;
           const save = document.createElement('button'); save.type = 'button'; save.className = 'reel-tool-save'; save.textContent = 'Apply text';
-          save.addEventListener('click', function () { editState.text = input.value.trim(); applyPreviewEdits(); closeToolPanel(); });
+          save.addEventListener('click', function () { const historyBefore = captureEditorSnapshot(); editState.text = input.value.trim(); applyPreviewEdits(); recordEditorChange(historyBefore); closeToolPanel(); });
           wrap.append(input, save); openToolPanel('Text', wrap); input.focus();
         } else if (name === 'adjust') {
           const wrap = document.createElement('div');
