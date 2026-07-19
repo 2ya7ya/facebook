@@ -908,6 +908,7 @@
     const fullscreenButton = flow.querySelector('#reelFullscreenButton');
     const minimizeButton = flow.querySelector('#reelMinimizeButton');
     const fullscreenExitButton = flow.querySelector('#reelFullscreenExitButton');
+    const fullscreenPausedOverlay = flow.querySelector('#reelFullscreenPausedOverlay');
     const editMeta = flow.querySelector('.reel-edit-meta');
     if (editMeta && fullscreenButton && fullscreenButton.parentElement !== editMeta) editMeta.appendChild(fullscreenButton);
     const fullscreenProgress = flow.querySelector('#reelFullscreenProgress');
@@ -1186,6 +1187,11 @@
       fullscreenProgress.max = Math.max(.01, bounds.end - bounds.start);
       fullscreenProgress.value = relative;
     }
+    function syncFullscreenPauseUi() {
+      if (!editStage) return;
+      editStage.classList.toggle('is-video-paused', Boolean(editVideo.paused));
+      if (fullscreenPausedOverlay) fullscreenPausedOverlay.setAttribute('aria-hidden', editVideo.paused ? 'false' : 'true');
+    }
     function editorFullscreenElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
     function setEditorFullscreenUi(enabled) {
       if (!editStage) return;
@@ -1196,13 +1202,11 @@
     function enterEditorFullscreen() {
       if (!editStage) return;
       setEditorFullscreenUi(true);
-      const request = editStage.requestFullscreen || editStage.webkitRequestFullscreen;
-      if (request) Promise.resolve(request.call(editStage)).catch(function () {
-        // The CSS fullscreen overlay remains active when native fullscreen is unavailable.
-      });
+      syncFullscreenPauseUi();
     }
     function exitEditorFullscreen() {
       setEditorFullscreenUi(false);
+      if (editStage) editStage.classList.remove('is-video-paused');
       const exit = document.exitFullscreen || document.webkitExitFullscreen;
       if (exit && editorFullscreenElement()) Promise.resolve(exit.call(document)).catch(function () {});
     }
@@ -1214,6 +1218,10 @@
     fullscreenButton.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); enterEditorFullscreen(); });
     minimizeButton.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); exitEditorFullscreen(); });
     if (fullscreenExitButton) fullscreenExitButton.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); exitEditorFullscreen(); });
+    if (fullscreenPausedOverlay) fullscreenPausedOverlay.addEventListener('click', function (event) {
+      event.preventDefault(); event.stopPropagation();
+      editVideo.play().catch(function () {});
+    });
     editVideo.addEventListener('click', function (event) {
       if (!editStage.classList.contains('is-editor-fullscreen') && !editorFullscreenElement()) return;
       event.preventDefault();
@@ -1501,11 +1509,13 @@
     }
     editVideo.addEventListener('timeupdate', function () { syncEditPlayback(editVideo.paused); });
     editVideo.addEventListener('play', function () {
+      syncFullscreenPauseUi();
       if (editPlayButton) editPlayButton.textContent = '❚❚';
       cancelTimelineFollow();
       scheduleTimelineFollow();
     });
     editVideo.addEventListener('pause', function () {
+      syncFullscreenPauseUi();
       if (editPlayButton) editPlayButton.textContent = '▶';
       cancelTimelineFollow();
       syncEditPlayback(true);
