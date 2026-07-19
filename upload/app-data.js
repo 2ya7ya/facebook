@@ -929,6 +929,8 @@
     let timelineSelected = false;
     let timelineStageVisible = false;
     let trimCounterFrozen = false;
+    let staticCounterText = '00:00/00:00';
+    let staticTrimDurationText = '0s';
     timelineScroll.className = 'reel-timeline-scroll';
     timelineContent.className = 'reel-timeline-content';
     timelineTicks.className = 'reel-timeline-ticks';
@@ -1077,13 +1079,10 @@
       const end = requestedEnd > start ? Math.min(timelineDuration, requestedEnd) : timelineDuration;
       return { start: start, end: end };
     }
-    function updateEditTimeDisplay(time) {
-      if (trimCounterFrozen) return;
-      const bounds = activeTrimBounds();
-      const relativeTime = Math.max(0, (Number(time) || 0) - bounds.start);
-      // Trimming renumbers the kept video from 00:00, but the counter's total
-      // remains the original source duration instead of shrinking with the trim.
-      editTime.textContent = previewTime(relativeTime) + '/' + previewTime(timelineDuration);
+    function updateEditTimeDisplay() {
+      // This counter is intentionally static. Playback and trimming must never
+      // change either its position or its displayed value.
+      editTime.textContent = staticCounterText;
     }
     function updateTrimSelection() {
       if (!timelineDuration) return;
@@ -1104,9 +1103,9 @@
       // it lives inside timelineContent, it follows timeline dragging; because
       // its left value follows trimStart, it also follows the left trim handle.
       timelineMuteRail.style.left = (trimLeftPx - 44) + 'px';
-      // Keep the seconds badge fixed to the original video duration. Trimming
-      // must not move it or change its value.
-      trimDurationLabel.textContent = timelineDuration.toFixed(1).replace(/\.0$/, '') + 's';
+      // Keep the seconds badge fixed. Its value is captured once when the
+      // source video loads and is never recalculated from trim bounds.
+      trimDurationLabel.textContent = staticTrimDurationText;
       const hiddenRight = Math.max(0, (timelineDuration - end) * pixelsPerSecond);
       const hiddenLeft = Math.max(0, start * pixelsPerSecond);
       const clip = 'inset(0 ' + hiddenRight + 'px 0 ' + hiddenLeft + 'px)';
@@ -1271,7 +1270,9 @@
       timelineDuration = Number.isFinite(duration) ? duration : 0;
       if (!editState.trimEnd || editState.trimEnd > timelineDuration) editState.trimEnd = timelineDuration;
       trimCounterFrozen = false;
-      updateEditTimeDisplay(editVideo.currentTime);
+      staticCounterText = '00:00/' + previewTime(timelineDuration);
+      staticTrimDurationText = timelineDuration.toFixed(1).replace(/\.0$/, '') + 's';
+      updateEditTimeDisplay();
       updateTrimSelection();
       buildTimelineThumbnails(timelineDuration).catch(function (error) { console.error(error); });
     }
