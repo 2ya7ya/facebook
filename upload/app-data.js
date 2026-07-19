@@ -905,6 +905,7 @@
     const timelineContent = document.createElement('div');
     const timelineTicks = document.createElement('div');
     const timelineFilmstrip = document.createElement('div');
+    const timelineFilmstripInner = document.createElement('div');
     const timelineAudio = document.createElement('div');
     const timelineSoundLabel = document.createElement('div');
     const timelinePlayhead = document.createElement('div');
@@ -935,6 +936,7 @@
     timelineContent.className = 'reel-timeline-content';
     timelineTicks.className = 'reel-timeline-ticks';
     timelineFilmstrip.className = 'reel-timeline-filmstrip';
+    timelineFilmstripInner.className = 'reel-timeline-filmstrip-inner';
     timelineAudio.className = 'reel-timeline-audio';
     timelineAudio.dataset.reelTool = 'sound';
     timelineSoundLabel.className = 'reel-timeline-sound-label';
@@ -962,6 +964,7 @@
     trimEndHandle.textContent = '›';
     trimDurationLabel.className = 'reel-trim-duration';
     timelineSelection.append(trimStartHandle, trimEndHandle);
+    timelineFilmstrip.appendChild(timelineFilmstripInner);
     timelineMuteRail.appendChild(timelineMuteButton);
     timelineContent.append(timelineFilmstrip, timelineAudio, timelineSelection, timelineMuteRail);
     timelineScroll.appendChild(timelineContent);
@@ -1108,21 +1111,27 @@
       editState.trimStart = start;
       editState.trimEnd = end;
       const trimLeftPx = start * pixelsPerSecond;
-      timelineSelection.style.left = trimLeftPx + 'px';
-      timelineSelection.style.width = Math.max(2, (end - start) * pixelsPerSecond) + 'px';
-      // Keep the mute button immediately before the trimmed video strip. Because
-      // it lives inside timelineContent, it follows timeline dragging; because
-      // its left value follows trimStart, it also follows the left trim handle.
-      timelineMuteRail.style.left = (trimLeftPx - 44) + 'px';
-      // Keep the seconds badge fixed. Its value is captured once when the
-      // source video loads and is never recalculated from trim bounds.
+      const retainedWidth = Math.max(2, (end - start) * pixelsPerSecond);
+
+      // TikTok-style ripple trim: the outer video clip remains anchored at x=0.
+      // Its width shrinks as the start handle moves, while the original
+      // thumbnails slide left inside the clipped viewport to hide the removed
+      // beginning. This prevents any black gap from opening at the clip start.
+      timelineFilmstrip.style.left = '0px';
+      timelineFilmstrip.style.width = retainedWidth + 'px';
+      timelineFilmstrip.style.overflow = 'hidden';
+      timelineFilmstrip.style.clipPath = 'none';
+      timelineFilmstripInner.style.width = Math.max(1, timelineDuration * pixelsPerSecond) + 'px';
+      timelineFilmstripInner.style.transform = 'translate3d(' + (-trimLeftPx) + 'px,0,0)';
+
+      timelineSelection.style.left = '0px';
+      timelineSelection.style.width = retainedWidth + 'px';
+      timelineMuteRail.style.left = '-50px';
       trimDurationLabel.textContent = (end - start).toFixed(1).replace(/\.0$/, '') + 's';
-      const hiddenRight = Math.max(0, (timelineDuration - end) * pixelsPerSecond);
-      const hiddenLeft = Math.max(0, start * pixelsPerSecond);
-      const clip = 'inset(0 ' + hiddenRight + 'px 0 ' + hiddenLeft + 'px)';
-      timelineFilmstrip.style.clipPath = clip;
-      // The Add sound row keeps its full original length and is never clipped
-      // when the video itself is trimmed.
+
+      // The Add sound row is independent and always keeps the original width.
+      timelineAudio.style.left = '0px';
+      timelineAudio.style.width = Math.max(1, timelineDuration * pixelsPerSecond) + 'px';
       timelineAudio.style.clipPath = 'none';
       timelineSelection.classList.toggle('is-active', timelineSelected);
       trimDurationLabel.classList.toggle('is-active', timelineSelected);
@@ -1228,7 +1237,7 @@
       const width = Math.max(1, duration * pixelsPerSecond);
       timelineContent.style.width = width + 'px';
       timelineTicks.replaceChildren();
-      timelineFilmstrip.replaceChildren();
+      timelineFilmstripInner.replaceChildren();
       updateTrimSelection();
       const frameCount = Math.min(120, Math.max(1, Math.ceil(duration)));
       const frameDuration = 1;
@@ -1268,7 +1277,7 @@
         image.src = canvas.toDataURL('image/jpeg', .72);
         image.style.left = (index * pixelsPerSecond) + 'px';
         image.style.width = Math.max(1, Math.min(1, duration - index) * pixelsPerSecond + 1) + 'px';
-        timelineFilmstrip.appendChild(image);
+        timelineFilmstripInner.appendChild(image);
       }
       source.remove();
     }
@@ -1287,10 +1296,13 @@
       timelineMuteRail.hidden = !timelineStageVisible || relativeTime >= 2;
     }
     function renderTimelineAt(time) {
-      const offset = Math.max(0, Math.min(timelineDuration, Number(time) || 0)) * pixelsPerSecond;
+      const bounds = activeTrimBounds();
+      const absoluteTime = Math.max(bounds.start, Math.min(bounds.end, Number(time) || bounds.start));
+      const relativeTime = Math.max(0, absoluteTime - bounds.start);
+      const offset = relativeTime * pixelsPerSecond;
       timelineContent.style.transform = 'translate3d(' + (-offset) + 'px,0,0)';
-      updateTimelineRuler(time);
-      syncTimelineMuteVisibility(time);
+      updateTimelineRuler(absoluteTime);
+      syncTimelineMuteVisibility(absoluteTime);
     }
     function syncEditPlayback(forceText) {
       if (!timelineDragging && editState.trimEnd > editState.trimStart && editState.trimEnd < timelineDuration && editVideo.currentTime >= editState.trimEnd) {
@@ -1328,8 +1340,8 @@
         return;
       }
       timelinePlaybackAnimation = timelineContent.animate([
-        { transform: 'translate3d(' + (-(start * pixelsPerSecond)) + 'px,0,0)' },
-        { transform: 'translate3d(' + (-(end * pixelsPerSecond)) + 'px,0,0)' }
+        { transform: 'translate3d(' + (-((start - (editState.trimStart || 0)) * pixelsPerSecond)) + 'px,0,0)' },
+        { transform: 'translate3d(' + (-((end - (editState.trimStart || 0)) * pixelsPerSecond)) + 'px,0,0)' }
       ], { duration: ((end - start) * 1000) / Math.max(.1, Math.abs(editVideo.playbackRate || 1)), easing: 'linear', fill: 'forwards' });
     }
     editVideo.addEventListener('timeupdate', function () { syncEditPlayback(editVideo.paused); });
@@ -1605,7 +1617,7 @@
       timelineScroll.scrollLeft = 0;
       timelineContent.style.transform = 'translate3d(0,0,0)';
       timelineTicks.replaceChildren();
-      timelineFilmstrip.replaceChildren();
+      timelineFilmstripInner.replaceChildren();
       previewVideos.forEach(function (video) { video.pause(); video.removeAttribute('src'); video.__reelSource = ''; video.load(); });
       selectedVideo = null;
       selectedVideoData = '';
