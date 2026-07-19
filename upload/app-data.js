@@ -928,6 +928,7 @@
     let timelineSettleTimer = 0;
     let timelineSelected = false;
     let timelineStageVisible = false;
+    let trimCounterFrozen = false;
     timelineScroll.className = 'reel-timeline-scroll';
     timelineContent.className = 'reel-timeline-content';
     timelineTicks.className = 'reel-timeline-ticks';
@@ -1077,10 +1078,12 @@
       return { start: start, end: end };
     }
     function updateEditTimeDisplay(time) {
+      if (trimCounterFrozen) return;
       const bounds = activeTrimBounds();
-      const duration = Math.max(0, bounds.end - bounds.start);
-      const relativeTime = Math.min(duration, Math.max(0, (Number(time) || 0) - bounds.start));
-      editTime.textContent = previewTime(relativeTime) + '/' + previewTime(duration);
+      const relativeTime = Math.max(0, (Number(time) || 0) - bounds.start);
+      // Trimming renumbers the kept video from 00:00, but the counter's total
+      // remains the original source duration instead of shrinking with the trim.
+      editTime.textContent = previewTime(relativeTime) + '/' + previewTime(timelineDuration);
     }
     function updateTrimSelection() {
       if (!timelineDuration) return;
@@ -1101,12 +1104,16 @@
       // it lives inside timelineContent, it follows timeline dragging; because
       // its left value follows trimStart, it also follows the left trim handle.
       timelineMuteRail.style.left = (trimLeftPx - 44) + 'px';
-      trimDurationLabel.textContent = (end - start).toFixed(1).replace(/\.0$/, '') + 's';
+      // Keep the seconds badge fixed to the original video duration. Trimming
+      // must not move it or change its value.
+      trimDurationLabel.textContent = timelineDuration.toFixed(1).replace(/\.0$/, '') + 's';
       const hiddenRight = Math.max(0, (timelineDuration - end) * pixelsPerSecond);
       const hiddenLeft = Math.max(0, start * pixelsPerSecond);
       const clip = 'inset(0 ' + hiddenRight + 'px 0 ' + hiddenLeft + 'px)';
       timelineFilmstrip.style.clipPath = clip;
-      timelineAudio.style.clipPath = clip;
+      // The Add sound row keeps its full original length and is never clipped
+      // when the video itself is trimmed.
+      timelineAudio.style.clipPath = 'none';
       timelineSelection.classList.toggle('is-active', timelineSelected);
       trimDurationLabel.classList.toggle('is-active', timelineSelected);
     }
@@ -1123,6 +1130,7 @@
         event.stopPropagation();
         setTimelineSelected(true);
         editVideo.pause();
+        trimCounterFrozen = true;
         timelineDragging = true;
         timelinePointerDown = true;
         cancelTimelineFollow();
@@ -1144,6 +1152,7 @@
           window.removeEventListener('pointerup', finish);
           window.removeEventListener('pointercancel', finish);
           timelinePointerDown = false;
+          trimCounterFrozen = false;
           editVideo.currentTime = editState.trimStart;
           renderTimelineAt(editState.trimStart);
           updateEditTimeDisplay(editState.trimStart);
@@ -1261,6 +1270,7 @@
     function setupTimeline(duration) {
       timelineDuration = Number.isFinite(duration) ? duration : 0;
       if (!editState.trimEnd || editState.trimEnd > timelineDuration) editState.trimEnd = timelineDuration;
+      trimCounterFrozen = false;
       updateEditTimeDisplay(editVideo.currentTime);
       updateTrimSelection();
       buildTimelineThumbnails(timelineDuration).catch(function (error) { console.error(error); });
