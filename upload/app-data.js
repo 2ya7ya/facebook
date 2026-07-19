@@ -1319,7 +1319,6 @@
       if (timelinePointerDown) return;
       if (timelinePointerOnSound && timelinePointerMoved) editVideo.currentTime = timelineDragVisualTime;
       timelineDragging = false;
-      timeline.classList.remove('is-dragging');
       renderTimelineAt(timelinePointerOnSound && timelinePointerMoved ? timelineDragVisualTime : editVideo.currentTime);
       if (!editVideo.paused) scheduleTimelineFollow();
     }
@@ -1388,7 +1387,6 @@
       cancelTimelineInertia();
       if (timelinePointerOnSound && timelinePointerMoved) editVideo.currentTime = timelineDragVisualTime;
       timelineDragging = false;
-      timeline.classList.remove('is-dragging');
       renderTimelineAt(timelinePointerOnSound && timelinePointerMoved ? timelineDragVisualTime : editVideo.currentTime);
       if (!editVideo.paused) scheduleTimelineFollow();
     }
@@ -1396,7 +1394,6 @@
     function startTimelineInertia() {
       const minimumVelocity = 0.0007;
       if (Math.abs(timelineVelocity) < minimumVelocity) {
-        timeline.classList.remove('is-dragging');
         scheduleTimelineDragFinish();
         return;
       }
@@ -1463,7 +1460,6 @@
       const now = performance.now();
       if (Math.abs(event.clientX - timelineDragStartX) >= 5 && !timelinePointerMoved) {
         timelinePointerMoved = true;
-        timeline.classList.add('is-dragging');
         if (timelinePointerOnSound) editVideo.pause();
       }
       const elapsed = Math.max(1, now - timelineLastPointerAt);
