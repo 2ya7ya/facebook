@@ -984,7 +984,7 @@
       timelineMuteButton.innerHTML = muteIconSvg(muted);
       updateMutedIndicatorPosition();
     }
-    function updateMutedIndicatorPosition() {
+    function updateMutedIndicatorPosition(previewTrimLeftPx) {
       const muted = Boolean(editVideo.muted);
       timelineMutedIndicator.classList.toggle('is-visible', muted);
       if (!muted) return;
@@ -992,7 +992,9 @@
       timelineMutedIndicator.classList.toggle('is-beside-duration', durationVisible);
       timelineMutedIndicator.classList.toggle('is-top-left', !durationVisible);
       const bounds = activeTrimBounds();
-      const trimLeftPx = bounds.start * pixelsPerSecond;
+      const trimLeftPx = Number.isFinite(previewTrimLeftPx)
+        ? previewTrimLeftPx
+        : bounds.start * pixelsPerSecond;
       if (durationVisible) {
         // Use a fixed duration slot so values such as 30s and 30.1s never
         // shift the muted icon horizontally.
@@ -1150,7 +1152,9 @@
       // Keep the duration badge attached to the trimmed clip so it moves with
       // timelineContent during dragging and momentum.
       trimDurationLabel.style.left = (trimLeftPx + 9) + 'px';
-      updateMutedIndicatorPosition();
+      // Use the same live preview left edge as the duration badge so the
+      // muted indicator follows it exactly while a trim handle is dragged.
+      updateMutedIndicatorPosition(trimLeftPx);
       const hiddenRight = Math.max(0, (timelineDuration - end) * pixelsPerSecond);
       const hiddenLeft = Math.max(0, start * pixelsPerSecond);
       const clip = 'inset(0 ' + hiddenRight + 'px 0 ' + hiddenLeft + 'px)';
@@ -1160,7 +1164,7 @@
       timelineAudio.style.clipPath = clip;
       timelineSelection.classList.toggle('is-active', timelineSelected);
       trimDurationLabel.classList.toggle('is-active', timelineSelected);
-      updateMutedIndicatorPosition();
+      updateMutedIndicatorPosition(trimLeftPx);
     }
     function setTimelineSelected(selected) {
       timelineSelected = Boolean(selected);
