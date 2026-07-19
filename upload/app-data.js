@@ -1100,7 +1100,7 @@
       // Keep the mute button immediately before the trimmed video strip. Because
       // it lives inside timelineContent, it follows timeline dragging; because
       // its left value follows trimStart, it also follows the left trim handle.
-      timelineMuteRail.style.left = (trimLeftPx - 30) + 'px';
+      timelineMuteRail.style.left = (trimLeftPx - 38) + 'px';
       trimDurationLabel.textContent = (end - start).toFixed(1).replace(/\.0$/, '') + 's';
       const hiddenRight = Math.max(0, (timelineDuration - end) * pixelsPerSecond);
       const hiddenLeft = Math.max(0, start * pixelsPerSecond);
