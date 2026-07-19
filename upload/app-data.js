@@ -1121,9 +1121,9 @@
       const hiddenLeft = Math.max(0, start * pixelsPerSecond);
       const clip = 'inset(0 ' + hiddenRight + 'px 0 ' + hiddenLeft + 'px)';
       timelineFilmstrip.style.clipPath = clip;
-      // The Add sound row keeps its full original length and is never clipped
-      // when the video itself is trimmed.
-      timelineAudio.style.clipPath = 'none';
+      // Trim the Add sound row with the exact same bounds as the video strip.
+      // This keeps both tracks aligned while either trim handle is dragged.
+      timelineAudio.style.clipPath = clip;
       timelineSelection.classList.toggle('is-active', timelineSelected);
       trimDurationLabel.classList.toggle('is-active', timelineSelected);
     }
