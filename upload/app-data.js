@@ -991,16 +991,17 @@
       const durationVisible = trimDurationLabel.classList.contains('is-active');
       timelineMutedIndicator.classList.toggle('is-beside-duration', durationVisible);
       timelineMutedIndicator.classList.toggle('is-top-left', !durationVisible);
+      const bounds = activeTrimBounds();
+      const trimLeftPx = bounds.start * pixelsPerSecond;
       if (durationVisible) {
-        requestAnimationFrame(function () {
-          if (!editVideo.muted || !trimDurationLabel.classList.contains('is-active')) return;
-          timelineMutedIndicator.style.left = (trimDurationLabel.offsetLeft + trimDurationLabel.offsetWidth + 5) + 'px';
-          timelineMutedIndicator.style.top = (trimDurationLabel.offsetTop + Math.max(0, (trimDurationLabel.offsetHeight - 18) / 2)) + 'px';
-        });
+        // Use a fixed duration slot so values such as 30s and 30.1s never
+        // shift the muted icon horizontally.
+        timelineMutedIndicator.style.left = (trimLeftPx + 9 + 52) + 'px';
+        timelineMutedIndicator.style.top = '32px';
       } else {
-        const bounds = activeTrimBounds();
-        timelineMutedIndicator.style.left = (bounds.start * pixelsPerSecond + 8) + 'px';
-        timelineMutedIndicator.style.top = '3px';
+        // Keep the indicator inside the filmstrip, at its top-left corner.
+        timelineMutedIndicator.style.left = (trimLeftPx + 8) + 'px';
+        timelineMutedIndicator.style.top = '31px';
       }
     }
     ['pointerdown', 'pointerup', 'touchstart', 'touchend'].forEach(function (type) {
