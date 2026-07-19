@@ -1068,6 +1068,18 @@
       value = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
       return String(Math.floor(value / 60)).padStart(2, '0') + ':' + String(value % 60).padStart(2, '0');
     }
+    function activeTrimBounds() {
+      const start = Math.min(timelineDuration, Math.max(0, Number(editState.trimStart) || 0));
+      const requestedEnd = Number(editState.trimEnd);
+      const end = requestedEnd > start ? Math.min(timelineDuration, requestedEnd) : timelineDuration;
+      return { start: start, end: end };
+    }
+    function updateEditTimeDisplay(time) {
+      const bounds = activeTrimBounds();
+      const duration = Math.max(0, bounds.end - bounds.start);
+      const relativeTime = Math.min(duration, Math.max(0, (Number(time) || 0) - bounds.start));
+      editTime.textContent = previewTime(relativeTime) + '/' + previewTime(duration);
+    }
     function updateTrimSelection() {
       if (!timelineDuration) return;
       const start = Math.min(timelineDuration, Math.max(0, Number(editState.trimStart) || 0));
@@ -1118,6 +1130,9 @@
           window.removeEventListener('pointerup', finish);
           window.removeEventListener('pointercancel', finish);
           timelinePointerDown = false;
+          editVideo.currentTime = editState.trimStart;
+          renderTimelineAt(editState.trimStart);
+          updateEditTimeDisplay(editState.trimStart);
           scheduleTimelineDragFinish();
         }
         window.addEventListener('pointermove', move, { passive: false });
@@ -1230,7 +1245,7 @@
     function setupTimeline(duration) {
       timelineDuration = Number.isFinite(duration) ? duration : 0;
       if (!editState.trimEnd || editState.trimEnd > timelineDuration) editState.trimEnd = timelineDuration;
-      editTime.textContent = previewTime(editVideo.currentTime) + '/' + previewTime(timelineDuration);
+      updateEditTimeDisplay(editVideo.currentTime);
       updateTrimSelection();
       buildTimelineThumbnails(timelineDuration).catch(function (error) { console.error(error); });
     }
@@ -1247,7 +1262,7 @@
       const now = performance.now();
       if (forceText || now - timelineLastTextUpdate > 90) {
         timelineLastTextUpdate = now;
-        editTime.textContent = previewTime(editVideo.currentTime) + '/' + previewTime(editVideo.duration);
+        updateEditTimeDisplay(editVideo.currentTime);
       }
       if (timelineDragging || editVideo.paused) renderTimelineAt(editVideo.currentTime);
     }
@@ -1308,6 +1323,8 @@
     let timelineInertiaTime = 0;
     let timelinePointerStartedVisible = false;
     let timelinePointerMoved = false;
+    let timelinePointerOnSound = false;
+    let suppressTimelineSoundClick = false;
 
     function cancelTimelineInertia() {
       if (timelineInertiaFrame) cancelAnimationFrame(timelineInertiaFrame);
@@ -1317,13 +1334,11 @@
     }
 
     function applyTimelineTime(nextTime) {
-      const trimStart = Math.min(timelineDuration, Math.max(0, Number(editState.trimStart) || 0));
-      const requestedEnd = Number(editState.trimEnd);
-      const trimEnd = requestedEnd > trimStart ? Math.min(timelineDuration, requestedEnd) : timelineDuration;
-      const boundedTime = Math.min(trimEnd, Math.max(trimStart, nextTime));
+      const bounds = activeTrimBounds();
+      const boundedTime = Math.min(bounds.end, Math.max(bounds.start, nextTime));
       editVideo.currentTime = boundedTime;
       renderTimelineAt(boundedTime);
-      editTime.textContent = previewTime(boundedTime) + '/' + previewTime(timelineDuration);
+      updateEditTimeDisplay(boundedTime);
       return boundedTime;
     }
 
@@ -1357,10 +1372,8 @@
 
         // Exponential ease-out gives a native-feeling, frame-rate-independent slowdown.
         timelineVelocity *= Math.exp(-elapsed / 260);
-        const trimStart = Math.min(timelineDuration, Math.max(0, Number(editState.trimStart) || 0));
-        const requestedEnd = Number(editState.trimEnd);
-        const trimEnd = requestedEnd > trimStart ? Math.min(timelineDuration, requestedEnd) : timelineDuration;
-        const reachedBoundary = (nextTime <= trimStart && timelineVelocity < 0) || (nextTime >= trimEnd && timelineVelocity > 0);
+        const bounds = activeTrimBounds();
+        const reachedBoundary = (nextTime <= bounds.start && timelineVelocity < 0) || (nextTime >= bounds.end && timelineVelocity > 0);
         if (reachedBoundary || Math.abs(timelineVelocity) < 0.00018) {
           finishTimelineInertia();
           return;
@@ -1374,14 +1387,12 @@
       if (event.target.closest('.reel-trim-handle')) return;
       if (event.target.closest('.reel-timeline-add')) return;
       if (event.target.closest('.reel-timeline-mute')) return;
-      if (event.target.closest('.reel-timeline-audio,.reel-timeline-sound-label')) {
-        setTimelineSelected(false);
-        return;
-      }
+      timelinePointerOnSound = Boolean(event.target.closest('.reel-timeline-audio,.reel-timeline-sound-label'));
       cancelTimelineInertia();
-      editVideo.pause();
-      timelinePointerStartedVisible = isInsideVisibleTimeline(event.clientX, event.clientY);
+      if (!timelinePointerOnSound) editVideo.pause();
+      timelinePointerStartedVisible = !timelinePointerOnSound && isInsideVisibleTimeline(event.clientX, event.clientY);
       timelinePointerMoved = false;
+      if (timelinePointerOnSound) setTimelineSelected(false);
       if (timelinePointerStartedVisible) setTimelineSelected(true);
       timelinePointerDown = true;
       window.clearTimeout(timelineSettleTimer);
@@ -1394,13 +1405,17 @@
       timelineVelocity = 0;
       cancelTimelineFollow();
       renderTimelineAt(editVideo.currentTime);
-      try { timelineScroll.setPointerCapture(event.pointerId); } catch (error) {}
+      const captureTarget = event.currentTarget && typeof event.currentTarget.setPointerCapture === 'function' ? event.currentTarget : timelineScroll;
+      try { captureTarget.setPointerCapture(event.pointerId); } catch (error) {}
     }
     function moveTimelineDrag(event) {
       if (!timelinePointerDown || event.target.closest('.reel-trim-handle')) return;
       event.preventDefault();
       const now = performance.now();
-      if (Math.abs(event.clientX - timelineDragStartX) >= 5) timelinePointerMoved = true;
+      if (Math.abs(event.clientX - timelineDragStartX) >= 5 && !timelinePointerMoved) {
+        timelinePointerMoved = true;
+        if (timelinePointerOnSound) editVideo.pause();
+      }
       const elapsed = Math.max(1, now - timelineLastPointerAt);
       const pointerDelta = timelineLastPointerX - event.clientX;
       const measuredVelocity = (pointerDelta / pixelsPerSecond) / elapsed;
@@ -1419,6 +1434,10 @@
         scheduleTimelineDragFinish();
         return;
       }
+      if (timelinePointerOnSound && timelinePointerMoved) {
+        suppressTimelineSoundClick = true;
+        window.setTimeout(function () { suppressTimelineSoundClick = false; }, 0);
+      }
       // A simple tap in the black area below/beside the clips closes the trim
       // controls. The same area remains a full drag surface once movement is detected.
       if (!timelinePointerStartedVisible && !timelinePointerMoved) {
@@ -1431,6 +1450,17 @@
     }
     timelineScroll.addEventListener('pointerdown', beginTimelineDrag, { passive: true });
     timelineScroll.addEventListener('pointermove', moveTimelineDrag, { passive: false });
+    timelineSoundLabel.addEventListener('pointerdown', beginTimelineDrag, { passive: true });
+    timelineSoundLabel.addEventListener('pointermove', moveTimelineDrag, { passive: false });
+    function blockDraggedSoundClick(event) {
+      if (!suppressTimelineSoundClick) return;
+      suppressTimelineSoundClick = false;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+    }
+    timelineAudio.addEventListener('click', blockDraggedSoundClick, true);
+    timelineSoundLabel.addEventListener('click', blockDraggedSoundClick, true);
     window.addEventListener('pointerup', function () { endTimelineDrag(false); }, { passive: true });
     window.addEventListener('pointercancel', function () { endTimelineDrag(true); }, { passive: true });
     function loadVisibleVideo(video) {
