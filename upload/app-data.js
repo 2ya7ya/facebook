@@ -1086,6 +1086,12 @@
       const end = Math.min(timelineDuration, Math.max(start + .1, Number(editState.trimEnd) || timelineDuration));
       editState.trimStart = start;
       editState.trimEnd = end;
+      timelineTicks.querySelectorAll('span[data-timeline-second]').forEach(function (tick) {
+        const sourceSecond = Number(tick.dataset.timelineSecond);
+        const outsideKeptRange = sourceSecond < start || sourceSecond > end;
+        tick.hidden = outsideKeptRange;
+        if (!outsideKeptRange) tick.textContent = previewTime(sourceSecond - start);
+      });
       timelineSelection.style.left = (start * pixelsPerSecond) + 'px';
       timelineSelection.style.width = Math.max(2, (end - start) * pixelsPerSecond) + 'px';
       trimDurationLabel.textContent = (end - start).toFixed(1).replace(/\.0$/, '') + 's';
@@ -1197,9 +1203,11 @@
       for (let second = 0; second <= Math.ceil(duration); second += 1) {
         const tick = document.createElement('span');
         tick.style.left = (second * pixelsPerSecond) + 'px';
+        tick.dataset.timelineSecond = String(second);
         tick.textContent = previewTime(second);
         timelineTicks.appendChild(tick);
       }
+      updateTrimSelection();
       const frameCount = Math.min(120, Math.max(1, Math.ceil(duration)));
       const frameDuration = 1;
       const source = document.createElement('video');
