@@ -959,7 +959,7 @@
     timelineAudio.dataset.reelTool = 'sound';
     timelineSoundLabel.className = 'reel-timeline-sound-label';
     timelineSoundLabel.setAttribute('aria-hidden', 'true');
-    timelineSoundLabel.innerHTML = '<span>♪&nbsp; Add sound</span>';
+    timelineSoundLabel.innerHTML = '<span class="reel-add-sound-label-inner"><img class="reel-add-sound-note" src="/reel-add-sound-note.png" alt="">Add sound</span>';
     timelinePlayhead.className = 'reel-timeline-playhead';
     timelineMuteRail.className = 'reel-timeline-mute-rail';
     timelineMuteButton.className = 'reel-timeline-mute';
