@@ -1641,7 +1641,8 @@
       timelinePointerStartedVisible = !timelinePointerOnSound && isInsideVisibleTimeline(event.clientX, event.clientY);
       timelinePointerMoved = false;
       if (timelinePointerOnSound) setTimelineSelected(false);
-      if (timelinePointerStartedVisible) setTimelineSelected(true);
+      // Do not select the timeline on pointer-down. Selection is reserved for
+      // a stationary tap; a drag must scroll without revealing trim controls.
       timelinePointerDown = true;
       window.clearTimeout(timelineSettleTimer);
       timelineDragging = true;
@@ -1663,6 +1664,8 @@
       const now = performance.now();
       if (Math.abs(event.clientX - timelineDragStartX) >= 5 && !timelinePointerMoved) {
         timelinePointerMoved = true;
+        // Any real drag hides the trim UI. Only a tap may reveal it.
+        setTimelineSelected(false);
         if (timelinePointerOnSound) editVideo.pause();
       }
       const elapsed = Math.max(1, now - timelineLastPointerAt);
@@ -1694,9 +1697,11 @@
       }
       // A simple tap in the black area below/beside the clips closes the trim
       // controls. The same area remains a full drag surface once movement is detected.
-      if (!timelinePointerStartedVisible && !timelinePointerMoved) {
+      if (!timelinePointerMoved) {
         cancelTimelineInertia();
-        setTimelineSelected(false);
+        // A stationary tap on the visible video strip selects it. A stationary
+        // tap in the surrounding black area closes the trim controls.
+        setTimelineSelected(timelinePointerStartedVisible);
         scheduleTimelineDragFinish();
         return;
       }
