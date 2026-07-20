@@ -1766,7 +1766,19 @@
       syncTimelineMuteVisibility(editVideo.currentTime);
       const videos = { preview: '#reelCreateVideo', edit: '#reelEditVideo', caption: '#reelCaptionVideo' };
       const video = flow.querySelector(videos[name]);
-      if (video) loadVisibleVideo(video);
+
+      // Only the visible stage may play audio. Pause and mute every hidden
+      // preview so the selected video's sound cannot be heard twice.
+      previewVideos.forEach(function (candidate) {
+        if (candidate === video) return;
+        try { candidate.pause(); } catch (error) {}
+        candidate.muted = true;
+      });
+
+      if (video) {
+        video.muted = false;
+        loadVisibleVideo(video);
+      }
     }
     function openFlow() {
       // Stop the reel playing behind the editor before the create flow opens.
