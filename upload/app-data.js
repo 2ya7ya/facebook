@@ -1761,6 +1761,10 @@
       if (video) loadVisibleVideo(video);
     }
     function openFlow() {
+      // Stop the reel playing behind the editor before the create flow opens.
+      if (publishedVideo) {
+        try { publishedVideo.pause(); } catch (error) {}
+      }
       flow.classList.add('is-open');
       flow.setAttribute('aria-hidden', 'false');
       document.body.classList.add('reel-create-open');
