@@ -1338,7 +1338,11 @@
       const time = Math.max(0, Math.min(duration, Number(editVideo.currentTime || 0)));
       const existing = timelineMarkers.find(function (marker) { return Math.abs(marker.time - time) < .04; });
       if (existing) {
-        seekToTimelineMarker(existing);
+        existing.element.remove();
+        const index = timelineMarkers.indexOf(existing);
+        if (index >= 0) timelineMarkers.splice(index, 1);
+        setTimelineSelected(true);
+        refreshTimelineMarkers();
         return;
       }
       const element = document.createElement('button');
@@ -1727,7 +1731,7 @@
       if (!timelinePointerOnSound) editVideo.pause();
       timelinePointerStartedVisible = !timelinePointerOnSound && isInsideVisibleTimeline(event.clientX, event.clientY);
       timelinePointerMoved = false;
-      if (timelinePointerOnSound) setTimelineSelected(false);
+      if (timelinePointerOnSound && !timelineSelected) setTimelineSelected(false);
       // Do not select the timeline on pointer-down. Selection is reserved for
       // a stationary tap; a drag must scroll without revealing trim controls.
       timelinePointerDown = true;
@@ -1751,8 +1755,8 @@
       const now = performance.now();
       if (Math.abs(event.clientX - timelineDragStartX) >= 5 && !timelinePointerMoved) {
         timelinePointerMoved = true;
-        // Any real drag hides the trim UI. Only a tap may reveal it.
-        setTimelineSelected(false);
+        // Keep timeline selection controls visible while dragging.
+        if (timelineSelected) setTimelineSelected(true);
         if (timelinePointerOnSound) editVideo.pause();
       }
       const elapsed = Math.max(1, now - timelineLastPointerAt);
