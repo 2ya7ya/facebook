@@ -1813,7 +1813,7 @@
         if (selectedVideo !== selected) return;
         selectedVideoData = data;
         previewVideos.forEach(function (video) {
-          video.muted = true;
+          video.muted = false;
           video.playsInline = true;
           video.preload = 'auto';
           video.removeAttribute('src');
