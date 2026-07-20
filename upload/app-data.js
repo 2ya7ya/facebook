@@ -1312,6 +1312,9 @@
       editTime.setAttribute('aria-hidden', 'false');
       updateTrimSelection();
     }
+    document.addEventListener('reel-hide-timeline-selection', function () {
+      setTimelineSelected(false);
+    });
 
     function refreshTimelineMarkers() {
       const now = Number(editVideo.currentTime || 0);
