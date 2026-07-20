@@ -1448,6 +1448,10 @@
       }
       // Playing or pausing the preview must not close the active trim controls.
       if (event.target.closest('[data-reel-flow-action="toggle-edit-play"]')) return;
+      // The selection toolbar is part of the active timeline UI. Tapping or
+      // dragging it must never close the white frame, duration, mute icon,
+      // or trim handles.
+      if (event.target.closest('.reel-selection-toolbar')) return;
       if (event.target.closest('.reel-timeline-mute')) return;
       if (event.target.closest('.reel-marker-add-control,.reel-native-marker')) {
         setTimelineSelected(true);
