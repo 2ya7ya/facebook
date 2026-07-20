@@ -727,6 +727,18 @@ app.get('/reel-ui/:asset', requireAuth, (request, response) => {
   response.sendFile(path.join(publicDirectory, request.params.asset));
 });
 
+app.get('/selection-icons/:asset', requireAuth, (request, response) => {
+  const allowed = new Set([
+    'selection-back.png', 'selection-split.png', 'selection-replace.png',
+    'selection-delete.png', 'selection-speed.png', 'selection-crop.png',
+    'selection-volume.png', 'selection-rotate.png', 'selection-filters.png',
+    'selection-adjust.png', 'selection-overlay.png', 'selection-reverse.png',
+    'selection-freeze.png', 'selection-mask.png', 'selection-capacity.svg'
+  ]);
+  if (!allowed.has(request.params.asset)) return response.sendStatus(404);
+  response.sendFile(path.join(publicDirectory, request.params.asset));
+});
+
 app.get('*splat', (request, response) => response.redirect(readSession(request) ? '/app' : '/'));
 
 const server = app.listen(port, '0.0.0.0', async () => {
