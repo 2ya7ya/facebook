@@ -1081,7 +1081,7 @@
     let sequenceBoundaryWallStart = 0;
     let sequenceBoundaryTimeStart = 0;
 
-    const transitionPreviewLayer = document.createElement('div');
+    const transitionPreviewLayer = document.createElement('canvas');
     transitionPreviewLayer.className = 'reel-transition-preview-layer';
     transitionPreviewLayer.setAttribute('aria-hidden', 'true');
     if (editStage) editStage.appendChild(transitionPreviewLayer);
@@ -1245,12 +1245,19 @@
     }
     function syncTransitionPreviewBounds() {
       if (!editStage || !editVideo || !transitionPreviewLayer) return;
+      const width = Math.max(1, editVideo.offsetWidth);
+      const height = Math.max(1, editVideo.offsetHeight);
       transitionPreviewLayer.style.left = Math.max(0, editVideo.offsetLeft) + 'px';
       transitionPreviewLayer.style.top = Math.max(0, editVideo.offsetTop) + 'px';
-      transitionPreviewLayer.style.width = Math.max(1, editVideo.offsetWidth) + 'px';
-      transitionPreviewLayer.style.height = Math.max(1, editVideo.offsetHeight) + 'px';
+      transitionPreviewLayer.style.width = width + 'px';
+      transitionPreviewLayer.style.height = height + 'px';
       transitionPreviewLayer.style.right = 'auto';
       transitionPreviewLayer.style.bottom = 'auto';
+      const ratio = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+      const pixelWidth = Math.max(2, Math.round(width * ratio));
+      const pixelHeight = Math.max(2, Math.round(height * ratio));
+      if (transitionPreviewLayer.width !== pixelWidth) transitionPreviewLayer.width = pixelWidth;
+      if (transitionPreviewLayer.height !== pixelHeight) transitionPreviewLayer.height = pixelHeight;
     }
     function captureTransitionPreview(fromClip, toClip) {
       syncTransitionPreviewBounds();
@@ -1258,16 +1265,32 @@
       if (!transition || transition.type === 'none' || !editVideo.videoWidth || !editVideo.videoHeight) {
         transitionPreviewKey = '';
         transitionPreviewLayer.className = 'reel-transition-preview-layer';
-        transitionPreviewLayer.style.backgroundImage = '';
+        const clear = transitionPreviewLayer.getContext('2d');
+        if (clear) clear.clearRect(0, 0, transitionPreviewLayer.width, transitionPreviewLayer.height);
         return;
       }
       try {
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.min(720, editVideo.videoWidth);
-        canvas.height = Math.max(2, Math.round(canvas.width * editVideo.videoHeight / editVideo.videoWidth));
-        const context = canvas.getContext('2d');
-        context.drawImage(editVideo, 0, 0, canvas.width, canvas.height);
-        transitionPreviewLayer.style.backgroundImage = 'url("' + canvas.toDataURL('image/jpeg', .78) + '")';
+        const canvas = transitionPreviewLayer;
+        const context = canvas.getContext('2d', { alpha: false });
+        const cw = canvas.width, ch = canvas.height;
+        context.save();
+        context.setTransform(1, 0, 0, 1, 0, 0);
+        context.fillStyle = '#000';
+        context.fillRect(0, 0, cw, ch);
+        const sourceRatio = editVideo.videoWidth / editVideo.videoHeight;
+        const targetRatio = cw / ch;
+        const fit = getComputedStyle(editVideo).objectFit || 'contain';
+        let sx = 0, sy = 0, sw = editVideo.videoWidth, sh = editVideo.videoHeight;
+        let dx = 0, dy = 0, dw = cw, dh = ch;
+        if (fit === 'cover') {
+          if (sourceRatio > targetRatio) { sw = editVideo.videoHeight * targetRatio; sx = (editVideo.videoWidth - sw) / 2; }
+          else { sh = editVideo.videoWidth / targetRatio; sy = (editVideo.videoHeight - sh) / 2; }
+        } else {
+          if (sourceRatio > targetRatio) { dh = cw / sourceRatio; dy = (ch - dh) / 2; }
+          else { dw = ch * sourceRatio; dx = (cw - dw) / 2; }
+        }
+        context.drawImage(editVideo, sx, sy, sw, sh, dx, dy, dw, dh);
+        context.restore();
         transitionPreviewKey = fromClip.id + '>' + toClip.id;
       } catch (error) { transitionPreviewKey = ''; }
     }
@@ -1289,7 +1312,6 @@
       if (!duration || local >= duration) {
         transitionPreviewLayer.className = 'reel-transition-preview-layer';
         transitionPreviewKey = '';
-        transitionPreviewLayer.style.backgroundImage = '';
         return;
       }
       const progress = Math.min(1, local / duration);
@@ -1916,7 +1938,8 @@
             const continuousBoundary = currentSource === nextSource && Math.abs(item.clip.sourceEnd - next.clip.sourceStart) <= .035;
             if (continuousBoundary) {
               activePlaybackClipId = next.clip.id;
-              currentSequenceTime = next.start;
+              const carriedLocal = Math.max(0, (Number(editVideo.currentTime) - next.clip.sourceStart) / Math.max(.25, Number(next.clip.speed) || 1));
+              currentSequenceTime = Math.min(next.end, next.start + carriedLocal);
               editVideo.playbackRate = next.clip.speed;
               sequenceSeekInProgress = false;
               sequenceBoundarySeekActive = false;
