@@ -1245,12 +1245,10 @@
     }
     function syncTransitionPreviewBounds() {
       if (!editStage || !editVideo || !transitionPreviewLayer) return;
-      const stageRect = editStage.getBoundingClientRect();
-      const videoRect = editVideo.getBoundingClientRect();
-      transitionPreviewLayer.style.left = Math.max(0, videoRect.left - stageRect.left) + 'px';
-      transitionPreviewLayer.style.top = Math.max(0, videoRect.top - stageRect.top) + 'px';
-      transitionPreviewLayer.style.width = Math.max(1, videoRect.width) + 'px';
-      transitionPreviewLayer.style.height = Math.max(1, videoRect.height) + 'px';
+      transitionPreviewLayer.style.left = Math.max(0, editVideo.offsetLeft) + 'px';
+      transitionPreviewLayer.style.top = Math.max(0, editVideo.offsetTop) + 'px';
+      transitionPreviewLayer.style.width = Math.max(1, editVideo.offsetWidth) + 'px';
+      transitionPreviewLayer.style.height = Math.max(1, editVideo.offsetHeight) + 'px';
       transitionPreviewLayer.style.right = 'auto';
       transitionPreviewLayer.style.bottom = 'auto';
     }
@@ -1913,8 +1911,20 @@
           if (next) {
             const wasPlaying = !editVideo.paused;
             captureTransitionPreview(item.clip, next.clip);
-            seekSequenceTime(next.start, true);
-            if (wasPlaying) editVideo.play().catch(function () {});
+            const currentSource = item.clip.sourceData || selectedVideoData;
+            const nextSource = next.clip.sourceData || selectedVideoData;
+            const continuousBoundary = currentSource === nextSource && Math.abs(item.clip.sourceEnd - next.clip.sourceStart) <= .035;
+            if (continuousBoundary) {
+              activePlaybackClipId = next.clip.id;
+              currentSequenceTime = next.start;
+              editVideo.playbackRate = next.clip.speed;
+              sequenceSeekInProgress = false;
+              sequenceBoundarySeekActive = false;
+              updateTransitionPreview(next);
+            } else {
+              seekSequenceTime(next.start, true);
+              if (wasPlaying) editVideo.play().catch(function () {});
+            }
           } else {
             currentSequenceTime = timelineDuration;
             editVideo.pause();
