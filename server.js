@@ -11,7 +11,7 @@ const publicDirectory = path.join(__dirname, 'upload');
 const authSecret = process.env.AUTH_SECRET || crypto.randomBytes(32).toString('hex');
 
 app.disable('x-powered-by');
-app.use(express.json({ limit: '12mb' }));
+app.use(express.json({ limit: '32mb' }));
 
 let pool = null;
 if (process.env.DATABASE_URL) {
@@ -211,7 +211,7 @@ function validImageData(value) {
 
 function validVideoData(value) {
   return typeof value === 'string'
-    && value.length <= 10 * 1024 * 1024
+    && value.length <= 28 * 1024 * 1024
     && /^data:video\/[a-z0-9.+-]+;base64,[a-z0-9+/=\s]+$/i.test(value);
 }
 
@@ -226,6 +226,36 @@ function normalizeReelEdits(value) {
     return Number.isFinite(parsed) ? Math.min(maximum, Math.max(minimum, parsed)) : fallback;
   };
   const effects = new Set(['none', 'warm', 'cool', 'mono', 'vivid']);
+  const normalizeClip = (clip, index) => {
+    clip = clip && typeof clip === 'object' ? clip : {};
+    const start = number(clip.sourceStart, 0, 3600, 0);
+    const end = number(clip.sourceEnd, start + 0.05, 3600, start + 0.05);
+    return {
+      id: String(clip.id || `clip-${index + 1}`).slice(0, 80),
+      sourceStart: start,
+      sourceEnd: end,
+      availableStart: number(clip.availableStart, 0, 3600, 0),
+      availableEnd: number(clip.availableEnd, end, 3600, end),
+      speed: number(clip.speed, 0.25, 4, 1),
+      brightness: number(clip.brightness, 0.5, 1.5, 1),
+      contrast: number(clip.contrast, 0.5, 1.5, 1),
+      saturation: number(clip.saturation, 0, 2, 1),
+      effect: effects.has(clip.effect) ? clip.effect : 'none',
+      text: String(clip.text || '').slice(0, 100),
+      sticker: String(clip.sticker || '').slice(0, 8),
+      captions: Boolean(clip.captions),
+      overlay: Boolean(clip.overlay),
+      fit: clip.fit === 'cover' ? 'cover' : 'contain'
+    };
+  };
+  const clips = Array.isArray(source.clips) ? source.clips.slice(0, 100).map(normalizeClip) : [];
+  const clipIds = new Set(clips.map(clip => clip.id));
+  const transitions = Array.isArray(source.transitions) ? source.transitions.slice(0, 99).map(item => ({
+    fromId: String(item?.fromId || '').slice(0, 80),
+    toId: String(item?.toId || '').slice(0, 80),
+    type: ['none','fade','dissolve','wipe','slide'].includes(item?.type) ? item.type : 'none',
+    duration: number(item?.duration, 0, 1, 0)
+  })).filter(item => clipIds.has(item.fromId) && clipIds.has(item.toId)) : [];
   return {
     trimStart: number(source.trimStart, 0, 3600, 0),
     trimEnd: number(source.trimEnd, 0, 3600, 0),
@@ -237,7 +267,10 @@ function normalizeReelEdits(value) {
     sticker: String(source.sticker || '').slice(0, 8),
     captions: Boolean(source.captions),
     overlay: Boolean(source.overlay),
-    fit: source.fit === 'cover' ? 'cover' : 'contain'
+    fit: source.fit === 'cover' ? 'cover' : 'contain',
+    clips,
+    transitions,
+    rendered: Boolean(source.rendered)
   };
 }
 
@@ -636,7 +669,7 @@ app.post('/api/reels', requireApiAuth, async (request, response) => {
   const visibility = String(request.body?.visibility || 'followers').trim().toLowerCase();
   const allowComments = request.body?.allowComments !== false;
   const editData = normalizeReelEdits(request.body?.editData);
-  if (!validVideoData(video)) return response.status(400).json({ error: 'Choose a valid video smaller than 7 MB.' });
+  if (!validVideoData(video)) return response.status(400).json({ error: 'Choose a valid rendered video smaller than 20 MB.' });
   if (!/^video\/[a-z0-9.+-]+$/i.test(mimeType) || !video.toLowerCase().startsWith(`data:${mimeType};base64,`)) {
     return response.status(400).json({ error: 'The selected video format is not supported.' });
   }
