@@ -1463,7 +1463,7 @@
       if (event.target.closest('.reel-trim-handle')) return;
       // The timeline surface handles its own tap-vs-drag decision. A drag on
       // the black area must remain available even though a plain tap closes it.
-      if (event.target.closest('.reel-timeline-scroll')) return;
+      if (event.target.closest('.reel-timeline-scroll,.reel-timeline-drag-surface')) return;
       if (isInsideVisibleTimeline(event.clientX, event.clientY)) return;
       setTimelineSelected(false);
     }, true);
