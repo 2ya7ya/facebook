@@ -1807,17 +1807,6 @@
     }
     timelineScroll.addEventListener('pointerdown', beginTimelineDrag, { passive: true });
     timelineScroll.addEventListener('pointermove', moveTimelineDrag, { passive: false });
-    // Make the surrounding dark timeline area use the same drag behavior as
-    // the filmstrip itself. Ignore controls and the scroll surface to avoid
-    // duplicate pointer handling when the gesture starts directly on clips.
-    timeline.addEventListener('pointerdown', function (event) {
-      if (event.target.closest('.reel-timeline-scroll,.reel-timeline-add,.reel-timeline-mute,.reel-trim-handle,.reel-marker-add-control,.reel-native-marker')) return;
-      beginTimelineDrag.call(timeline, event);
-    }, { passive: true });
-    timeline.addEventListener('pointermove', function (event) {
-      if (!timelinePointerDown) return;
-      moveTimelineDrag(event);
-    }, { passive: false });
     function blockDraggedSoundClick(event) {
       if (!suppressTimelineSoundClick) return;
       suppressTimelineSoundClick = false;
