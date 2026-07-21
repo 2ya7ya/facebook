@@ -1077,6 +1077,9 @@
     let clipIdCounter = 0;
     let suppressClipClick = false;
     let transitionPreviewKey = '';
+    let sequenceBoundarySeekActive = false;
+    let sequenceBoundaryWallStart = 0;
+    let sequenceBoundaryTimeStart = 0;
 
     const transitionPreviewLayer = document.createElement('div');
     transitionPreviewLayer.className = 'reel-transition-preview-layer';
@@ -1211,8 +1214,19 @@
         const desiredSource = item.clip.sourceData || selectedVideoData;
         const applySeek = function () {
           editVideo.playbackRate = item.clip.speed;
-          try { editVideo.currentTime = Math.max(item.clip.sourceStart, sourceTime); } catch (error) {}
-          window.setTimeout(function () { sequenceSeekInProgress = false; }, 0);
+          sequenceBoundarySeekActive = true;
+          sequenceBoundaryWallStart = performance.now();
+          sequenceBoundaryTimeStart = bounded;
+          const finishBoundarySeek = function () {
+            sequenceSeekInProgress = false;
+            sequenceBoundarySeekActive = false;
+            editVideo.removeEventListener('seeked', finishBoundarySeek);
+            editVideo.removeEventListener('canplay', finishBoundarySeek);
+          };
+          editVideo.addEventListener('seeked', finishBoundarySeek, { once: true });
+          editVideo.addEventListener('canplay', finishBoundarySeek, { once: true });
+          try { editVideo.currentTime = Math.max(item.clip.sourceStart, sourceTime); } catch (error) { finishBoundarySeek(); }
+          window.setTimeout(finishBoundarySeek, 650);
         };
         if (desiredSource && editVideo.__reelSource !== desiredSource) {
           const resume = !editVideo.paused;
@@ -1229,7 +1243,19 @@
       applyPreviewEdits();
       return bounded;
     }
+    function syncTransitionPreviewBounds() {
+      if (!editStage || !editVideo || !transitionPreviewLayer) return;
+      const stageRect = editStage.getBoundingClientRect();
+      const videoRect = editVideo.getBoundingClientRect();
+      transitionPreviewLayer.style.left = Math.max(0, videoRect.left - stageRect.left) + 'px';
+      transitionPreviewLayer.style.top = Math.max(0, videoRect.top - stageRect.top) + 'px';
+      transitionPreviewLayer.style.width = Math.max(1, videoRect.width) + 'px';
+      transitionPreviewLayer.style.height = Math.max(1, videoRect.height) + 'px';
+      transitionPreviewLayer.style.right = 'auto';
+      transitionPreviewLayer.style.bottom = 'auto';
+    }
     function captureTransitionPreview(fromClip, toClip) {
+      syncTransitionPreviewBounds();
       const transition = transitionForBoundary(fromClip.id, toClip.id);
       if (!transition || transition.type === 'none' || !editVideo.videoWidth || !editVideo.videoHeight) {
         transitionPreviewKey = '';
@@ -1269,6 +1295,7 @@
         return;
       }
       const progress = Math.min(1, local / duration);
+      syncTransitionPreviewBounds();
       transitionPreviewLayer.className = 'reel-transition-preview-layer is-active is-' + transition.type;
       transitionPreviewLayer.style.setProperty('--transition-progress', progress);
     }
@@ -1919,7 +1946,14 @@
       // instead of letting a separate CSS animation drift away from playback.
       function followFrame() {
         if (editVideo.paused || timelineDragging) return;
-        syncSequenceTimeFromVideo();
+        if (sequenceBoundarySeekActive || editVideo.seeking) {
+          const elapsed = Math.max(0, (performance.now() - sequenceBoundaryWallStart) / 1000);
+          currentSequenceTime = Math.min(timelineDuration, sequenceBoundaryTimeStart + elapsed);
+          const virtualItem = clipAtSequenceTime(currentSequenceTime);
+          updateTransitionPreview(virtualItem);
+        } else {
+          syncSequenceTimeFromVideo();
+        }
         renderTimelineAt(currentSequenceTime);
         updateEditTimeDisplay(currentSequenceTime);
         timelineAnimationFrame = requestAnimationFrame(followFrame);
@@ -2240,6 +2274,9 @@
       activePlaybackClipId = '';
       timelineFrameSources = [];
       transitionPreviewKey = '';
+      sequenceBoundarySeekActive = false;
+      sequenceBoundaryWallStart = 0;
+      sequenceBoundaryTimeStart = 0;
       transitionPreviewLayer.className = 'reel-transition-preview-layer';
       transitionPreviewLayer.style.backgroundImage = '';
       timelineScroll.scrollLeft = 0;
