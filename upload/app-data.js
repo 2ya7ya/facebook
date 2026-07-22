@@ -1081,10 +1081,14 @@
     let sequenceBoundaryWallStart = 0;
     let sequenceBoundaryTimeStart = 0;
 
+    const transitionPreviewHost = document.createElement('div');
+    transitionPreviewHost.className = 'reel-transition-preview-host';
+    transitionPreviewHost.setAttribute('aria-hidden', 'true');
     const transitionPreviewLayer = document.createElement('canvas');
     transitionPreviewLayer.className = 'reel-transition-preview-layer';
     transitionPreviewLayer.setAttribute('aria-hidden', 'true');
-    if (editStage) editStage.appendChild(transitionPreviewLayer);
+    transitionPreviewHost.appendChild(transitionPreviewLayer);
+    if (editStage) editStage.appendChild(transitionPreviewHost);
 
     const clipLayer = document.createElement('div');
     clipLayer.className = 'reel-clip-layer';
@@ -1244,13 +1248,15 @@
       return bounded;
     }
     function syncTransitionPreviewBounds() {
-      if (!editStage || !editVideo || !transitionPreviewLayer) return;
-      transitionPreviewLayer.style.left = editVideo.offsetLeft + 'px';
-      transitionPreviewLayer.style.top = editVideo.offsetTop + 'px';
-      transitionPreviewLayer.style.width = editVideo.offsetWidth + 'px';
-      transitionPreviewLayer.style.height = editVideo.offsetHeight + 'px';
-      transitionPreviewLayer.style.right = 'auto';
-      transitionPreviewLayer.style.bottom = 'auto';
+      if (!editStage || !editVideo || !transitionPreviewHost || !transitionPreviewLayer) return;
+      transitionPreviewHost.style.left = editVideo.offsetLeft + 'px';
+      transitionPreviewHost.style.top = editVideo.offsetTop + 'px';
+      transitionPreviewHost.style.width = editVideo.offsetWidth + 'px';
+      transitionPreviewHost.style.height = editVideo.offsetHeight + 'px';
+      transitionPreviewLayer.style.left = '0';
+      transitionPreviewLayer.style.top = '0';
+      transitionPreviewLayer.style.width = '100%';
+      transitionPreviewLayer.style.height = '100%';
     }
     function captureTransitionPreview(fromClip, toClip) {
       const transition = transitionForBoundary(fromClip.id, toClip.id);
@@ -2355,18 +2361,8 @@
           editState.transitions.push({ fromId: fromId, toId: toId, type: option[0], duration: option[0] === 'none' ? 0 : .35 });
           recordEditorChange(before);
           renderClipTimeline();
-          const previewWidth = editVideo.offsetWidth;
-          const previewHeight = editVideo.offsetHeight;
-          if (previewWidth && previewHeight) {
-            editVideo.style.width = previewWidth + 'px';
-            editVideo.style.height = previewHeight + 'px';
-          }
           closeToolPanel();
-          window.setTimeout(function () {
-            editVideo.style.removeProperty('width');
-            editVideo.style.removeProperty('height');
-            syncTransitionPreviewBounds();
-          }, 420);
+          requestAnimationFrame(syncTransitionPreviewBounds);
           reelMessage(root, option[1] + ' transition selected');
         });
         wrap.appendChild(button);
