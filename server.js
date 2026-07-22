@@ -231,14 +231,14 @@ function normalizeReelEdits(value) {
     'lowlight','midnight','neon','cyber','electric','infrared','negative','haze'
   ]);
   const visualEffects = new Set([
-    'none','rgb-split','glitch','vhs','old-tv','scanlines','pixelate','posterize','edge-glow','thermal','mirror',
+    'none','rgb-split','glitch','vhs','scanlines','pixelate','posterize','edge-glow','thermal','mirror',
     'split-screen','kaleidoscope','fisheye','ripple','wave','zoom-pulse','shake','strobe','ghost','tunnel',
     'bloom','grain','vignette','bokeh-blur','lens-flare','motion-blur','bling','dynamic-distort','prism','light-leak',
     'datamosh','block-glitch','digital-rain','color-trails','echo-zoom','radial-blur','swirl','stretch','liquid-glass','flash-zoom','dream-glow',
     'mini-zoom','zoom-lens','blur','shaky-camera-move','delay','shake-2','astral','shake-1','neon-dynamic','bounce-camera',
     'trembling','black-flash','shake-dynamic','soul','disco-count','lyric-cut','quick-speed',
     'energy','moon-off','shockwave','somethings-wrong','small-body-big-head','goat-eyes','halo',
-    'facial-fisheye','half-face-whirl','laser-eyes','shy','feeling-hurt','face-mosaic','laser'
+    'facial-fisheye','laser-eyes','shy','feeling-hurt','face-mosaic'
   ]);
   const normalizeClip = (clip, index) => {
     clip = clip && typeof clip === 'object' ? clip : {};

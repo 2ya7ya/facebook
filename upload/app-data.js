@@ -1044,6 +1044,7 @@
       const categoryNames = ['All'].concat(Array.from(new Set(reelVisualEffectCatalog.map(function (effect) { return effect.category; }))));
       let activeCategory = 'All';
       openToolPanel('Effects', wrap);
+      toolPanel.classList.add('is-effects-panel');
       flow.classList.add('is-effects-editing');
 
       function activeEffectId() {
@@ -1079,10 +1080,20 @@
             recordEditorChange(before);
             grid.querySelectorAll('.reel-effect-option').forEach(function (item) { item.classList.toggle('is-active', item.dataset.effectId === effect.id); });
             reelMessage(root, effect.id === 'none' ? 'Effect removed' : effect.name + ' applied');
+            window.clearTimeout(editVideo.__reelEffectPreviewTimer);
+            if (currentSequenceTime >= timelineDuration - .05) {
+              const previewItem = currentClipItem() || sequenceLayout()[0];
+              if (previewItem) seekSequenceTime(previewItem.start, true);
+            }
+            editVideo.play().catch(function () {});
+            editVideo.__reelEffectPreviewTimer = window.setTimeout(function () {
+              if (!editVideo.paused) editVideo.pause();
+              editVideo.__reelEffectPreviewTimer = 0;
+            }, 7000);
           });
           grid.appendChild(button);
         });
-        status.textContent = visible.length ? visible.length + ' animated video effects · rendered on device' : 'No effects match this search';
+        status.textContent = visible.length ? '' : 'No effects match this search';
       }
       categoryNames.forEach(function (name) {
         const button = document.createElement('button');
@@ -1929,6 +1940,7 @@
       toolPanel.classList.remove('is-open');
       toolPanel.classList.remove('is-speed-panel');
       toolPanel.classList.remove('is-animation-panel');
+      toolPanel.classList.remove('is-effects-panel');
       flow.classList.remove('is-speed-editing');
       flow.classList.remove('is-animation-editing');
       flow.classList.remove('is-effects-editing');
@@ -1937,6 +1949,7 @@
     function openToolPanel(title, body) {
       toolPanel.classList.remove('is-speed-panel');
       toolPanel.classList.remove('is-animation-panel');
+      toolPanel.classList.remove('is-effects-panel');
       flow.classList.remove('is-speed-editing');
       flow.classList.remove('is-animation-editing');
       flow.classList.remove('is-effects-editing');

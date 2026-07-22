@@ -6,7 +6,6 @@
     ['rgb-split', 'RGB Split', 'Glitch'],
     ['glitch', 'Glitch', 'Glitch'],
     ['vhs', 'VHS', 'Retro'],
-    ['old-tv', 'Old TV', 'Retro'],
     ['scanlines', 'Scanlines', 'Retro'],
     ['pixelate', 'Pixelate', 'Digital'],
     ['posterize', 'Posterize', 'Digital'],
@@ -69,13 +68,11 @@
     ['goat-eyes', 'Goat Eyes', 'Face Effect', 67],
     ['halo', 'Halo', 'Face Effect', 68],
     ['facial-fisheye', 'Facial Fisheye', 'Face Effect', 69],
-    ['half-face-whirl', 'Half Face Whirl', 'Face Effect', 70],
     ['laser-eyes', 'Laser Eyes', 'Face Effect', 71],
     ['shy', 'Shy', 'Face Effect', 72],
     ['feeling-hurt', 'Feeling Hurt', 'Face Effect', 73],
-    ['face-mosaic', 'Face Mosaic', 'Face Effect', 74],
-    ['laser', 'Laser', 'Face Effect', 75]
-  ].map(function (item, index) { return { id: item[0], name: item[1], category: item[2], mode: item[3] == null ? index : item[3] }; });
+    ['face-mosaic', 'Face Mosaic', 'Face Effect', 74]
+  ].map(function (item, index) { return { id: item[0], name: item[1], category: item[2], mode: item[3] == null ? index + (index >= 4 ? 1 : 0) : item[3] }; });
   const modes = Object.fromEntries(catalog.map(function (effect) { return [effect.id, effect.mode]; }));
 
   const vertexSource = [
@@ -92,9 +89,8 @@
     'void main(){',
     ' vec2 uv=v_uv; vec2 p=uv-.5; vec4 c=tex(uv); float t=u_time;',
     ' if(u_mode==1){float d=.012+.006*sin(t*3.0);c=vec4(tex(uv+vec2(d,0.)).r,tex(uv).g,tex(uv-vec2(d,0.)).b,1.);}',
-    ' else if(u_mode==2){float row=floor(uv.y*34.);float gate=step(.78,hash(vec2(row,floor(t*8.))));float off=(hash(vec2(row,t))-.5)*.13*gate;vec2 q=uv+vec2(off,0.);c=vec4(tex(q+vec2(.009*gate,0.)).r,tex(q).g,tex(q-vec2(.009*gate,0.)).b,1.);}',
+    ' else if(u_mode==2){float tick=floor(t*12.);float burst=step(.7,hash(vec2(tick,9.)));float row=floor(uv.y*46.);float band=step(.68,hash(vec2(row,tick)))*burst;float off=(hash(vec2(row,tick+3.))-.5)*.085*band;vec2 q=uv+vec2(off,0.);float split=.005+.011*band;c=vec4(tex(q+vec2(split,0.)).r,tex(q).g,tex(q-vec2(split,0.)).b,1.);float line=step(.985,fract(uv.y*u_resolution.y*.5+t*18.));c.rgb+=line*vec3(.18,.22,.26);}',
     ' else if(u_mode==3){float wob=sin(uv.y*80.+t*5.)*.003+sin(uv.y*13.+t*2.)*.006;c=tex(uv+vec2(wob,0.));float scan=.88+.12*sin(uv.y*u_resolution.y*1.25);float noise=(hash(uv*u_resolution.xy+floor(t*30.))-.5)*.12;c.rgb=c.rgb*scan+noise;c.r+=.025;c.b+=.035;}',
-    ' else if(u_mode==4){p*=1.08;float r2=dot(p,p);uv=.5+p*(1.+r2*.22);c=tex(uv);float scan=.82+.18*sin(v_uv.y*u_resolution.y*1.35);float n=(hash(floor(v_uv*u_resolution.xy)+floor(t*24.))-.5)*.1;c.rgb=c.rgb*scan+n;c.rgb*=1.-smoothstep(.36,.72,dot(p,p));}',
     ' else if(u_mode==5){c.rgb*=.72+.28*sin(uv.y*u_resolution.y*1.55);}',
     ' else if(u_mode==6){vec2 size=vec2(28.,50.);uv=(floor(uv*size)+.5)/size;c=tex(uv);}',
     ' else if(u_mode==7){c.rgb=floor(c.rgb*5.)/5.;c.rgb=pow(c.rgb,vec3(.88));}',
@@ -145,7 +141,7 @@
     ' else if(u_mode==52){vec2 j=vec2(sin(t*38.)+sin(t*61.),cos(t*43.)+cos(t*57.))*.006;uv+=j;c=tex(uv);}',
     ' else if(u_mode==53){float f=step(.2,fract(t*1.7));c.rgb*=f;}',
     ' else if(u_mode==54){float k=floor(t*11.);vec2 j=(vec2(hash(vec2(k,5.)),hash(vec2(k,9.)))-.5)*.045;uv+=j;c=tex(uv);}',
-    ' else if(u_mode==55){float z=.06*fract(t*.9);vec4 ghost=tex(.5+p*(1.-z));c=mix(c,ghost,.42*(1.-fract(t*.9)));c.rgb+=vec3(.06,.02,.12);}',
+    ' else if(u_mode==55){c=tex(uv);}',
     ' else if(u_mode==56){c=tex(uv);}',
     ' else if(u_mode==57){float ang=atan(p.y,p.x);float rr=length(p);float spin=smoothstep(.025,0.,abs(rr-.18))*step(0.,sin(ang*10.-t*5.));c.rgb*=.72;c.rgb+=vec3(.2,.8,1.)*spin;float bar=smoothstep(.018,0.,abs(p.y+.27))*step(abs(p.x),.28);c.rgb+=vec3(.95)*bar;}',
     ' else if(u_mode==58){c=tex(uv);}',
@@ -156,16 +152,14 @@
     ' else if(u_mode==63){float ph=clamp(mod(t,3.5)/3.25,0.,1.);float off=smoothstep(.03,.92,ph);c.rgb*=1.-off*.76;}',
     ' else if(u_mode==64){float ph=mod(t,3.55)/3.55;float env=smoothstep(0.,.09,ph)*(1.-smoothstep(.72,.96,ph));c.rgb=mix(c.rgb,c.rgb*vec3(1.32,.34,.26)+vec3(.12,0.,0.),env*.5);}',
     ' else if(u_mode==65){float ph=fract(t*.22);float z=1.+ph*.78;uv=.5+p/z;c=tex(uv);}',
-    ' else if(u_mode==66){vec2 fs=max(u_face.zw,vec2(.001));vec2 hc=u_face.xy+vec2(0.,fs.y*.14);vec2 fp=(uv-hc)/fs;float head=1.-smoothstep(.76,1.08,length(fp*vec2(.82,.72)));float body=step(uv.y,u_face.y-fs.y*.38);vec2 qb=vec2(.5+(uv.x-.5)*1.38,uv.y);vec2 qh=hc+(uv-hc)/vec2(1.82,1.92);vec2 q=mix(uv,qb,body*.82);q=mix(q,qh,head);c=tex(q);}',
-    ' else if(u_mode==67){vec2 es=max(u_face.zw*vec2(.13,.075),vec2(.002));vec2 ep1=(uv-u_eyes.xy)/es;vec2 ep2=(uv-u_eyes.zw)/es;float e1=smoothstep(1.,.72,length(ep1));float e2=smoothstep(1.,.72,length(ep2));float pupil1=smoothstep(.2,.08,abs(ep1.y))*step(abs(ep1.x),.8);float pupil2=smoothstep(.2,.08,abs(ep2.y))*step(abs(ep2.x),.8);c.rgb=mix(c.rgb,vec3(.95,.85,.22),max(e1,e2));c.rgb=mix(c.rgb,vec3(.02),max(pupil1,pupil2));}',
+    ' else if(u_mode==66){float squareH=min(.92,u_resolution.x/u_resolution.y*.98);float top=.5+squareH*.5;float bottom=.5-squareH*.5;if(uv.y<bottom||uv.y>top)c=vec4(0.,0.,0.,1.);else{vec2 local=vec2(uv.x,(uv.y-bottom)/squareH)-.5;vec2 fs=max(u_face.zw,vec2(.01));vec2 q=u_face.xy+local*vec2(fs.x*1.34,fs.y*1.48);c=tex(q);}}',
+    ' else if(u_mode==67){c=tex(uv);}',
     ' else if(u_mode==68){vec2 hp=(uv-(u_face.xy+vec2(0.,u_face.w*.64)))/vec2(max(u_face.z,.01),max(u_face.w,.01));float halo=smoothstep(.045,.018,abs(length(hp*vec2(1.,2.8))-.46));c.rgb+=vec3(1.,.78,.18)*halo*1.6;}',
     ' else if(u_mode==69){vec2 fp=(uv-u_face.xy)/max(u_face.zw,vec2(.001));float r=length(fp);float mask=1.-smoothstep(.45,.56,r);vec2 q=u_face.xy+(uv-u_face.xy)*(1.-.62*mask*(1.-r));c=mix(c,tex(q),mask);}',
-    ' else if(u_mode==70){vec2 fs=max(u_face.zw,vec2(.001));vec2 fp=(uv-u_face.xy)/fs;float r=length(fp);float side=step(0.,fp.x);float mask=side*(1.-smoothstep(.48,.64,r));float twist=5.8*pow(max(0.,1.-r/.64),2.);float a=atan(fp.y,fp.x)+twist;vec2 q=u_face.xy+vec2(cos(a),sin(a))*r*fs;c=mix(c,tex(q),mask);}',
-    ' else if(u_mode==71){vec2 le=u_eyes.xy;vec2 re=u_eyes.zw;if(le.x>re.x){vec2 tmp=le;le=re;re=tmp;}float ldx=max(0.,le.x-uv.x);float rdx=max(0.,uv.x-re.x);float lw=.018+ldx*.22;float rw=.018+rdx*.22;float leftBeam=(1.-smoothstep(lw-.012,lw,abs(uv.y-le.y+ldx*.05)))*step(uv.x,le.x);float rightBeam=(1.-smoothstep(rw-.012,rw,abs(uv.y-re.y-rdx*.05)))*step(re.x,uv.x);float beam=max(leftBeam,rightBeam);float leftCore=(1.-smoothstep(.006,.014,abs(uv.y-le.y+ldx*.05)))*step(uv.x,le.x);float rightCore=(1.-smoothstep(.006,.014,abs(uv.y-re.y-rdx*.05)))*step(re.x,uv.x);c.rgb=mix(c.rgb,vec3(1.,.03,.01),beam*.58);c.rgb+=vec3(1.,.28,.12)*max(leftCore,rightCore)*.8;}',
+    ' else if(u_mode==71){c.rgb=mix(c.rgb,c.rgb*vec3(.55,.48,.82),.48);}',
     ' else if(u_mode==72){vec2 fp=(uv-u_face.xy)/max(u_face.zw,vec2(.001));float cheek1=smoothstep(.14,.02,length((fp-vec2(-.23,-.08))*vec2(1.,2.)));float cheek2=smoothstep(.14,.02,length((fp-vec2(.23,-.08))*vec2(1.,2.)));c.rgb=mix(c.rgb,vec3(1.,.18,.42),max(cheek1,cheek2)*.55);}',
     ' else if(u_mode==73){float tw=max(.004,u_face.z*.018);float len=max(.06,u_face.w*.31);float range1=step(u_eyes.y-len,uv.y)*step(uv.y,u_eyes.y-.018);float range2=step(u_eyes.w-len,uv.y)*step(uv.y,u_eyes.w-.018);float outer1=(1.-smoothstep(tw,tw*2.5,abs(uv.x-u_eyes.x)))*range1;float outer2=(1.-smoothstep(tw,tw*2.5,abs(uv.x-u_eyes.z)))*range2;float core1=(1.-smoothstep(tw*.28,tw*.8,abs(uv.x-u_eyes.x)))*range1;float core2=(1.-smoothstep(tw*.28,tw*.8,abs(uv.x-u_eyes.z)))*range2;float tears=max(outer1,outer2);float cores=max(core1,core2);c.rgb=mix(c.rgb,vec3(.05,.62,1.),tears*.85);c.rgb=mix(c.rgb,vec3(1.),cores*.92);}',
     ' else if(u_mode==74){vec2 fp=(uv-u_face.xy)/max(u_face.zw,vec2(.001));float mask=step(abs(fp.x),.5)*step(abs(fp.y),.58);vec2 size=vec2(24.,34.);vec2 q=(floor(uv*size)+.5)/size;c=mix(c,tex(q),mask);}',
-    ' else if(u_mode==75){vec2 fp=(uv-u_face.xy)/max(u_face.zw,vec2(.001));float beam=smoothstep(.06,.015,abs(fp.y-.08-.1*sin(fp.x*18.+t*7.)))*step(.12,abs(fp.x));c.rgb+=vec3(.1,.5,1.)*beam*1.7;float scan=smoothstep(.035,.008,abs(fract(uv.y*3.-t*.7)-.5));c.rgb+=vec3(.75,.05,1.)*scan*.45;}',
     ' gl_FragColor=vec4(clamp(c.rgb,0.,1.),1.);',
     '}'
   ].join('\n');
@@ -199,7 +193,7 @@
     context.save(); context.clearRect(0, 0, width, height); context.fillStyle = colors[scene]; context.fillRect(0, 0, width, height); context.globalCompositeOperation = 'screen'; context.filter = 'blur(' + Math.max(4, width * .018) + 'px) saturate(1.3)';
     for (let layer = 0; layer < 8; layer += 1) { const scale = 1.04 + layer * .055 + phase * .035; const dw = width * scale, dh = height * scale; context.globalAlpha = .15; context.drawImage(frame, (width - dw) / 2, (height - dh) / 2, dw, dh); }
     context.globalCompositeOperation = 'source-over'; context.filter = 'none'; context.globalAlpha = .24; context.fillStyle = colors[scene]; context.fillRect(0, 0, width, height); context.restore();
-    if (state.mask && state.mask.width) {
+    if (state.maskReady && state.mask && state.mask.width) {
       const personContext = person.getContext('2d'); personContext.setTransform(1, 0, 0, 1, 0, 0); personContext.globalCompositeOperation = 'source-over'; personContext.filter = 'none'; personContext.globalAlpha = 1; personContext.clearRect(0, 0, width, height); personContext.drawImage(frame, 0, 0, width, height); personContext.globalCompositeOperation = 'destination-in'; personContext.drawImage(state.mask, 0, 0, width, height); personContext.globalCompositeOperation = 'source-over';
       context.drawImage(person, 0, 0, width, height);
     }
@@ -230,6 +224,66 @@
     if (phase < .18) { const flash = 1 - phase / .18; const gradient = context.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, Math.max(width, height) * .7); gradient.addColorStop(0, 'rgba(255,255,255,' + (.52 * flash) + ')'); gradient.addColorStop(.25, 'rgba(255,55,28,' + (.42 * flash) + ')'); gradient.addColorStop(1, 'rgba(255,0,0,0)'); context.fillStyle = gradient; context.fillRect(0, 0, width, height); }
     context.restore();
   }
+  function trackedFeatures(state, width, height) {
+    const face = state && state.face || [.5, .58, .38, .48];
+    const eyes = state && state.eyes || [.43, .62, .57, .62];
+    return {
+      faceX: face[0] * width,
+      faceY: (1 - face[1]) * height,
+      faceWidth: face[2] * width,
+      faceHeight: face[3] * height,
+      eyes: [[eyes[0] * width, (1 - eyes[1]) * height], [eyes[2] * width, (1 - eyes[3]) * height]]
+    };
+  }
+  function drawSoul(context, width, height, time, state) {
+    if (!state) return;
+    const frame = state.frame, person = state.person;
+    if (frame.width !== width || frame.height !== height) { frame.width = person.width = width; frame.height = person.height = height; }
+    const frameContext = frame.getContext('2d'); frameContext.setTransform(1, 0, 0, 1, 0, 0); frameContext.globalCompositeOperation = 'source-over'; frameContext.globalAlpha = 1; frameContext.filter = 'none'; frameContext.clearRect(0, 0, width, height); frameContext.drawImage(context.canvas, 0, 0, width, height);
+    const personContext = person.getContext('2d'); personContext.setTransform(1, 0, 0, 1, 0, 0); personContext.globalCompositeOperation = 'source-over'; personContext.globalAlpha = 1; personContext.filter = 'none'; personContext.clearRect(0, 0, width, height); personContext.drawImage(frame, 0, 0, width, height);
+    if (state.maskReady && state.mask && state.mask.width) { personContext.globalCompositeOperation = 'destination-in'; personContext.drawImage(state.mask, 0, 0, width, height); personContext.globalCompositeOperation = 'source-over'; }
+    const phase = (time % 1.9) / 1.9; const eased = 1 - Math.pow(1 - phase, 2); const scale = 1 + eased * .16;
+    context.save(); context.globalCompositeOperation = 'screen'; context.globalAlpha = Math.max(0, .58 * (1 - phase)); context.filter = 'grayscale(0.35) brightness(1.38) blur(' + Math.max(1, width * .004 * eased) + 'px)'; context.translate(width * .5, height * .5 - height * .13 * eased); context.scale(scale, scale); context.drawImage(person, -width / 2, -height / 2, width, height); context.restore();
+  }
+  function drawGoatEyes(context, width, height, state) {
+    const tracked = trackedFeatures(state, width, height); const rx = Math.max(4, tracked.faceWidth * .105); const ry = Math.max(2.5, tracked.faceHeight * .043);
+    context.save();
+    tracked.eyes.forEach(function (eye) {
+      const gradient = context.createRadialGradient(eye[0], eye[1] - ry * .25, ry * .15, eye[0], eye[1], rx);
+      gradient.addColorStop(0, '#fff9a8'); gradient.addColorStop(.48, '#e8c83a'); gradient.addColorStop(1, '#8d6504');
+      context.shadowColor = 'rgba(255,221,63,.72)'; context.shadowBlur = rx * .55; context.fillStyle = gradient; context.strokeStyle = 'rgba(40,25,0,.9)'; context.lineWidth = Math.max(1, rx * .1); context.beginPath(); context.ellipse(eye[0], eye[1], rx, ry, 0, 0, Math.PI * 2); context.fill(); context.stroke();
+      context.shadowBlur = 0; context.fillStyle = '#090704'; context.fillRect(eye[0] - rx * .69, eye[1] - ry * .2, rx * 1.38, ry * .4);
+      context.fillStyle = 'rgba(255,255,255,.82)'; context.beginPath(); context.ellipse(eye[0] - rx * .28, eye[1] - ry * .38, rx * .12, ry * .13, 0, 0, Math.PI * 2); context.fill();
+    });
+    context.restore();
+  }
+  function drawLaserEyes(context, width, height, time, state) {
+    const tracked = trackedFeatures(state, width, height); const pulse = .9 + .1 * Math.sin(time * 15);
+    context.save(); context.globalCompositeOperation = 'screen'; context.lineCap = 'round';
+    tracked.eyes.forEach(function (eye, index) {
+      const endY = eye[1] + (index ? -1 : 1) * height * .012;
+      [[.052, .14, '#ff4a00'], [.026, .32, '#ff9b22'], [.009, .94, '#fff7c2']].forEach(function (layer) {
+        context.globalAlpha = layer[1] * pulse; context.strokeStyle = layer[2]; context.lineWidth = Math.max(2, width * layer[0]); context.shadowColor = '#ff3b00'; context.shadowBlur = width * .045; context.beginPath(); context.moveTo(eye[0], eye[1]); context.lineTo(-width * .08, endY); context.stroke();
+      });
+      const glow = context.createRadialGradient(eye[0], eye[1], 0, eye[0], eye[1], width * .055); glow.addColorStop(0, '#fff'); glow.addColorStop(.18, '#ffe676'); glow.addColorStop(.48, 'rgba(255,74,0,.9)'); glow.addColorStop(1, 'rgba(255,20,0,0)'); context.globalAlpha = 1; context.fillStyle = glow; context.fillRect(eye[0] - width * .06, eye[1] - width * .06, width * .12, width * .12);
+    });
+    context.restore();
+  }
+  function heartPath(context, x, y, size) {
+    context.beginPath(); context.moveTo(x, y + size * .3); context.bezierCurveTo(x - size * .75, y - size * .18, x - size * .48, y - size * .72, x, y - size * .36); context.bezierCurveTo(x + size * .48, y - size * .72, x + size * .75, y - size * .18, x, y + size * .3); context.closePath();
+  }
+  function drawShy(context, width, height, time, state) {
+    const tracked = trackedFeatures(state, width, height); const fw = tracked.faceWidth, fh = tracked.faceHeight; const cheekY = tracked.faceY + fh * .13;
+    context.save(); context.globalCompositeOperation = 'source-over';
+    [-1, 1].forEach(function (side) {
+      const x = tracked.faceX + side * fw * .25; const blush = context.createRadialGradient(x, cheekY, 0, x, cheekY, fw * .14); blush.addColorStop(0, 'rgba(255,45,79,.78)'); blush.addColorStop(1, 'rgba(255,45,79,0)'); context.fillStyle = blush; context.fillRect(x - fw * .16, cheekY - fh * .09, fw * .32, fh * .18);
+      context.strokeStyle = 'rgba(255,190,202,.9)'; context.lineWidth = Math.max(1.4, width * .003); for (let line = -1; line <= 1; line += 1) { context.beginPath(); context.moveTo(x + line * fw * .055 - fw * .025, cheekY - fh * .025); context.lineTo(x + line * fw * .055 + fw * .018, cheekY + fh * .018); context.stroke(); }
+      context.save(); context.translate(x + side * fw * .22, tracked.faceY + fh * .03); context.rotate(side * -.18); context.fillStyle = '#ff2f50'; context.font = '800 ' + Math.max(9, fw * .08) + 'px Arial'; context.fillText('oh!', 0, 0); context.restore();
+    });
+    const hearts = [[-.58,-.56,.13],[.58,-.48,.11],[-.68,.06,.08],[.68,.13,.1],[.1,-.72,.07]];
+    hearts.forEach(function (heart, index) { const bob = Math.sin(time * 2.7 + index * 1.4) * fh * .025; const x = tracked.faceX + heart[0] * fw; const y = tracked.faceY + heart[1] * fh + bob; const size = fw * heart[2]; context.fillStyle = index % 2 ? '#ff3155' : '#ef153c'; context.shadowColor = 'rgba(255,30,65,.6)'; context.shadowBlur = size * .5; heartPath(context, x, y, size); context.fill(); });
+    context.restore();
+  }
   function drawFancyOverlay(context, width, height, effectId, time, state) {
     const t = Math.max(0, Number(time) || 0);
     if (effectId === 'disco-count') {
@@ -252,7 +306,8 @@
       const phase = (t * 1.45) % 1;
       context.save(); context.globalAlpha = Math.min(1, phase * 7, (1 - phase) * 7); context.translate(0, Math.sin(phase * Math.PI) * -height * .012);
       drawCenteredWords(context, width, height * .53, phrases[index], Math.max(18, height * .047)); context.restore();
-    } else if (effectId === 'quick-speed') drawQuickSpeed(context, width, height, t, state);
+    } else if (effectId === 'soul') drawSoul(context, width, height, t, state);
+    else if (effectId === 'quick-speed') drawQuickSpeed(context, width, height, t, state);
     else if (effectId === 'energy') drawEnergyLines(context, width, height, t);
     else if (effectId === 'moon-off') {
       const phase = Math.min(1, (t % 3.5) / 3.25); const x = width * .16; const top = height * .42; const bottom = height * .61; const boxWidth = width * .12; const radius = Math.max(7, width * .035); const y = top + (bottom - top) * phase;
@@ -261,6 +316,9 @@
       else { context.fillStyle = '#f4f3e9'; context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.fill(); context.fillStyle = 'rgba(42,42,46,.9)'; context.beginPath(); context.arc(x + radius * .4, y - radius * .2, radius * .84, 0, Math.PI * 2); context.fill(); }
       const sx = x - boxWidth / 2, sy = bottom + radius * 2.1; context.fillStyle = '#f8d338'; context.beginPath(); context.arc(sx, sy, radius * .27, 0, Math.PI * 2); context.fill(); for (let index = 0; index < 8; index += 1) { const a = index * Math.PI / 4; context.beginPath(); context.moveTo(sx + Math.cos(a) * radius * .42, sy + Math.sin(a) * radius * .42); context.lineTo(sx + Math.cos(a) * radius * .72, sy + Math.sin(a) * radius * .72); context.stroke(); } context.restore();
     } else if (effectId === 'shockwave') drawShockwave(context, width, height, t);
+    else if (effectId === 'goat-eyes') drawGoatEyes(context, width, height, state);
+    else if (effectId === 'laser-eyes') drawLaserEyes(context, width, height, t, state);
+    else if (effectId === 'shy') drawShy(context, width, height, t, state);
   }
   function createRenderer(canvas, options) {
     options = options || {};
@@ -288,7 +346,7 @@
     let face = [.5, .58, .38, .48];
     let eyes = [.43, .62, .57, .62];
     let faceDetector = null, faceMesh = null, faceMeshFailed = false, faceDetectionBusy = false, lastFaceDetection = 0;
-    const fancyState = { frame: document.createElement('canvas'), person: document.createElement('canvas'), mask: document.createElement('canvas') };
+    const fancyState = { frame: document.createElement('canvas'), person: document.createElement('canvas'), mask: document.createElement('canvas'), maskReady: false };
     let segmenter = null, segmentationFailed = false, segmentationBusy = false, lastSegmentation = 0, segmentationWidth = 0, segmentationHeight = 0;
     try { if ('FaceDetector' in window) faceDetector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 1 }); } catch (_error) { faceDetector = null; }
     function smoothValues(current, next) { return current.map(function (value, index) { return value * .58 + next[index] * .42; }); }
@@ -339,12 +397,13 @@
           if (!results || !results.segmentationMask || !segmentationWidth || !segmentationHeight) return;
           if (fancyState.mask.width !== segmentationWidth || fancyState.mask.height !== segmentationHeight) { fancyState.mask.width = segmentationWidth; fancyState.mask.height = segmentationHeight; }
           const maskContext = fancyState.mask.getContext('2d'); maskContext.clearRect(0, 0, segmentationWidth, segmentationHeight); maskContext.drawImage(results.segmentationMask, 0, 0, segmentationWidth, segmentationHeight);
+          fancyState.maskReady = true;
         });
       } catch (_error) { segmentationFailed = true; segmenter = null; }
       return segmenter;
     }
     function updateSegmentation(source, width, height, mode) {
-      if (options.trackFace === false || mode !== 59 || segmentationBusy || performance.now() - lastSegmentation < 90) return;
+      if (options.trackFace === false || (mode !== 55 && mode !== 59) || segmentationBusy || performance.now() - lastSegmentation < 90) return;
       const activeSegmenter = ensureSegmenter(); if (!activeSegmenter) return;
       segmentationBusy = true; lastSegmentation = performance.now(); segmentationWidth = width; segmentationHeight = height;
       activeSegmenter.send({ image: source }).catch(function () { segmentationFailed = true; segmenter = null; }).finally(function () { segmentationBusy = false; });
@@ -367,6 +426,7 @@
         gl.uniform4f(eyesLocation, eyes[0], eyes[1], eyes[2], eyes[3]);
         gl.drawArrays(gl.TRIANGLES, 0, 6);
         outputContext.setTransform(1, 0, 0, 1, 0, 0); outputContext.globalAlpha = 1; outputContext.filter = 'none'; outputContext.clearRect(0, 0, width, height); outputContext.drawImage(renderCanvas, 0, 0, width, height);
+        fancyState.face = face.slice(); fancyState.eyes = eyes.slice();
         drawFancyOverlay(outputContext, width, height, effectId, time, fancyState); return true;
       }
     };
