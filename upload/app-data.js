@@ -1287,7 +1287,7 @@
       transitionPreviewHost.classList.remove('is-active');
       transitionPreviewLayer.className = 'reel-transition-preview-layer';
       transitionPreviewLayer.style.cssText = '';
-      editVideo.classList.remove('is-reel-transitioning', 'is-transition-fade', 'is-transition-dissolve', 'is-transition-wipe', 'is-transition-slide');
+      editVideo.classList.remove('is-reel-transitioning', 'is-transition-fade', 'is-transition-dissolve', 'is-transition-wipe', 'is-transition-slide', 'is-transition-wipe-up', 'is-transition-push-up', 'is-transition-push-down', 'is-transition-zoom', 'is-transition-blur', 'is-transition-flash', 'is-transition-spin');
       editVideo.style.removeProperty('--reel-transition-progress');
       editVideo.style.removeProperty('opacity');
       editVideo.style.removeProperty('clip-path');
@@ -1309,7 +1309,7 @@
         return;
       }
       const transition = transitionForBoundary(previous.clip.id, item.clip.id);
-      const duration = transition && transition.type !== 'none' ? Math.min(.6, Math.max(.15, Number(transition.duration) || .35), item.duration * .45) : 0;
+      const duration = transition && transition.type !== 'none' ? Math.min(1.1, Math.max(.45, Number(transition.duration) || .75), item.duration * .7) : 0;
       const local = Math.max(0, currentSequenceTime - item.start);
       if (!duration || local >= duration) {
         hideTransitionPreview();
@@ -1320,7 +1320,7 @@
       syncTransitionPreviewBounds();
       transitionPreviewHost.classList.add('is-active');
       transitionPreviewLayer.className = 'reel-transition-preview-layer is-active is-' + transition.type;
-      editVideo.classList.remove('is-transition-fade', 'is-transition-dissolve', 'is-transition-wipe', 'is-transition-slide');
+      editVideo.classList.remove('is-transition-fade', 'is-transition-dissolve', 'is-transition-wipe', 'is-transition-slide', 'is-transition-wipe-up', 'is-transition-push-up', 'is-transition-push-down', 'is-transition-zoom', 'is-transition-blur', 'is-transition-flash', 'is-transition-spin');
       editVideo.classList.add('is-reel-transitioning', 'is-transition-' + transition.type);
       editVideo.style.setProperty('--reel-transition-progress', String(progress));
       transitionPreviewLayer.style.setProperty('visibility', 'visible', 'important');
@@ -1332,6 +1332,27 @@
       } else if (transition.type === 'slide') {
         transitionPreviewLayer.style.setProperty('opacity', '1', 'important');
         transitionPreviewLayer.style.setProperty('transform', 'translate3d(' + (-progress * 100) + '%,0,0)', 'important');
+      } else if (transition.type === 'wipe-up') {
+        transitionPreviewLayer.style.setProperty('opacity', '1', 'important');
+        transitionPreviewLayer.style.setProperty('clip-path', 'inset(' + (progress * 100) + '% 0 0 0)', 'important');
+      } else if (transition.type === 'push-up') {
+        transitionPreviewLayer.style.setProperty('opacity', '1', 'important');
+        transitionPreviewLayer.style.setProperty('transform', 'translate3d(0,' + (-progress * 100) + '%,0)', 'important');
+      } else if (transition.type === 'push-down') {
+        transitionPreviewLayer.style.setProperty('opacity', '1', 'important');
+        transitionPreviewLayer.style.setProperty('transform', 'translate3d(0,' + (progress * 100) + '%,0)', 'important');
+      } else if (transition.type === 'zoom') {
+        transitionPreviewLayer.style.setProperty('opacity', String(Math.max(0, 1 - progress)), 'important');
+        transitionPreviewLayer.style.setProperty('transform', 'scale(' + (1 + progress * .18) + ')', 'important');
+      } else if (transition.type === 'blur') {
+        transitionPreviewLayer.style.setProperty('opacity', String(Math.max(0, 1 - progress)), 'important');
+        transitionPreviewLayer.style.setProperty('filter', 'blur(' + (progress * 10) + 'px)', 'important');
+      } else if (transition.type === 'flash') {
+        transitionPreviewLayer.style.setProperty('opacity', String(Math.max(0, 1 - progress)), 'important');
+        transitionPreviewLayer.style.setProperty('filter', 'brightness(' + (1 + Math.sin(progress * Math.PI) * 2.4) + ')', 'important');
+      } else if (transition.type === 'spin') {
+        transitionPreviewLayer.style.setProperty('opacity', String(Math.max(0, 1 - progress)), 'important');
+        transitionPreviewLayer.style.setProperty('transform', 'scale(' + (1 + progress * .18) + ') rotate(' + (-progress * 8) + 'deg)', 'important');
       } else if (transition.type === 'dissolve') {
         transitionPreviewLayer.style.setProperty('opacity', String(Math.max(0, 1 - progress)), 'important');
       } else {
@@ -2377,7 +2398,9 @@
       const wrap = document.createElement('div');
       wrap.className = 'reel-transition-picker';
       const options = [
-        ['none', 'None'], ['fade', 'Fade'], ['dissolve', 'Dissolve'], ['wipe', 'Wipe'], ['slide', 'Slide']
+        ['none', 'None'], ['fade', 'Fade'], ['dissolve', 'Dissolve'], ['wipe', 'Wipe Right'], ['slide', 'Push Left'],
+        ['wipe-up', 'Wipe Up'], ['push-up', 'Push Up'], ['push-down', 'Push Down'], ['zoom', 'Zoom'],
+        ['blur', 'Blur'], ['flash', 'Flash'], ['spin', 'Spin Zoom']
       ];
       const current = transitionForBoundary(fromId, toId);
       options.forEach(function (option) {
@@ -2388,7 +2411,7 @@
         button.addEventListener('click', function () {
           const before = captureEditorSnapshot();
           editState.transitions = (editState.transitions || []).filter(function (item) { return !(item.fromId === fromId && item.toId === toId); });
-          editState.transitions.push({ fromId: fromId, toId: toId, type: option[0], duration: option[0] === 'none' ? 0 : .35 });
+          editState.transitions.push({ fromId: fromId, toId: toId, type: option[0], duration: option[0] === 'none' ? 0 : .75 });
           recordEditorChange(before);
           renderClipTimeline();
           closeToolPanel();
@@ -2396,7 +2419,7 @@
           const destination = layoutForClip(toId);
           const sourceItem = layoutForClip(fromId);
           if (option[0] !== 'none' && destination && sourceItem) {
-            const previewLead = Math.min(.45, Math.max(.12, sourceItem.duration * .25));
+            const previewLead = Math.min(1, Math.max(.55, sourceItem.duration * .35));
             seekSequenceTime(Math.max(sourceItem.start, sourceItem.end - previewLead), true);
             window.setTimeout(function () { editVideo.play().catch(function () {}); }, 60);
           }
@@ -2687,7 +2710,7 @@
         await active.play().catch(function () {});
         const duration = clipOutputDuration(clip);
         const previousTransition = index > 0 ? renderTransitionForBoundary(clips[index - 1].id, clip.id) : null;
-        const transitionDuration = previousTransition && previousTransition.type !== 'none' ? Math.min(.6, Math.max(.15, Number(previousTransition.duration) || .35), duration * .45) : 0;
+        const transitionDuration = previousTransition && previousTransition.type !== 'none' ? Math.min(1.1, Math.max(.45, Number(previousTransition.duration) || .75), duration * .7) : 0;
         let frozen = null;
         if (transitionDuration) {
           frozen = document.createElement('canvas'); frozen.width = canvas.width; frozen.height = canvas.height;
@@ -2713,6 +2736,30 @@
             } else if (type === 'slide') {
               context.drawImage(frozen, -canvas.width * tp, 0);
               drawClipFrame(context, canvas, active, clip, 1, canvas.width * (1 - tp));
+            } else if (type === 'wipe-up') {
+              context.drawImage(frozen, 0, 0);
+              context.save(); context.beginPath(); context.rect(0, canvas.height * (1 - tp), canvas.width, canvas.height * tp); context.clip();
+              drawClipFrame(context, canvas, active, clip, 1); context.restore();
+            } else if (type === 'push-up') {
+              context.drawImage(frozen, 0, -canvas.height * tp);
+              context.save(); context.translate(0, canvas.height * (1 - tp)); drawClipFrame(context, canvas, active, clip, 1); context.restore();
+            } else if (type === 'push-down') {
+              context.drawImage(frozen, 0, canvas.height * tp);
+              context.save(); context.translate(0, -canvas.height * (1 - tp)); drawClipFrame(context, canvas, active, clip, 1); context.restore();
+            } else if (type === 'zoom' || type === 'spin') {
+              context.save(); context.globalAlpha = 1 - tp; context.translate(canvas.width / 2, canvas.height / 2);
+              context.rotate(type === 'spin' ? -tp * Math.PI / 22.5 : 0); context.scale(1 + tp * .18, 1 + tp * .18);
+              context.drawImage(frozen, -canvas.width / 2, -canvas.height / 2); context.restore();
+              context.save(); context.globalAlpha = tp; context.translate(canvas.width / 2, canvas.height / 2);
+              context.rotate(type === 'spin' ? (1 - tp) * Math.PI / 22.5 : 0); context.scale(.82 + tp * .18, .82 + tp * .18);
+              context.translate(-canvas.width / 2, -canvas.height / 2); drawClipFrame(context, canvas, active, clip, 1); context.restore();
+            } else if (type === 'blur') {
+              context.save(); context.globalAlpha = 1 - tp; context.filter = 'blur(' + (tp * 10) + 'px)'; context.drawImage(frozen, 0, 0); context.restore();
+              context.save(); context.globalAlpha = tp; context.filter = 'blur(' + ((1 - tp) * 10) + 'px)'; drawClipFrame(context, canvas, active, clip, 1); context.restore(); context.filter = 'none';
+            } else if (type === 'flash') {
+              context.globalAlpha = 1 - tp; context.drawImage(frozen, 0, 0);
+              context.globalAlpha = tp; drawClipFrame(context, canvas, active, clip, 1); context.globalAlpha = 1;
+              context.fillStyle = 'rgba(255,255,255,' + (Math.sin(tp * Math.PI) * .82) + ')'; context.fillRect(0, 0, canvas.width, canvas.height);
             } else {
               context.globalAlpha = 1 - tp; context.drawImage(frozen, 0, 0);
               context.globalAlpha = tp; drawClipFrame(context, canvas, active, clip, 1); context.globalAlpha = 1;
