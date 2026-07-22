@@ -1478,6 +1478,8 @@
       context.restore();
     }
     function resetTransitionPreview() {
+      const wasActive = transitionPreviewHost.classList.contains('is-active') || editVideo.classList.contains('is-reel-transitioning');
+      if (!wasActive) return;
       transitionPreviewHost.classList.remove('is-active');
       transitionPreviewLayer.className = 'reel-transition-preview-layer';
       transitionPreviewLayer.style.cssText = '';
@@ -1688,6 +1690,18 @@
     }
     function applyClipAnimationPreview(item) {
       if (!item || !editVideo) return;
+      const hasAnimation = (item.clip.animationIn && item.clip.animationIn !== 'none') || (item.clip.animationOut && item.clip.animationOut !== 'none') || (item.clip.animationCombo && item.clip.animationCombo !== 'none');
+      if (!hasAnimation) {
+        if (editVideo.__reelClipAnimationActive) {
+          editVideo.__reelClipAnimationActive = false;
+          editVideo.style.removeProperty('opacity');
+          editVideo.style.removeProperty('transform');
+          editVideo.style.removeProperty('transform-origin');
+          editVideo.style.filter = 'brightness(' + item.clip.brightness + ') contrast(' + item.clip.contrast + ') saturate(' + item.clip.saturation + ') ' + (effectFilters[item.clip.effect] || '');
+        }
+        return;
+      }
+      editVideo.__reelClipAnimationActive = true;
       const elapsed = Math.max(0, Math.min(item.duration, currentSequenceTime - item.start));
       const animation = clipAnimationState(item.clip, elapsed, item.duration);
       editVideo.style.opacity = String(animation.opacity);
@@ -3085,7 +3099,9 @@
     }
 
     function openAnimationEditor() {
-      const clip = selectedClip();
+      const activeItem = currentClipItem();
+      const clip = selectedClip() || (activeItem && activeItem.clip) || ensureClipState()[0];
+      if (clip && !selectedClipId) selectedClipId = clip.id;
       const item = sequenceLayout().find(function (entry) { return entry.clip.id === (clip && clip.id); });
       if (!clip || !item) return;
       const before = captureEditorSnapshot();
@@ -3141,7 +3157,7 @@
       else if (toolName === 'delete') deleteSelectedClip();
       else if (toolName === 'speed') openSpeedEditor();
       else if (toolName === 'crop') openCropEditor();
-      else if (toolName === 'animation') openAnimationEditor();
+      else if (toolName === 'animation') { if (button.dataset.animationOpening === '1') return; openAnimationEditor(); }
       else if (toolName === 'filters' || toolName === 'effects' || toolName === 'magic') {
         const clip = selectedClip(); if (!clip) return;
         const before = captureEditorSnapshot();
@@ -3153,6 +3169,15 @@
         wrap.append(rangeControl('Brightness', 'brightness', .5, 1.5, .05), rangeControl('Contrast', 'contrast', .5, 1.5, .05), rangeControl('Saturation', 'saturation', 0, 2, .05));
         openToolPanel('Adjust clip', wrap);
       }
+    }, true);
+    flow.addEventListener('pointerup', function (event) {
+      const button = event.target.closest('[data-selection-tool="animation"]');
+      if (!button || !flow.contains(button)) return;
+      event.preventDefault(); event.stopPropagation();
+      if (button.dataset.animationOpening === '1') return;
+      button.dataset.animationOpening = '1';
+      openAnimationEditor();
+      setTimeout(function () { delete button.dataset.animationOpening; }, 350);
     }, true);
 
     function blobToDataUrl(blob) {
