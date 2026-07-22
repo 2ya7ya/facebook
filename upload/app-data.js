@@ -1566,10 +1566,12 @@
     function closeToolPanel() {
       toolPanel.classList.remove('is-open');
       toolPanel.classList.remove('is-speed-panel');
+      flow.classList.remove('is-speed-editing');
       toolPanel.setAttribute('aria-hidden', 'true');
     }
     function openToolPanel(title, body) {
       toolPanel.classList.remove('is-speed-panel');
+      flow.classList.remove('is-speed-editing');
       toolPanel.innerHTML = '<header><strong></strong><button type="button" aria-label="Close">×</button></header><div class="reel-tool-panel-body"></div>';
       toolPanel.querySelector('strong').textContent = title;
       toolPanel.querySelector('.reel-tool-panel-body').appendChild(body);
@@ -2666,16 +2668,25 @@
       let historyRecorded = false;
       const editor = document.createElement('div');
       editor.className = 'reel-speed-editor';
-      editor.innerHTML = '<div class="reel-speed-tabs-row"><div class="reel-speed-tabs" role="tablist"><button type="button" data-speed-tab="normal">Normal</button><button type="button" data-speed-tab="curve">Curve</button></div><button type="button" class="reel-speed-done" aria-label="Apply speed">✓</button></div><section class="reel-speed-pane reel-speed-normal"><output class="reel-speed-value"></output><div class="reel-speed-scale"><div class="reel-speed-labels"><span style="left:0%">0.1x</span><span style="left:50%">1x</span><span style="left:65%">2x</span><span style="left:85%">5x</span><span style="left:100%">10x</span></div><input type="range" min="0" max="100" step=".25" aria-label="Clip speed"><div class="reel-speed-ticks" aria-hidden="true"></div></div></section><section class="reel-speed-pane reel-speed-curve" hidden><div class="reel-speed-presets"></div></section>';
+      editor.innerHTML = '<div class="reel-speed-tabs-row"><div class="reel-speed-tabs" role="tablist"><button type="button" data-speed-tab="normal">Normal</button><button type="button" data-speed-tab="curve">Curve</button></div><button type="button" class="reel-speed-done" aria-label="Apply speed"><img src="speed-checkmark.jpg" alt=""></button></div><section class="reel-speed-pane reel-speed-normal"><div class="reel-speed-scale"><div class="reel-speed-labels"><span style="left:0%">0.1x</span><span style="left:25%">1x</span><span style="left:50%">2x</span><span style="left:75%">5x</span><span style="left:100%">10x</span></div><input type="range" min="0" max="100" step=".25" aria-label="Clip speed"><div class="reel-speed-ticks" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div></section><section class="reel-speed-pane reel-speed-curve" hidden><div class="reel-speed-presets"></div></section>';
       const normalTab = editor.querySelector('[data-speed-tab="normal"]');
       const curveTab = editor.querySelector('[data-speed-tab="curve"]');
       const normalPane = editor.querySelector('.reel-speed-normal');
       const curvePane = editor.querySelector('.reel-speed-curve');
       const slider = editor.querySelector('input[type="range"]');
-      const value = editor.querySelector('.reel-speed-value');
       const presetHost = editor.querySelector('.reel-speed-presets');
-      const speedFromPosition = function (position) { return .1 * Math.pow(100, Number(position) / 100); };
-      const positionFromSpeed = function (speed) { return Math.log(Math.max(.1, Number(speed)) / .1) / Math.log(100) * 100; };
+      const speedStops = [.1, 1, 2, 5, 10];
+      const speedFromPosition = function (position) {
+        const scaled = Math.min(4, Math.max(0, Number(position) / 25));
+        const index = Math.min(3, Math.floor(scaled));
+        return speedStops[index] + (speedStops[index + 1] - speedStops[index]) * (scaled - index);
+      };
+      const positionFromSpeed = function (speed) {
+        const value = Math.min(10, Math.max(.1, Number(speed) || 1));
+        let index = 0;
+        while (index < speedStops.length - 2 && value > speedStops[index + 1]) index += 1;
+        return (index + (value - speedStops[index]) / (speedStops[index + 1] - speedStops[index])) * 25;
+      };
       function recordOnce() { if (!historyRecorded) { recordEditorChange(before); historyRecorded = true; } }
       function refreshSpeedChange(message) {
         refreshSequenceDuration();
@@ -2693,12 +2704,10 @@
         curvePane.hidden = normal;
       }
       slider.value = positionFromSpeed(clip.speedCurve === 'none' ? clip.speed : 1);
-      value.textContent = (clip.speedCurve === 'none' ? Number(clip.speed) : 1).toFixed(1) + 'X';
       slider.addEventListener('input', function () {
         const next = Math.min(10, Math.max(.1, Math.round(speedFromPosition(slider.value) * 10) / 10));
         clip.speedCurve = 'none';
         clip.speed = next;
-        value.textContent = next.toFixed(1) + 'X';
         refreshSpeedChange();
         recordOnce();
       });
@@ -2734,6 +2743,7 @@
       selectTab(clip.speedCurve === 'none' ? 'normal' : 'curve');
       openToolPanel('Change speed', editor);
       toolPanel.classList.add('is-speed-panel');
+      flow.classList.add('is-speed-editing');
     }
 
     document.addEventListener('click', function (event) {
