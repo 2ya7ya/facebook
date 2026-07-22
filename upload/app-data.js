@@ -994,7 +994,12 @@
         const source = sdk.createVideoSource(editVideo);
         await snapSession.setSource(source);
         const result = await snapCameraKit.lensRepository.loadLensGroups([config.lensGroupId]);
+        if (result.errors && result.errors.length) {
+          const cause = result.errors[0];
+          throw new Error('Snap could not load this Lens Group: ' + (cause && cause.message ? cause.message : 'check the Staging token, Demo User, Trusted Origin and Lens Group ID.'));
+        }
         snapLenses = result.lenses || [];
+        if (!snapLenses.length) throw new Error('This Lens Group is empty. Add Lenses to it in Snap Lens Scheduler, then reopen Effects.');
         const canvas = snapSession.output.live;
         canvas.classList.add('reel-snap-output');
         editVideo.insertAdjacentElement('afterend', canvas);
@@ -1059,7 +1064,7 @@
           button.addEventListener('click', function () { applySnapLens(lens, button, grid).catch(function (error) { reelMessage(root, error.message); }); });
           grid.appendChild(button);
         });
-        status.textContent = visible.length ? visible.length + ' effects available' : 'No matching effects';
+        status.textContent = visible.length ? visible.length + ' effects available' : (snapLenses.length ? 'No effects match this search' : 'This Lens Group contains no effects');
       }
       search.addEventListener('input', function () { renderLenses(search.value); });
       ensureSnapCameraKit().then(function () { renderLenses(''); }).catch(function (error) { status.textContent = error.message; reelMessage(root, error.message); });
