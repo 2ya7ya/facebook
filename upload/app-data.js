@@ -903,6 +903,10 @@
     const editPlayButton = flow.querySelector('[data-reel-flow-action="toggle-edit-play"]');
     const editPlayIcon = flow.querySelector('#reelEditPlayIcon');
     const editStage = flow.querySelector('[data-reel-create-stage="edit"]');
+    const cropPlaybackMask = document.createElement('div');
+    cropPlaybackMask.className = 'reel-playback-crop-mask';
+    cropPlaybackMask.innerHTML = '<i data-crop-mask="top"></i><i data-crop-mask="right"></i><i data-crop-mask="bottom"></i><i data-crop-mask="left"></i>';
+    editVideo.insertAdjacentElement('afterend', cropPlaybackMask);
     const editCurrentLabel = flow.querySelector('#reelEditCurrent');
     const editTotalLabel = flow.querySelector('#reelEditTotal');
     const undoButton = flow.querySelector('#reelUndoButton');
@@ -1429,7 +1433,7 @@
       editVideo.style.removeProperty('opacity');
       editVideo.style.removeProperty('clip-path');
       editVideo.style.removeProperty('transform');
-      requestAnimationFrame(applyPreviewEdits);
+      applyVideoCrop(editVideo, currentClipItem() ? currentClipItem().clip : editState);
     }
     function updateTransitionPreview(item) {
       function hideTransitionPreview() {
@@ -1563,18 +1567,33 @@
         overlay.appendChild(captions);
       }
     }
-    function applyPreviewEdits() {
-      const settings = currentClipItem() ? currentClipItem().clip : editState;
-      const filter = 'brightness(' + settings.brightness + ') contrast(' + settings.contrast + ') saturate(' + settings.saturation + ') ' + (effectFilters[settings.effect] || '');
-      previewVideos.forEach(function (video) {
-        video.style.filter = filter;
-        const cropRatio = settings.cropRatio && settings.cropRatio !== 'freeform' ? settings.cropRatio.replace(':', ' / ') : (Number(settings.cropAspect) > 0 ? String(settings.cropAspect) : '');
-        const isFreeformCrop = settings.cropRatio === 'freeform' && Number(settings.cropAspect) > 0;
-        video.style.objectFit = isFreeformCrop ? 'contain' : (cropRatio ? 'cover' : settings.fit);
-        video.style.objectPosition = isFreeformCrop ? '50% 50%' : ((Number(settings.cropX) || .5) * 100) + '% ' + ((Number(settings.cropY) || .5) * 100) + '%';
-        video.classList.toggle('has-crop-ratio', Boolean(cropRatio));
-        video.classList.toggle('has-freeform-crop', isFreeformCrop);
-        if (isFreeformCrop) {
+    function updatePlaybackCropMask(video, top, right, bottom, left, enabled) {
+      if (video !== editVideo || !editStage) return;
+      cropPlaybackMask.hidden = !enabled;
+      if (!enabled) return;
+      const videoRect = video.getBoundingClientRect(), stageRect = editStage.getBoundingClientRect();
+      cropPlaybackMask.style.left = (videoRect.left - stageRect.left) + 'px';
+      cropPlaybackMask.style.top = (videoRect.top - stageRect.top) + 'px';
+      cropPlaybackMask.style.width = videoRect.width + 'px';
+      cropPlaybackMask.style.height = videoRect.height + 'px';
+      const visibleTop = top * 100, visibleBottom = 100 - bottom * 100;
+      const topMask = cropPlaybackMask.querySelector('[data-crop-mask="top"]');
+      const rightMask = cropPlaybackMask.querySelector('[data-crop-mask="right"]');
+      const bottomMask = cropPlaybackMask.querySelector('[data-crop-mask="bottom"]');
+      const leftMask = cropPlaybackMask.querySelector('[data-crop-mask="left"]');
+      topMask.style.cssText = 'left:0;top:0;width:100%;height:' + visibleTop + '%';
+      bottomMask.style.cssText = 'left:0;top:' + visibleBottom + '%;width:100%;height:' + (bottom * 100) + '%';
+      leftMask.style.cssText = 'left:0;top:' + visibleTop + '%;width:' + (left * 100) + '%;height:' + ((1 - top - bottom) * 100) + '%';
+      rightMask.style.cssText = 'left:' + (100 - right * 100) + '%;top:' + visibleTop + '%;width:' + (right * 100) + '%;height:' + ((1 - top - bottom) * 100) + '%';
+    }
+    function applyVideoCrop(video, settings) {
+      const cropRatio = settings.cropRatio && settings.cropRatio !== 'freeform' ? settings.cropRatio.replace(':', ' / ') : (Number(settings.cropAspect) > 0 ? String(settings.cropAspect) : '');
+      const isFreeformCrop = settings.cropRatio === 'freeform' && Number(settings.cropAspect) > 0;
+      video.style.objectFit = isFreeformCrop ? 'contain' : (cropRatio ? 'cover' : settings.fit);
+      video.style.objectPosition = isFreeformCrop ? '50% 50%' : ((Number(settings.cropX) || .5) * 100) + '% ' + ((Number(settings.cropY) || .5) * 100) + '%';
+      video.classList.toggle('has-crop-ratio', Boolean(cropRatio));
+      video.classList.toggle('has-freeform-crop', isFreeformCrop);
+      if (isFreeformCrop) {
           const left = Math.min(.99, Math.max(0, Number(settings.cropLeft) || 0));
           const top = Math.min(.99, Math.max(0, Number(settings.cropTop) || 0));
           const width = Math.min(1 - left, Math.max(.01, Number(settings.cropWidth) || 1));
@@ -1588,8 +1607,10 @@
           const maskTop = contentTop + top * contentHeight;
           const maskWidth = width * contentWidth;
           const maskHeight = height * contentHeight;
-          video.style.clipPath = 'inset(' + (maskTop * 100) + '% ' + ((1 - maskLeft - maskWidth) * 100) + '% ' + ((1 - maskTop - maskHeight) * 100) + '% ' + (maskLeft * 100) + '%)';
-        } else if (cropRatio) {
+          const maskRight = 1 - maskLeft - maskWidth, maskBottom = 1 - maskTop - maskHeight;
+          video.style.clipPath = 'inset(' + (maskTop * 100) + '% ' + (maskRight * 100) + '% ' + (maskBottom * 100) + '% ' + (maskLeft * 100) + '%)';
+          updatePlaybackCropMask(video, maskTop, maskRight, maskBottom, maskLeft, true);
+      } else if (cropRatio) {
           const parts = cropRatio.split('/').map(Number);
           const aspect = parts.length > 1 ? parts[0] / parts[1] : Number(parts[0]);
           const boxAspect = video.clientWidth / Math.max(1, video.clientHeight);
@@ -1597,7 +1618,18 @@
           if (aspect > 0 && boxAspect > aspect) insetX = (1 - aspect / boxAspect) * 50;
           else if (aspect > 0 && boxAspect < aspect) insetY = (1 - boxAspect / aspect) * 50;
           video.style.clipPath = 'inset(' + insetY + '% ' + insetX + '% ' + insetY + '% ' + insetX + '%)';
-        } else video.style.removeProperty('clip-path');
+          updatePlaybackCropMask(video, insetY / 100, insetX / 100, insetY / 100, insetX / 100, true);
+      } else {
+        video.style.removeProperty('clip-path');
+        updatePlaybackCropMask(video, 0, 0, 0, 0, false);
+      }
+    }
+    function applyPreviewEdits() {
+      const settings = currentClipItem() ? currentClipItem().clip : editState;
+      const filter = 'brightness(' + settings.brightness + ') contrast(' + settings.contrast + ') saturate(' + settings.saturation + ') ' + (effectFilters[settings.effect] || '');
+      previewVideos.forEach(function (video) {
+        video.style.filter = filter;
+        applyVideoCrop(video, settings);
         ensureUserOverlay(video);
       });
     }
