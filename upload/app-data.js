@@ -1043,6 +1043,7 @@
       }
       const categoryNames = ['All'].concat(Array.from(new Set(reelVisualEffectCatalog.map(function (effect) { return effect.category; }))));
       let activeCategory = 'All';
+      let categoryAnimating = false;
       openToolPanel('Effects', wrap);
       toolPanel.classList.add('is-effects-panel');
       flow.classList.add('is-effects-editing');
@@ -1099,13 +1100,37 @@
         });
         status.textContent = visible.length ? '' : 'No effects match this search';
       }
+      function updateCategoryTabs() {
+        categories.querySelectorAll('button').forEach(function (item) {
+          const active = item.textContent === activeCategory;
+          item.classList.toggle('is-active', active);
+          if (active) item.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+        });
+      }
+      function slideToCategory(name, direction) {
+        if (name === activeCategory || categoryAnimating) return;
+        categoryAnimating = true;
+        const outClass = direction > 0 ? 'is-sliding-out-left' : 'is-sliding-out-right';
+        const inClass = direction > 0 ? 'is-sliding-in-right' : 'is-sliding-in-left';
+        grid.classList.add(outClass);
+        window.setTimeout(function () {
+          activeCategory = name;
+          updateCategoryTabs();
+          renderEffects();
+          grid.classList.remove(outClass);
+          grid.classList.add(inClass);
+          window.requestAnimationFrame(function () {
+            window.requestAnimationFrame(function () { grid.classList.remove(inClass); });
+          });
+          window.setTimeout(function () { categoryAnimating = false; }, 190);
+        }, 115);
+      }
       categoryNames.forEach(function (name) {
         const button = document.createElement('button');
         button.type = 'button'; button.textContent = name; button.className = name === activeCategory ? 'is-active' : '';
         button.addEventListener('click', function () {
-          activeCategory = name;
-          categories.querySelectorAll('button').forEach(function (item) { item.classList.toggle('is-active', item === button); });
-          renderEffects();
+          const currentIndex = categoryNames.indexOf(activeCategory);
+          slideToCategory(name, categoryNames.indexOf(name) >= currentIndex ? 1 : -1);
         });
         categories.appendChild(button);
       });
@@ -1132,10 +1157,11 @@
         if (Math.abs(dx) < 45 || Math.abs(dx) < Math.abs(dy) * 1.25) return;
         const index = categoryNames.indexOf(activeCategory); const next = Math.max(0, Math.min(categoryNames.length - 1, index + (dx < 0 ? 1 : -1)));
         if (next === index) return;
-        wrap.__categorySwipe = true; activeCategory = categoryNames[next];
-        categories.querySelectorAll('button').forEach(function (item) { item.classList.toggle('is-active', item.textContent === activeCategory); if (item.textContent === activeCategory) item.scrollIntoView({ block: 'nearest', inline: 'center' }); });
-        renderEffects(); window.setTimeout(function () { wrap.__categorySwipe = false; }, 180);
+        wrap.__categorySwipe = true;
+        slideToCategory(categoryNames[next], dx < 0 ? 1 : -1);
+        window.setTimeout(function () { wrap.__categorySwipe = false; }, 260);
       });
+      grid.addEventListener('pointercancel', function () { categoryStartX = categoryStartY = null; });
       search.addEventListener('input', renderEffects);
       renderEffects();
       window.cancelAnimationFrame(editVideo.__effectThumbRaf || 0);
@@ -1368,10 +1394,67 @@
     let sequenceSeekInProgress = false;
     let clipIdCounter = 0;
     let suppressClipClick = false;
+    let suppressEffectTrackClick = false;
     let transitionPreviewKey = '';
     let sequenceBoundarySeekActive = false;
     let sequenceBoundaryWallStart = 0;
     let sequenceBoundaryTimeStart = 0;
+
+    const effectSelectionToolbar = document.createElement('div');
+    effectSelectionToolbar.className = 'reel-effect-selection-toolbar';
+    effectSelectionToolbar.setAttribute('aria-hidden', 'true');
+    effectSelectionToolbar.innerHTML = '<button type="button" data-effect-track-action="close" aria-label="Close effect controls"><svg viewBox="0 0 32 32"><path d="M7 11l9 9 9-9"/></svg></button><button type="button" data-effect-track-action="replace"><svg viewBox="0 0 32 32"><path d="M7 10h16l-4-4M25 22H9l4 4M23 10l3 3-3 3M9 22l-3-3 3-3"/></svg><span>Replace effect</span></button><button type="button" data-effect-track-action="copy"><svg viewBox="0 0 32 32"><rect x="11" y="7" width="14" height="14" rx="2"/><rect x="6" y="12" width="14" height="14" rx="2"/></svg><span>Copy</span></button><button type="button" data-effect-track-action="delete"><svg viewBox="0 0 32 32"><path d="M8 10h16M13 6h6l1 4M11 10l1 16h8l1-16M15 14v8M18 14v8"/></svg><span>Delete</span></button>';
+    if (editStage) editStage.appendChild(effectSelectionToolbar);
+    function selectedEffectClip() {
+      return ensureClipState().find(function (clip) { return clip.id === selectedEffectTrackClipId && clip.visualEffect && clip.visualEffect !== 'none'; }) || null;
+    }
+    function syncEffectSelectionToolbar() {
+      const visible = Boolean(selectedEffectClip());
+      effectSelectionToolbar.classList.toggle('is-visible', visible);
+      effectSelectionToolbar.setAttribute('aria-hidden', visible ? 'false' : 'true');
+      if (editStage) editStage.classList.toggle('is-effect-track-selected', visible);
+    }
+    function clearEffectTrackSelection() {
+      selectedEffectTrackClipId = '';
+      timelineEffectLayer.querySelectorAll('.reel-effect-track').forEach(function (track) { track.classList.remove('is-selected'); });
+      syncEffectSelectionToolbar();
+    }
+    function selectEffectTrack(clipId) {
+      selectedEffectTrackClipId = clipId;
+      timelineSelected = false;
+      timeline.classList.remove('is-selected');
+      flow.classList.remove('is-timeline-selected');
+      timelineSelection.classList.remove('is-active');
+      trimDurationLabel.classList.remove('is-active');
+      timelineEffectLayer.querySelectorAll('.reel-effect-track').forEach(function (track) { track.classList.toggle('is-selected', track.dataset.clipId === clipId); });
+      syncEffectSelectionToolbar();
+    }
+    effectSelectionToolbar.addEventListener('pointerdown', function (event) { event.stopPropagation(); });
+    effectSelectionToolbar.addEventListener('click', function (event) {
+      const button = event.target.closest('[data-effect-track-action]');
+      if (!button) return;
+      event.preventDefault(); event.stopPropagation();
+      const action = button.dataset.effectTrackAction;
+      const clip = selectedEffectClip();
+      if (action === 'close') { clearEffectTrackSelection(); return; }
+      if (!clip) return;
+      if (action === 'replace') { setSelectedClip(clip.id, false); openBuiltInEffectsEditor(); return; }
+      if (action === 'delete') {
+        const before = captureEditorSnapshot();
+        clip.visualEffect = 'none'; clip.visualEffectStart = 0; clip.visualEffectEnd = 1;
+        clearEffectTrackSelection(); applyPreviewEdits(); renderClipTimeline(); recordEditorChange(before);
+        reelMessage(root, 'Effect deleted'); return;
+      }
+      if (action === 'copy') {
+        const clips = ensureClipState(); const sourceIndex = clips.indexOf(clip);
+        const target = clips[sourceIndex + 1] || clips[sourceIndex - 1];
+        if (!target) { reelMessage(root, 'Add another clip to place the copied effect'); return; }
+        const before = captureEditorSnapshot();
+        target.visualEffect = clip.visualEffect; target.visualEffectStart = clip.visualEffectStart; target.visualEffectEnd = clip.visualEffectEnd;
+        selectedEffectTrackClipId = target.id; applyPreviewEdits(); renderClipTimeline(); recordEditorChange(before); syncEffectSelectionToolbar();
+        reelMessage(root, 'Effect copied');
+      }
+    });
 
     const transitionPreviewHost = document.createElement('div');
     transitionPreviewHost.className = 'reel-transition-preview-host';
@@ -2284,6 +2367,7 @@
       return clientX >= left && clientX <= right && clientY >= top && clientY <= bottom;
     }
     document.addEventListener('pointerdown', function (event) {
+      if (selectedEffectTrackClipId && !event.target.closest('.reel-effect-track,.reel-effect-selection-toolbar')) clearEffectTrackSelection();
       if (!timelineSelected) return;
       if (event.target.closest('.reel-timeline-audio,.reel-timeline-sound-label')) {
         setTimelineSelected(false);
@@ -2449,11 +2533,68 @@
           const updateTrackPosition = function () { const start = item.start + item.duration * item.clip.visualEffectStart; const end = item.start + item.duration * item.clip.visualEffectEnd; effectTrack.style.left = (start * pixelsPerSecond) + 'px'; effectTrack.style.width = Math.max(24, (end - start) * pixelsPerSecond) + 'px'; };
           updateTrackPosition(); effectTrack.innerHTML = '<button type="button" class="reel-effect-trim reel-effect-trim-start" aria-label="Trim effect start">‹</button><span class="reel-effect-track-icon" aria-hidden="true"></span><strong></strong><button type="button" class="reel-effect-trim reel-effect-trim-end" aria-label="Trim effect end">›</button>';
           effectTrack.querySelector('strong').textContent = definition ? definition.name : 'Effect';
-          effectTrack.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); selectedEffectTrackClipId = item.clip.id; timelineEffectLayer.querySelectorAll('.reel-effect-track').forEach(function (track) { track.classList.toggle('is-selected', track === effectTrack); }); });
-          ['start','end'].forEach(function (edge) { const handle = effectTrack.querySelector('.reel-effect-trim-' + edge); handle.addEventListener('pointerdown', function (event) { event.preventDefault(); event.stopPropagation(); selectedEffectTrackClipId = item.clip.id; effectTrack.classList.add('is-selected'); const before = captureEditorSnapshot(); const startX = event.clientX; const initialStart = item.clip.visualEffectStart; const initialEnd = item.clip.visualEffectEnd; const minimum = Math.min(1, .18 / item.duration); function move(moveEvent) { moveEvent.preventDefault(); const delta = (moveEvent.clientX - startX) / Math.max(1, item.duration * pixelsPerSecond); if (edge === 'start') item.clip.visualEffectStart = Math.max(0, Math.min(initialEnd - minimum, initialStart + delta)); else item.clip.visualEffectEnd = Math.min(1, Math.max(initialStart + minimum, initialEnd + delta)); updateTrackPosition(); applyPreviewEdits(); } function finish() { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', finish); window.removeEventListener('pointercancel', finish); recordEditorChange(before); renderClipTimeline(); } window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', finish, { once: true }); window.addEventListener('pointercancel', finish, { once: true }); }); });
+          effectTrack.addEventListener('click', function (event) {
+            event.preventDefault(); event.stopPropagation();
+            if (suppressEffectTrackClick) return;
+            selectEffectTrack(item.clip.id);
+          });
+          effectTrack.addEventListener('pointerdown', function (event) {
+            if (event.target.closest('.reel-effect-trim')) return;
+            event.stopPropagation();
+            const before = captureEditorSnapshot();
+            const startX = event.clientX;
+            const initialGlobalStart = item.start + item.duration * item.clip.visualEffectStart;
+            const effectDuration = Math.max(.18, item.duration * (item.clip.visualEffectEnd - item.clip.visualEffectStart));
+            let movedStart = initialGlobalStart;
+            let dragging = false;
+            let cancelled = false;
+            const timer = window.setTimeout(function () {
+              if (cancelled) return;
+              dragging = true; suppressEffectTrackClick = true;
+              selectEffectTrack(item.clip.id); effectTrack.classList.add('is-moving');
+              if (navigator.vibrate) navigator.vibrate(18);
+            }, 360);
+            function move(moveEvent) {
+              const dx = moveEvent.clientX - startX;
+              if (!dragging && Math.abs(dx) > 9) { cancelled = true; window.clearTimeout(timer); return; }
+              if (!dragging) return;
+              moveEvent.preventDefault();
+              movedStart = Math.max(0, Math.min(Math.max(0, timelineDuration - effectDuration), initialGlobalStart + dx / pixelsPerSecond));
+              effectTrack.style.left = (movedStart * pixelsPerSecond) + 'px';
+            }
+            function finish() {
+              window.clearTimeout(timer);
+              window.removeEventListener('pointermove', move);
+              window.removeEventListener('pointerup', finish);
+              window.removeEventListener('pointercancel', finish);
+              if (!dragging) return;
+              effectTrack.classList.remove('is-moving');
+              const currentLayout = sequenceLayout();
+              const center = movedStart + effectDuration / 2;
+              const destination = currentLayout.find(function (entry) { return center >= entry.start && center <= entry.end; }) || currentLayout[currentLayout.length - 1];
+              if (destination) {
+                const sourceEffect = item.clip.visualEffect;
+                const localDuration = Math.min(effectDuration, destination.duration);
+                const localStart = Math.max(destination.start, Math.min(destination.end - localDuration, movedStart));
+                if (destination.clip !== item.clip) { item.clip.visualEffect = 'none'; item.clip.visualEffectStart = 0; item.clip.visualEffectEnd = 1; }
+                destination.clip.visualEffect = sourceEffect;
+                destination.clip.visualEffectStart = Math.max(0, Math.min(1, (localStart - destination.start) / destination.duration));
+                destination.clip.visualEffectEnd = Math.max(destination.clip.visualEffectStart, Math.min(1, (localStart + localDuration - destination.start) / destination.duration));
+                selectedEffectTrackClipId = destination.clip.id;
+              }
+              applyPreviewEdits(); renderClipTimeline(); recordEditorChange(before); syncEffectSelectionToolbar();
+              reelMessage(root, 'Effect moved');
+              window.setTimeout(function () { suppressEffectTrackClick = false; }, 260);
+            }
+            window.addEventListener('pointermove', move, { passive: false });
+            window.addEventListener('pointerup', finish, { once: true });
+            window.addEventListener('pointercancel', finish, { once: true });
+          });
+          ['start','end'].forEach(function (edge) { const handle = effectTrack.querySelector('.reel-effect-trim-' + edge); handle.addEventListener('pointerdown', function (event) { event.preventDefault(); event.stopPropagation(); selectEffectTrack(item.clip.id); const before = captureEditorSnapshot(); const startX = event.clientX; const initialStart = item.clip.visualEffectStart; const initialEnd = item.clip.visualEffectEnd; const minimum = Math.min(1, .18 / item.duration); function move(moveEvent) { moveEvent.preventDefault(); const delta = (moveEvent.clientX - startX) / Math.max(1, item.duration * pixelsPerSecond); if (edge === 'start') item.clip.visualEffectStart = Math.max(0, Math.min(initialEnd - minimum, initialStart + delta)); else item.clip.visualEffectEnd = Math.min(1, Math.max(initialStart + minimum, initialEnd + delta)); updateTrackPosition(); applyPreviewEdits(); } function finish() { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', finish); window.removeEventListener('pointercancel', finish); recordEditorChange(before); renderClipTimeline(); syncEffectSelectionToolbar(); } window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', finish, { once: true }); window.addEventListener('pointercancel', finish, { once: true }); }); });
           timelineEffectLayer.appendChild(effectTrack);
         }
       });
+      syncEffectSelectionToolbar();
     }
     async function buildTimelineThumbnails(duration) {
       if (!selectedVideoData || !Number.isFinite(duration) || duration <= 0) return;
