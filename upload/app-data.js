@@ -1284,6 +1284,7 @@
     function updateTransitionPreview(item) {
       if (!item || !transitionPreviewKey) {
         transitionPreviewLayer.className = 'reel-transition-preview-layer';
+        transitionPreviewHost.classList.remove('is-active');
         transitionPreviewLayer.style.removeProperty('--transition-progress');
         return;
       }
@@ -1291,6 +1292,7 @@
       const previous = layout[item.index - 1];
       if (!previous || transitionPreviewKey !== previous.clip.id + '>' + item.clip.id) {
         transitionPreviewLayer.className = 'reel-transition-preview-layer';
+        transitionPreviewHost.classList.remove('is-active');
         transitionPreviewKey = '';
         return;
       }
@@ -1299,12 +1301,14 @@
       const local = Math.max(0, currentSequenceTime - item.start);
       if (!duration || local >= duration) {
         transitionPreviewLayer.className = 'reel-transition-preview-layer';
+        transitionPreviewHost.classList.remove('is-active');
         transitionPreviewLayer.style.removeProperty('--transition-progress');
         transitionPreviewKey = '';
         return;
       }
       const progress = Math.min(1, local / duration);
       syncTransitionPreviewBounds();
+      transitionPreviewHost.classList.add('is-active');
       transitionPreviewLayer.className = 'reel-transition-preview-layer is-active is-' + transition.type;
       transitionPreviewLayer.style.setProperty('--transition-progress', String(progress));
     }
