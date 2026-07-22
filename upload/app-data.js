@@ -1268,13 +1268,15 @@
       const scale = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
       transitionPreviewLayer.width = Math.max(2, Math.round(cssWidth * scale));
       transitionPreviewLayer.height = Math.max(2, Math.round(cssHeight * scale));
-      const context = transitionPreviewLayer.getContext('2d', { alpha: false });
+      const context = transitionPreviewLayer.getContext('2d', { alpha: true });
       if (!context) return;
       const canvasWidth = transitionPreviewLayer.width;
       const canvasHeight = transitionPreviewLayer.height;
-      context.fillStyle = '#000';
-      context.fillRect(0, 0, canvasWidth, canvasHeight);
-      const fit = Math.min(canvasWidth / editVideo.videoWidth, canvasHeight / editVideo.videoHeight);
+      context.clearRect(0, 0, canvasWidth, canvasHeight);
+      const fitMode = (fromClip.fit || editState.fit) === 'cover' ? 'cover' : 'contain';
+      const containScale = Math.min(canvasWidth / editVideo.videoWidth, canvasHeight / editVideo.videoHeight);
+      const coverScale = Math.max(canvasWidth / editVideo.videoWidth, canvasHeight / editVideo.videoHeight);
+      const fit = fitMode === 'cover' ? coverScale : containScale;
       const drawWidth = editVideo.videoWidth * fit;
       const drawHeight = editVideo.videoHeight * fit;
       const drawX = (canvasWidth - drawWidth) / 2;
@@ -1282,17 +1284,23 @@
       try { context.drawImage(editVideo, drawX, drawY, drawWidth, drawHeight); } catch (error) {}
     }
     function updateTransitionPreview(item) {
-      if (!item || !transitionPreviewKey) {
-        transitionPreviewLayer.className = 'reel-transition-preview-layer';
+      function hideTransitionPreview() {
         transitionPreviewHost.classList.remove('is-active');
+        transitionPreviewLayer.className = 'reel-transition-preview-layer';
+        transitionPreviewLayer.style.opacity = '0';
+        transitionPreviewLayer.style.visibility = 'hidden';
+        transitionPreviewLayer.style.clipPath = 'none';
+        transitionPreviewLayer.style.transform = 'none';
         transitionPreviewLayer.style.removeProperty('--transition-progress');
+      }
+      if (!item || !transitionPreviewKey) {
+        hideTransitionPreview();
         return;
       }
       const layout = sequenceLayout();
       const previous = layout[item.index - 1];
       if (!previous || transitionPreviewKey !== previous.clip.id + '>' + item.clip.id) {
-        transitionPreviewLayer.className = 'reel-transition-preview-layer';
-        transitionPreviewHost.classList.remove('is-active');
+        hideTransitionPreview();
         transitionPreviewKey = '';
         return;
       }
@@ -1300,9 +1308,7 @@
       const duration = transition && transition.type !== 'none' ? Math.min(.6, Math.max(.15, Number(transition.duration) || .35), item.duration * .45) : 0;
       const local = Math.max(0, currentSequenceTime - item.start);
       if (!duration || local >= duration) {
-        transitionPreviewLayer.className = 'reel-transition-preview-layer';
-        transitionPreviewHost.classList.remove('is-active');
-        transitionPreviewLayer.style.removeProperty('--transition-progress');
+        hideTransitionPreview();
         transitionPreviewKey = '';
         return;
       }
@@ -1310,6 +1316,20 @@
       syncTransitionPreviewBounds();
       transitionPreviewHost.classList.add('is-active');
       transitionPreviewLayer.className = 'reel-transition-preview-layer is-active is-' + transition.type;
+      transitionPreviewLayer.style.visibility = 'visible';
+      transitionPreviewLayer.style.clipPath = 'none';
+      transitionPreviewLayer.style.transform = 'none';
+      if (transition.type === 'wipe') {
+        transitionPreviewLayer.style.opacity = '1';
+        transitionPreviewLayer.style.clipPath = 'inset(0 ' + (progress * 100) + '% 0 0)';
+      } else if (transition.type === 'slide') {
+        transitionPreviewLayer.style.opacity = '1';
+        transitionPreviewLayer.style.transform = 'translate3d(' + (-progress * 100) + '%,0,0)';
+      } else if (transition.type === 'dissolve') {
+        transitionPreviewLayer.style.opacity = String(Math.max(0, 1 - progress));
+      } else {
+        transitionPreviewLayer.style.opacity = String(Math.max(0, 1 - progress));
+      }
       transitionPreviewLayer.style.setProperty('--transition-progress', String(progress));
     }
 
@@ -2367,6 +2387,13 @@
           renderClipTimeline();
           closeToolPanel();
           requestAnimationFrame(syncTransitionPreviewBounds);
+          const destination = layoutForClip(toId);
+          const sourceItem = layoutForClip(fromId);
+          if (option[0] !== 'none' && destination && sourceItem) {
+            const previewLead = Math.min(.45, Math.max(.12, sourceItem.duration * .25));
+            seekSequenceTime(Math.max(sourceItem.start, sourceItem.end - previewLead), true);
+            window.setTimeout(function () { editVideo.play().catch(function () {}); }, 60);
+          }
           reelMessage(root, option[1] + ' transition selected');
         });
         wrap.appendChild(button);
