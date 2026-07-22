@@ -1256,6 +1256,24 @@
       const transition = transitionForBoundary(fromClip.id, toClip.id);
       transitionPreviewKey = transition && transition.type !== 'none' ? fromClip.id + '>' + toClip.id : '';
       syncTransitionPreviewBounds();
+      if (!transitionPreviewKey || !editVideo.videoWidth || !editVideo.videoHeight) return;
+      const cssWidth = Math.max(2, editVideo.offsetWidth || editVideo.clientWidth || editVideo.videoWidth);
+      const cssHeight = Math.max(2, editVideo.offsetHeight || editVideo.clientHeight || editVideo.videoHeight);
+      const scale = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+      transitionPreviewLayer.width = Math.max(2, Math.round(cssWidth * scale));
+      transitionPreviewLayer.height = Math.max(2, Math.round(cssHeight * scale));
+      const context = transitionPreviewLayer.getContext('2d', { alpha: false });
+      if (!context) return;
+      const canvasWidth = transitionPreviewLayer.width;
+      const canvasHeight = transitionPreviewLayer.height;
+      context.fillStyle = '#000';
+      context.fillRect(0, 0, canvasWidth, canvasHeight);
+      const fit = Math.min(canvasWidth / editVideo.videoWidth, canvasHeight / editVideo.videoHeight);
+      const drawWidth = editVideo.videoWidth * fit;
+      const drawHeight = editVideo.videoHeight * fit;
+      const drawX = (canvasWidth - drawWidth) / 2;
+      const drawY = (canvasHeight - drawHeight) / 2;
+      try { context.drawImage(editVideo, drawX, drawY, drawWidth, drawHeight); } catch (error) {}
     }
     function updateTransitionPreview(item) {
       if (!item || !transitionPreviewKey) {
@@ -1892,7 +1910,7 @@
     function syncEditPlayback(forceText) {
       if (!sequenceSeekInProgress) {
         const item = currentClipItem();
-        if (item && editVideo.currentTime >= item.clip.sourceEnd - .018) {
+        if (item && editVideo.currentTime >= item.clip.sourceEnd - .10) {
           const layout = sequenceLayout();
           const next = layout[item.index + 1];
           if (next) {
@@ -1944,7 +1962,7 @@
       // instead of letting a separate CSS animation drift away from playback.
       function followFrame() {
         if (editVideo.paused || timelineDragging) return;
-        syncSequenceTimeFromVideo();
+        syncEditPlayback(false);
         renderTimelineAt(currentSequenceTime);
         updateEditTimeDisplay(currentSequenceTime);
         timelineAnimationFrame = requestAnimationFrame(followFrame);
@@ -2337,7 +2355,18 @@
           editState.transitions.push({ fromId: fromId, toId: toId, type: option[0], duration: option[0] === 'none' ? 0 : .35 });
           recordEditorChange(before);
           renderClipTimeline();
+          const previewWidth = editVideo.offsetWidth;
+          const previewHeight = editVideo.offsetHeight;
+          if (previewWidth && previewHeight) {
+            editVideo.style.width = previewWidth + 'px';
+            editVideo.style.height = previewHeight + 'px';
+          }
           closeToolPanel();
+          window.setTimeout(function () {
+            editVideo.style.removeProperty('width');
+            editVideo.style.removeProperty('height');
+            syncTransitionPreviewBounds();
+          }, 420);
           reelMessage(root, option[1] + ' transition selected');
         });
         wrap.appendChild(button);
@@ -2561,7 +2590,9 @@
       context.restore();
     }
     async function renderEditedVideoData(sourceData, state) {
-      const clips = ensureClipState().map(function (clip) { return JSON.parse(JSON.stringify(clip)); });
+      const clips = Array.isArray(state && state.clips)
+        ? state.clips.map(function (clip) { return JSON.parse(JSON.stringify(clip)); })
+        : ensureClipState().map(function (clip) { return JSON.parse(JSON.stringify(clip)); });
       const renderTransitions = Array.isArray(state && state.transitions) ? state.transitions.map(function (item) { return JSON.parse(JSON.stringify(item)); }) : [];
       const renderTransitionForBoundary = function (fromId, toId) {
         return renderTransitions.find(function (item) { return item.fromId === fromId && item.toId === toId; }) || null;
