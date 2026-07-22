@@ -225,7 +225,11 @@ function normalizeReelEdits(value) {
     const parsed = Number(input);
     return Number.isFinite(parsed) ? Math.min(maximum, Math.max(minimum, parsed)) : fallback;
   };
-  const effects = new Set(['none', 'warm', 'cool', 'mono', 'vivid']);
+  const effects = new Set([
+    'none','enhance','portrait','soft','vivid','pop','warm','golden','sunset','cool','arctic','teal','emerald','rose','lavender',
+    'cinematic','blockbuster','film','vintage','matte','fade','dream','sepia','mono','noir','silvertone','washed','dramatic',
+    'lowlight','midnight','neon','cyber','electric','infrared','negative','haze'
+  ]);
   const normalizeClip = (clip, index) => {
     clip = clip && typeof clip === 'object' ? clip : {};
     const start = number(clip.sourceStart, 0, 3600, 0);
@@ -752,18 +756,6 @@ app.get('/app', requireAuth, (_request, response) => {
 
 app.get('/app-data.js', requireAuth, (_request, response) => {
   response.type('application/javascript').sendFile(path.join(publicDirectory, 'app-data.js'));
-});
-
-app.get('/camera-kit.bundle.js', requireAuth, (_request, response) => {
-  response.type('application/javascript').sendFile(path.join(publicDirectory, 'camera-kit.bundle.js'));
-});
-
-app.get('/api/camera-kit/config', requireAuth, (_request, response) => {
-  const apiToken = String(process.env.SNAP_CAMERA_KIT_API_TOKEN || '').trim();
-  const lensGroupId = String(process.env.SNAP_CAMERA_KIT_LENS_GROUP_ID || '9e005ddd-4076-4b57-8a6b-fb4292331869').trim();
-  if (!apiToken) return response.status(503).json({ error: 'Camera Kit is not configured. Add SNAP_CAMERA_KIT_API_TOKEN in Render.' });
-  response.set('Cache-Control', 'no-store');
-  response.json({ apiToken, lensGroupId });
 });
 
 app.get('/reel-ui/:asset', requireAuth, (request, response) => {

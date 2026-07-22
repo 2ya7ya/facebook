@@ -6,18 +6,13 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js",
-    "build:camera-kit": "esbuild camera-kit-entry.js --bundle --format=iife --platform=browser --target=chrome95,safari16 --outfile=upload/camera-kit.bundle.js"
+    "check": "node --check server.js"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "@snap/camera-kit": "^1.18.0",
     "express": "^5.1.0",
     "pg": "^8.16.3"
-  },
-  "devDependencies": {
-    "esbuild": "^0.28.1"
   }
 }

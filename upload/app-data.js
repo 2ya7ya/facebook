@@ -13,6 +13,47 @@
   let composerMode = 'post';
   let currentReel = null;
 
+  const reelEffectCatalog = [
+    ['none', 'None', 'Basic', ''],
+    ['enhance', 'Enhance', 'Basic', 'brightness(1.04) contrast(1.08) saturate(1.14)'],
+    ['portrait', 'Portrait', 'Basic', 'brightness(1.07) contrast(.94) saturate(.92)'],
+    ['soft', 'Soft', 'Basic', 'brightness(1.08) contrast(.9) saturate(.92) blur(.35px)'],
+    ['vivid', 'Vivid', 'Basic', 'saturate(1.48) contrast(1.1)'],
+    ['pop', 'Pop', 'Basic', 'brightness(1.03) contrast(1.2) saturate(1.28)'],
+    ['warm', 'Warm', 'Color', 'sepia(.2) hue-rotate(-10deg) saturate(1.12)'],
+    ['golden', 'Golden', 'Color', 'sepia(.34) hue-rotate(-12deg) saturate(1.25) brightness(1.04)'],
+    ['sunset', 'Sunset', 'Color', 'sepia(.28) hue-rotate(-22deg) saturate(1.42) contrast(1.08)'],
+    ['cool', 'Cool', 'Color', 'hue-rotate(18deg) saturate(.92) brightness(1.02)'],
+    ['arctic', 'Arctic', 'Color', 'hue-rotate(176deg) saturate(.72) brightness(1.08)'],
+    ['teal', 'Teal', 'Color', 'hue-rotate(145deg) saturate(1.18) contrast(1.08)'],
+    ['emerald', 'Emerald', 'Color', 'hue-rotate(72deg) saturate(1.3) contrast(1.05)'],
+    ['rose', 'Rose', 'Color', 'sepia(.15) hue-rotate(302deg) saturate(1.35)'],
+    ['lavender', 'Lavender', 'Color', 'hue-rotate(238deg) saturate(1.18) brightness(1.05)'],
+    ['cinematic', 'Cinema', 'Film', 'contrast(1.22) saturate(.78) brightness(.94)'],
+    ['blockbuster', 'Blockbuster', 'Film', 'contrast(1.28) saturate(1.05) hue-rotate(174deg)'],
+    ['film', 'Film', 'Film', 'sepia(.18) contrast(1.12) saturate(.82) brightness(.96)'],
+    ['vintage', 'Vintage', 'Film', 'sepia(.38) contrast(1.08) saturate(.72) brightness(.96)'],
+    ['matte', 'Matte', 'Film', 'contrast(.86) saturate(.82) brightness(1.08)'],
+    ['fade', 'Fade', 'Film', 'contrast(.76) saturate(.72) brightness(1.12)'],
+    ['dream', 'Dream', 'Film', 'brightness(1.12) contrast(.82) saturate(1.12) blur(.55px)'],
+    ['sepia', 'Sepia', 'Classic', 'sepia(.86) contrast(1.06)'],
+    ['mono', 'Mono', 'Classic', 'grayscale(1)'],
+    ['noir', 'Noir', 'Classic', 'grayscale(1) contrast(1.42) brightness(.82)'],
+    ['silvertone', 'Silver', 'Classic', 'grayscale(1) contrast(1.12) brightness(1.08)'],
+    ['washed', 'Washed', 'Classic', 'saturate(.35) contrast(.82) brightness(1.13)'],
+    ['dramatic', 'Dramatic', 'Mood', 'contrast(1.38) saturate(.9) brightness(.9)'],
+    ['lowlight', 'Low Light', 'Mood', 'brightness(.74) contrast(1.32) saturate(.78)'],
+    ['midnight', 'Midnight', 'Mood', 'brightness(.7) contrast(1.4) hue-rotate(190deg) saturate(.8)'],
+    ['neon', 'Neon', 'Creative', 'contrast(1.42) saturate(1.8) brightness(1.04)'],
+    ['cyber', 'Cyber', 'Creative', 'hue-rotate(255deg) saturate(1.75) contrast(1.3)'],
+    ['electric', 'Electric', 'Creative', 'hue-rotate(105deg) saturate(1.72) contrast(1.22)'],
+    ['infrared', 'Infrared', 'Creative', 'invert(.84) hue-rotate(155deg) saturate(2) contrast(1.18)'],
+    ['negative', 'Negative', 'Creative', 'invert(1) hue-rotate(180deg)'],
+    ['haze', 'Haze', 'Creative', 'brightness(1.18) contrast(.72) saturate(.88) blur(.7px)']
+  ].map(function (item) { return { id: item[0], name: item[1], category: item[2], filter: item[3] }; });
+  const reelEffectFilters = Object.fromEntries(reelEffectCatalog.map(function (effect) { return [effect.id, effect.filter]; }));
+  const reelEffectIds = new Set(reelEffectCatalog.map(function (effect) { return effect.id; }));
+
   function readCachedProfile() {
     try {
       const cached = JSON.parse(localStorage.getItem(profileCacheKey) || 'null');
@@ -795,7 +836,7 @@
     const caption = root.querySelector('#reelsCaptionDisplay');
     video.src = reel.video;
     const edits = Object.assign({ trimStart: 0, trimEnd: 0, brightness: 1, contrast: 1, saturation: 1, effect: 'none', text: '', sticker: '', captions: false, overlay: false, fit: 'contain' }, reel.editData || {});
-    const effectFilters = { none: '', warm: 'sepia(.22) hue-rotate(-8deg)', cool: 'hue-rotate(18deg) saturate(.9)', mono: 'grayscale(1)', vivid: 'saturate(1.45) contrast(1.08)' };
+    const effectFilters = reelEffectFilters;
     const clipAnimationPresets = {
       in: [['none','None'],['slice-in','Slice In'],['folding-fan','Folding Fan'],['paddling','Paddling'],['spin-in','Spin In'],['zoom-in','Zoom In'],['zoom-out-in','Zoom Out'],['fade-in','Fade In'],['slide-left','Slide Left'],['slide-right','Slide Right'],['slide-up','Slide Up'],['slide-down','Slide Down'],['flip-in','Flip In'],['roll-in','Roll In'],['bounce-in','Bounce In'],['blur-in','Blur In']],
       out: [['none','None'],['slice-out','Slice Out'],['folding-fan','Folding Fan'],['paddling','Paddling'],['spin-out','Spin Out'],['zoom-out','Zoom Out'],['zoom-in-out','Zoom In'],['fade-out','Fade Out'],['slide-left','Slide Left'],['slide-right','Slide Right'],['slide-up','Slide Up'],['slide-down','Slide Down'],['flip-out','Flip Out'],['roll-out','Roll Out'],['bounce-out','Bounce Out'],['blur-out','Blur Out']],
@@ -948,13 +989,6 @@
     let videoLoadGeneration = 0;
     let editState = freshEditState();
     const editVideo = flow.querySelector('#reelEditVideo');
-    let snapCameraKit = null;
-    let snapSession = null;
-    let snapLenses = [];
-    let snapLoadingPromise = null;
-    let activeSnapLensId = '';
-    const snapCanvasHost = document.createElement('div');
-    snapCanvasHost.className = 'reel-snap-canvas-host';
     const editTime = flow.querySelector('#reelEditTime');
     const editPlayButton = flow.querySelector('[data-reel-flow-action="toggle-edit-play"]');
     const editPlayIcon = flow.querySelector('#reelEditPlayIcon');
@@ -964,110 +998,81 @@
     cropPlaybackMask.innerHTML = '<i data-crop-mask="top"></i><i data-crop-mask="right"></i><i data-crop-mask="bottom"></i><i data-crop-mask="left"></i>';
     editVideo.insertAdjacentElement('afterend', cropPlaybackMask);
 
-    function loadCameraKitBundle() {
-      if (window.SnapCameraKitWeb) return Promise.resolve(window.SnapCameraKitWeb);
-      return new Promise(function (resolve, reject) {
-        const existing = document.querySelector('script[data-camera-kit-bundle]');
-        if (existing) {
-          existing.addEventListener('load', function () { resolve(window.SnapCameraKitWeb); }, { once: true });
-          existing.addEventListener('error', function () { reject(new Error('Could not load Camera Kit.')); }, { once: true });
-          return;
-        }
-        const script = document.createElement('script');
-        script.src = '/camera-kit.bundle.js';
-        script.dataset.cameraKitBundle = '1';
-        script.onload = function () { resolve(window.SnapCameraKitWeb); };
-        script.onerror = function () { reject(new Error('Could not load Camera Kit.')); };
-        document.head.appendChild(script);
-      });
-    }
-    async function ensureSnapCameraKit() {
-      if (snapSession && snapLenses.length) return snapLenses;
-      if (snapLoadingPromise) return snapLoadingPromise;
-      snapLoadingPromise = (async function () {
-        const configResponse = await fetch('/api/camera-kit/config', { credentials: 'same-origin', cache: 'no-store' });
-        const config = await configResponse.json();
-        if (!configResponse.ok) throw new Error(config.error || 'Camera Kit configuration is unavailable.');
-        const sdk = await loadCameraKitBundle();
-        snapCameraKit = await sdk.bootstrapCameraKit({ apiToken: config.apiToken });
-        snapSession = await snapCameraKit.createSession();
-        const source = sdk.createVideoSource(editVideo);
-        await snapSession.setSource(source);
-        const result = await snapCameraKit.lensRepository.loadLensGroups([config.lensGroupId]);
-        if (result.errors && result.errors.length) {
-          const cause = result.errors[0];
-          throw new Error('Snap could not load this Lens Group: ' + (cause && cause.message ? cause.message : 'check the Staging token, Demo User, Trusted Origin and Lens Group ID.'));
-        }
-        snapLenses = result.lenses || [];
-        if (!snapLenses.length) throw new Error('This Lens Group is empty. Add Lenses to it in Snap Lens Scheduler, then reopen Effects.');
-        const canvas = snapSession.output.live;
-        canvas.classList.add('reel-snap-output');
-        editVideo.insertAdjacentElement('afterend', canvas);
-        snapSession.events.addEventListener('error', function (event) {
-          const detail = event.detail || {};
-          reelMessage(root, detail.error && detail.error.message ? detail.error.message : 'This Lens could not be rendered.');
-        });
-        return snapLenses;
-      })().catch(function (error) {
-        snapLoadingPromise = null;
-        throw error;
-      });
-      return snapLoadingPromise;
-    }
-    async function applySnapLens(lens, button, grid) {
-      grid.querySelectorAll('.reel-snap-effect').forEach(function (item) { item.disabled = true; });
-      if (button) button.classList.add('is-loading');
+    function effectPreviewImage() {
+      if (!editVideo.videoWidth || !editVideo.videoHeight) return '';
       try {
-        const clip = selectedClip();
-        if (!lens) {
-          if (snapSession) { await snapSession.removeLens(); snapSession.pause(); }
-          activeSnapLensId = '';
-          editStage.classList.remove('has-snap-lens');
-          if (clip) { clip.snapLensId = ''; clip.snapLensName = ''; }
-        } else {
-          await snapSession.applyLens(lens);
-          snapSession.play('live');
-          activeSnapLensId = lens.id;
-          editStage.classList.add('has-snap-lens');
-          if (clip) { clip.snapLensId = lens.id; clip.snapLensName = lens.name; clip.snapLensGroupId = lens.groupId; }
-        }
-        grid.querySelectorAll('.reel-snap-effect').forEach(function (item) { item.classList.toggle('is-active', item.dataset.lensId === activeSnapLensId); });
-      } finally {
-        grid.querySelectorAll('.reel-snap-effect').forEach(function (item) { item.disabled = false; item.classList.remove('is-loading'); });
-      }
+        const canvas = document.createElement('canvas');
+        canvas.width = 160; canvas.height = 160;
+        const context = canvas.getContext('2d');
+        const sourceRatio = editVideo.videoWidth / editVideo.videoHeight;
+        let sx = 0, sy = 0, sw = editVideo.videoWidth, sh = editVideo.videoHeight;
+        if (sourceRatio > 1) { sw = editVideo.videoHeight; sx = (editVideo.videoWidth - sw) / 2; }
+        else { sh = editVideo.videoWidth; sy = (editVideo.videoHeight - sh) / 2; }
+        context.drawImage(editVideo, sx, sy, sw, sh, 0, 0, 160, 160);
+        return canvas.toDataURL('image/jpeg', .78);
+      } catch (_error) { return ''; }
     }
-    function openSnapEffectsEditor() {
+    function openBuiltInEffectsEditor() {
       const wrap = document.createElement('div');
-      wrap.className = 'reel-snap-effects';
-      wrap.innerHTML = '<input class="reel-snap-search" type="search" placeholder="Search for effects" aria-label="Search for effects"><div class="reel-snap-status">Loading effects…</div><div class="reel-snap-grid"></div>';
-      const search = wrap.querySelector('.reel-snap-search');
-      const status = wrap.querySelector('.reel-snap-status');
-      const grid = wrap.querySelector('.reel-snap-grid');
+      wrap.className = 'reel-native-effects';
+      wrap.innerHTML = '<input class="reel-effect-search" type="search" placeholder="Search for effects" aria-label="Search for effects"><div class="reel-effect-categories" role="tablist"></div><div class="reel-effect-status"></div><div class="reel-effect-grid"></div>';
+      const search = wrap.querySelector('.reel-effect-search');
+      const categories = wrap.querySelector('.reel-effect-categories');
+      const status = wrap.querySelector('.reel-effect-status');
+      const grid = wrap.querySelector('.reel-effect-grid');
+      const previewImage = effectPreviewImage();
+      const categoryNames = ['All'].concat(Array.from(new Set(reelEffectCatalog.map(function (effect) { return effect.category; }))));
+      let activeCategory = 'All';
       openToolPanel('Effects', wrap);
-      function renderLenses(query) {
-        const normalized = String(query || '').trim().toLowerCase();
-        const visible = snapLenses.filter(function (lens) { return !normalized || lens.name.toLowerCase().includes(normalized); });
+
+      function activeEffectId() {
+        const target = selectedClip() || editState;
+        return target && reelEffectIds.has(target.effect) ? target.effect : 'none';
+      }
+      function renderEffects() {
+        const normalized = String(search.value || '').trim().toLowerCase();
+        const visible = reelEffectCatalog.filter(function (effect) {
+          return (activeCategory === 'All' || effect.category === activeCategory)
+            && (!normalized || effect.name.toLowerCase().includes(normalized) || effect.category.toLowerCase().includes(normalized));
+        });
         grid.replaceChildren();
-        const none = document.createElement('button');
-        none.type = 'button'; none.className = 'reel-snap-effect' + (!activeSnapLensId ? ' is-active' : ''); none.dataset.lensId = '';
-        none.innerHTML = '<span class="reel-snap-effect-thumb reel-snap-none"></span><strong>None</strong>';
-        none.addEventListener('click', function () { applySnapLens(null, none, grid).catch(function (error) { reelMessage(root, error.message); }); });
-        grid.appendChild(none);
-        visible.forEach(function (lens) {
+        visible.forEach(function (effect) {
           const button = document.createElement('button');
-          button.type = 'button'; button.className = 'reel-snap-effect' + (lens.id === activeSnapLensId ? ' is-active' : ''); button.dataset.lensId = lens.id;
-          const thumb = document.createElement('span'); thumb.className = 'reel-snap-effect-thumb';
-          const imageUrl = lens.preview && lens.preview.imageUrl ? lens.preview.imageUrl : lens.iconUrl;
-          if (imageUrl) thumb.style.backgroundImage = 'url("' + String(imageUrl).replace(/"/g, '%22') + '")';
-          const label = document.createElement('strong'); label.textContent = lens.name;
+          button.type = 'button';
+          button.className = 'reel-effect-option' + (effect.id === activeEffectId() ? ' is-active' : '');
+          button.dataset.effectId = effect.id;
+          const thumb = document.createElement('span');
+          thumb.className = 'reel-effect-thumb' + (effect.id === 'none' ? ' reel-effect-none' : '');
+          if (previewImage) thumb.style.backgroundImage = 'url("' + previewImage + '")';
+          thumb.style.filter = effect.filter || 'none';
+          const label = document.createElement('strong'); label.textContent = effect.name;
           button.append(thumb, label);
-          button.addEventListener('click', function () { applySnapLens(lens, button, grid).catch(function (error) { reelMessage(root, error.message); }); });
+          button.addEventListener('click', function () {
+            const before = captureEditorSnapshot();
+            const target = selectedClip() || editState;
+            target.effect = effect.id;
+            applyPreviewEdits();
+            renderClipTimeline();
+            recordEditorChange(before);
+            grid.querySelectorAll('.reel-effect-option').forEach(function (item) { item.classList.toggle('is-active', item.dataset.effectId === effect.id); });
+            reelMessage(root, effect.id === 'none' ? 'Effect removed' : effect.name + ' applied');
+          });
           grid.appendChild(button);
         });
-        status.textContent = visible.length ? visible.length + ' effects available' : (snapLenses.length ? 'No effects match this search' : 'This Lens Group contains no effects');
+        status.textContent = visible.length ? visible.length + ' built-in effects' : 'No effects match this search';
       }
-      search.addEventListener('input', function () { renderLenses(search.value); });
-      ensureSnapCameraKit().then(function () { renderLenses(''); }).catch(function (error) { status.textContent = error.message; reelMessage(root, error.message); });
+      categoryNames.forEach(function (name) {
+        const button = document.createElement('button');
+        button.type = 'button'; button.textContent = name; button.className = name === activeCategory ? 'is-active' : '';
+        button.addEventListener('click', function () {
+          activeCategory = name;
+          categories.querySelectorAll('button').forEach(function (item) { item.classList.toggle('is-active', item === button); });
+          renderEffects();
+        });
+        categories.appendChild(button);
+      });
+      search.addEventListener('input', renderEffects);
+      renderEffects();
     }
     const editCurrentLabel = flow.querySelector('#reelEditCurrent');
     const editTotalLabel = flow.querySelector('#reelEditTotal');
@@ -1219,9 +1224,9 @@
       recordEditorChange(historyBeforeMute);
     });
     syncTimelineMuteButton();
-    const effectOrder = ['none', 'warm', 'cool', 'mono', 'vivid'];
+    const effectOrder = reelEffectCatalog.map(function (effect) { return effect.id; });
     const stickers = ['', '✨', '❤️', '🔥', '😊'];
-    const effectFilters = { none: '', warm: 'sepia(.22) hue-rotate(-8deg)', cool: 'hue-rotate(18deg) saturate(.9)', mono: 'grayscale(1)', vivid: 'saturate(1.45) contrast(1.08)' };
+    const effectFilters = reelEffectFilters;
     // These belong to the editor. Keeping them in this scope makes the
     // animation menu, live preview and canvas export use the same data.
     const clipAnimationPresets = {
@@ -1325,7 +1330,7 @@
         brightness: Math.min(1.5, Math.max(.5, Number(source.brightness) || 1)),
         contrast: Math.min(1.5, Math.max(.5, Number(source.contrast) || 1)),
         saturation: Math.min(2, Math.max(0, Number(source.saturation) || 1)),
-        effect: ['none','warm','cool','mono','vivid'].includes(source.effect) ? source.effect : 'none',
+        effect: reelEffectIds.has(source.effect) ? source.effect : 'none',
         text: String(source.text || '').slice(0, 100),
         sticker: String(source.sticker || '').slice(0, 8),
         captions: Boolean(source.captions),
@@ -3353,7 +3358,7 @@
       else if (toolName === 'speed') openSpeedEditor();
       else if (toolName === 'crop') openCropEditor();
       else if (toolName === 'animation') openAnimationEditor();
-      else if (toolName === 'effects') openSnapEffectsEditor();
+      else if (toolName === 'effects') openBuiltInEffectsEditor();
       else if (toolName === 'filters' || toolName === 'magic') {
         const clip = selectedClip(); if (!clip) return;
         const before = captureEditorSnapshot();
@@ -3654,7 +3659,7 @@
           recordEditorChange(historyBefore);
           reelMessage(root, target.fit === 'cover' ? 'Video fills the frame' : 'Full video is visible');
         } else if (name === 'effects') {
-          openSnapEffectsEditor();
+          openBuiltInEffectsEditor();
         } else if (name === 'filters' || name === 'magic') {
           const historyBefore = captureEditorSnapshot();
           const target = currentEditingTarget();
