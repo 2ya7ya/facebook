@@ -1909,18 +1909,23 @@
         const insetRight = index < layout.length - 1 ? gap / 2 : 0;
         segment.style.left = (item.start * pixelsPerSecond + insetLeft) + 'px';
         segment.style.width = Math.max(2, item.duration * pixelsPerSecond - insetLeft - insetRight) + 'px';
-        const sourceSpan = Math.max(.05, item.clip.sourceEnd - item.clip.sourceStart);
         const frames = item.clip.thumbnail ? [{ time: item.clip.sourceStart, src: item.clip.thumbnail }] : timelineFrameSources.filter(function (frame) { return frame.time >= item.clip.sourceStart - .5 && frame.time <= item.clip.sourceEnd + .5; });
         const usable = frames.length ? frames : timelineFrameSources.slice(0, 1);
-        usable.forEach(function (frame, frameIndex) {
+        const tileCount = Math.max(1, Math.ceil(item.duration));
+        for (let tileIndex = 0; tileIndex < tileCount; tileIndex += 1) {
+          const outputOffset = Math.min(item.duration, tileIndex);
+          const desiredSourceTime = item.clip.sourceStart + sourceOffsetForOutputTime(item.clip, outputOffset);
+          const frame = usable.reduce(function (closest, candidate) {
+            return !closest || Math.abs(candidate.time - desiredSourceTime) < Math.abs(closest.time - desiredSourceTime) ? candidate : closest;
+          }, null);
+          if (!frame) continue;
           const image = document.createElement('img');
           image.alt = '';
           image.src = frame.src;
-          const sourceOffset = Math.max(0, Math.min(sourceSpan, frame.time - item.clip.sourceStart));
-          image.style.left = item.clip.thumbnail ? '0px' : ((outputOffsetForSourceOffset(item.clip, sourceOffset) * pixelsPerSecond) + 'px');
-          image.style.width = item.clip.thumbnail ? '100%' : (Math.max(2, pixelsPerSecond / speedAtSourceOffset(item.clip, sourceOffset) + 1) + 'px');
+          image.style.left = (tileIndex * pixelsPerSecond) + 'px';
+          image.style.width = (pixelsPerSecond + 1) + 'px';
           segment.appendChild(image);
-        });
+        }
         const meta = document.createElement('span');
         meta.className = 'reel-clip-meta';
         const changedSpeed = item.clip.speedCurve !== 'none' || Math.abs((Number(item.clip.speed) || 1) - 1) > .001;
@@ -2668,7 +2673,7 @@
       let historyRecorded = false;
       const editor = document.createElement('div');
       editor.className = 'reel-speed-editor';
-      editor.innerHTML = '<div class="reel-speed-tabs-row"><div class="reel-speed-tabs" role="tablist"><button type="button" data-speed-tab="normal">Normal</button><button type="button" data-speed-tab="curve">Curve</button></div><button type="button" class="reel-speed-done" aria-label="Apply speed"><img src="speed-checkmark.jpg" alt=""></button></div><section class="reel-speed-pane reel-speed-normal"><div class="reel-speed-scale"><div class="reel-speed-labels"><span style="left:0%">0.1x</span><span style="left:25%">1x</span><span style="left:50%">2x</span><span style="left:75%">5x</span><span style="left:100%">10x</span></div><input type="range" min="0" max="100" step=".25" aria-label="Clip speed"><div class="reel-speed-ticks" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div></section><section class="reel-speed-pane reel-speed-curve" hidden><div class="reel-speed-presets"></div></section>';
+      editor.innerHTML = '<div class="reel-speed-tabs-row"><div class="reel-speed-tabs" role="tablist"><button type="button" data-speed-tab="normal">Normal</button><button type="button" data-speed-tab="curve">Curve</button></div><button type="button" class="reel-speed-done" aria-label="Apply speed"><svg class="reel-speed-done-icon" viewBox="0 0 48 48" aria-hidden="true"><path d="M8 25.5l10.3 10L40 9.5"/></svg></button></div><section class="reel-speed-pane reel-speed-normal"><div class="reel-speed-scale"><div class="reel-speed-labels"><span style="left:0%">0.1x</span><span style="left:25%">1x</span><span style="left:50%">2x</span><span style="left:75%">5x</span><span style="left:100%">10x</span></div><input type="range" min="0" max="100" step=".25" aria-label="Clip speed"><div class="reel-speed-ticks" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div></section><section class="reel-speed-pane reel-speed-curve" hidden><div class="reel-speed-presets"></div></section>';
       const normalTab = editor.querySelector('[data-speed-tab="normal"]');
       const curveTab = editor.querySelector('[data-speed-tab="curve"]');
       const normalPane = editor.querySelector('.reel-speed-normal');
@@ -2712,12 +2717,11 @@
         recordOnce();
       });
       const presets = [
-        ['none','None'], ['custom','Custom'], ['montage','Montage'], ['highlight','Highlight'],
+        ['none','None'], ['montage','Montage'], ['highlight','Highlight'],
         ['bullet','Bullet'], ['jump-cut','Jump Cut'], ['flash-in','Flash In'], ['flash-out','Flash Out']
       ];
       function curveSvg(key) {
         if (key === 'none') return '<svg viewBox="0 0 72 56" aria-hidden="true"><path d="M19 13L53 47M53 13L19 47"/></svg>';
-        if (key === 'custom') return '<svg viewBox="0 0 72 56" aria-hidden="true"><path d="M12 18H60M12 38H60"/><circle cx="27" cy="18" r="5"/><circle cx="46" cy="38" r="5"/></svg>';
         const values = speedCurveProfiles[key];
         const max = Math.max.apply(null, values), min = Math.min.apply(null, values);
         const points = values.map(function (point, index) { return (8 + index * 56 / (values.length - 1)).toFixed(1) + ',' + (46 - (point - min) / Math.max(.01, max - min) * 36).toFixed(1); }).join(' ');
