@@ -1122,8 +1122,8 @@
           window.requestAnimationFrame(function () {
             window.requestAnimationFrame(function () { grid.classList.remove(inClass); });
           });
-          window.setTimeout(function () { categoryAnimating = false; }, 190);
-        }, 115);
+          window.setTimeout(function () { categoryAnimating = false; }, 240);
+        }, 165);
       }
       categoryNames.forEach(function (name) {
         const button = document.createElement('button');
@@ -1298,8 +1298,9 @@
         timelineMutedIndicator.style.left = (trimLeftPx + 9 + 52) + 'px';
         timelineMutedIndicator.style.top = '32px';
       } else {
-        // Keep the indicator inside the filmstrip, at its top-left corner.
-        timelineMutedIndicator.style.left = (trimLeftPx + 8) + 'px';
+        // The mute state applies to the complete reel, so its badge stays at
+        // the beginning of the full timeline instead of following split clips.
+        timelineMutedIndicator.style.left = '8px';
         timelineMutedIndicator.style.top = '31px';
       }
     }
@@ -1403,7 +1404,7 @@
     const effectSelectionToolbar = document.createElement('div');
     effectSelectionToolbar.className = 'reel-effect-selection-toolbar';
     effectSelectionToolbar.setAttribute('aria-hidden', 'true');
-    effectSelectionToolbar.innerHTML = '<button type="button" data-effect-track-action="close" aria-label="Close effect controls"><svg viewBox="0 0 32 32"><path d="M7 11l9 9 9-9"/></svg></button><button type="button" data-effect-track-action="replace"><svg viewBox="0 0 32 32"><path d="M7 10h16l-4-4M25 22H9l4 4M23 10l3 3-3 3M9 22l-3-3 3-3"/></svg><span>Replace effect</span></button><button type="button" data-effect-track-action="copy"><svg viewBox="0 0 32 32"><rect x="11" y="7" width="14" height="14" rx="2"/><rect x="6" y="12" width="14" height="14" rx="2"/></svg><span>Copy</span></button><button type="button" data-effect-track-action="delete"><svg viewBox="0 0 32 32"><path d="M8 10h16M13 6h6l1 4M11 10l1 16h8l1-16M15 14v8M18 14v8"/></svg><span>Delete</span></button>';
+    effectSelectionToolbar.innerHTML = '<button type="button" data-effect-track-action="close" aria-label="Close effect controls"><svg viewBox="0 0 32 32"><path d="M7 11l9 9 9-9"/></svg></button><button type="button" data-effect-track-action="replace"><svg viewBox="0 0 32 32"><path d="M7 10h16l-4-4M25 22H9l4 4M23 10l3 3-3 3M9 22l-3-3 3-3"/></svg><span>Replace effect</span></button><button type="button" data-effect-track-action="delete"><svg viewBox="0 0 32 32"><path d="M8 10h16M13 6h6l1 4M11 10l1 16h8l1-16M15 14v8M18 14v8"/></svg><span>Delete</span></button>';
     if (editStage) editStage.appendChild(effectSelectionToolbar);
     function selectedEffectClip() {
       return ensureClipState().find(function (clip) { return clip.id === selectedEffectTrackClipId && clip.visualEffect && clip.visualEffect !== 'none'; }) || null;
@@ -1438,21 +1439,12 @@
       const clip = selectedEffectClip();
       if (action === 'close') { clearEffectTrackSelection(); return; }
       if (!clip) return;
-      if (action === 'replace') { setSelectedClip(clip.id, false); openBuiltInEffectsEditor(); return; }
+      if (action === 'replace') { setSelectedClip(clip.id, false); clearEffectTrackSelection(); openBuiltInEffectsEditor(); return; }
       if (action === 'delete') {
         const before = captureEditorSnapshot();
         clip.visualEffect = 'none'; clip.visualEffectStart = 0; clip.visualEffectEnd = 1;
         clearEffectTrackSelection(); applyPreviewEdits(); renderClipTimeline(); recordEditorChange(before);
         reelMessage(root, 'Effect deleted'); return;
-      }
-      if (action === 'copy') {
-        const clips = ensureClipState(); const sourceIndex = clips.indexOf(clip);
-        const target = clips[sourceIndex + 1] || clips[sourceIndex - 1];
-        if (!target) { reelMessage(root, 'Add another clip to place the copied effect'); return; }
-        const before = captureEditorSnapshot();
-        target.visualEffect = clip.visualEffect; target.visualEffectStart = clip.visualEffectStart; target.visualEffectEnd = clip.visualEffectEnd;
-        selectedEffectTrackClipId = target.id; applyPreviewEdits(); renderClipTimeline(); recordEditorChange(before); syncEffectSelectionToolbar();
-        reelMessage(root, 'Effect copied');
       }
     });
 
@@ -2203,7 +2195,9 @@
       const trimLeftPx = Math.max(0, start * pixelsPerSecond);
       timelineSelection.style.left = trimLeftPx + 'px';
       timelineSelection.style.width = Math.max(2, (end - start) * pixelsPerSecond) + 'px';
-      timelineMuteRail.style.left = (trimLeftPx - 50) + 'px';
+      // One global mute control belongs to the complete reel, not to the
+      // currently selected split clip.
+      timelineMuteRail.style.left = '-50px';
       trimDurationLabel.textContent = Math.max(.05, end - start).toFixed(1).replace(/\.0$/, '') + 's';
       trimDurationLabel.style.left = (trimLeftPx + 9) + 'px';
       updateMutedIndicatorPosition(trimLeftPx);
@@ -2873,6 +2867,7 @@
       if (event.target.closest('.reel-trim-handle')) return;
       if (event.target.closest('.reel-timeline-add')) return;
       if (event.target.closest('.reel-timeline-mute')) return;
+      if (selectedEffectTrackClipId && !event.target.closest('.reel-effect-track')) clearEffectTrackSelection();
       timelinePointerOnSound = Boolean(event.target.closest('.reel-timeline-audio,.reel-timeline-sound-label'));
       const stoppedSoundInertia = Boolean(timelineInertiaFrame && timelinePointerOnSound);
       cancelTimelineInertia();
