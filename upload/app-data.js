@@ -1114,7 +1114,10 @@
         captions: Boolean(source.captions),
         overlay: Boolean(source.overlay),
         fit: source.fit === 'cover' ? 'cover' : 'contain',
-        cropRatio: ['freeform','9:16','16:9','1:1','3:4','4:3'].includes(source.cropRatio) ? source.cropRatio : 'freeform'
+        cropRatio: ['freeform','9:16','16:9','1:1','3:4','4:3'].includes(source.cropRatio) ? source.cropRatio : 'freeform',
+        cropAspect: Math.max(0, Number(source.cropAspect) || 0),
+        cropX: Math.min(1, Math.max(0, Number(source.cropX) || .5)),
+        cropY: Math.min(1, Math.max(0, Number(source.cropY) || .5))
       };
     }
     function normalizeClientClip(clip, fallbackStart, fallbackEnd) {
@@ -1560,8 +1563,9 @@
       const filter = 'brightness(' + settings.brightness + ') contrast(' + settings.contrast + ') saturate(' + settings.saturation + ') ' + (effectFilters[settings.effect] || '');
       previewVideos.forEach(function (video) {
         video.style.filter = filter;
-        const cropRatio = settings.cropRatio && settings.cropRatio !== 'freeform' ? settings.cropRatio.replace(':', ' / ') : '';
+        const cropRatio = settings.cropRatio && settings.cropRatio !== 'freeform' ? settings.cropRatio.replace(':', ' / ') : (Number(settings.cropAspect) > 0 ? String(settings.cropAspect) : '');
         video.style.objectFit = cropRatio ? 'cover' : settings.fit;
+        video.style.objectPosition = ((Number(settings.cropX) || .5) * 100) + '% ' + ((Number(settings.cropY) || .5) * 100) + '%';
         if (video === editVideo) {
           video.classList.toggle('has-crop-ratio', Boolean(cropRatio));
           if (cropRatio) video.style.setProperty('--reel-crop-ratio', cropRatio);
@@ -2684,7 +2688,9 @@
       cropLayer.setAttribute('aria-label', 'Crop video');
       cropLayer.innerHTML = '<div class="reel-crop-preview-area"><div class="reel-crop-viewport"><video playsinline preload="auto"></video><div class="reel-crop-grid" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></div></div></div><div class="reel-crop-transport"><span class="reel-crop-time">00:00/00:00</span><button type="button" class="reel-crop-play" aria-label="Play video"><svg viewBox="0 0 40 40"><path d="M12 7l21 13-21 13z"/></svg></button></div><div class="reel-crop-strip"><div class="reel-crop-thumbnails"></div><input type="range" min="0" value="0" step=".01" aria-label="Crop timeline"><span class="reel-crop-strip-playhead"></span></div><div class="reel-crop-ratios"></div><div class="reel-crop-actions"><button type="button" class="reel-crop-reset"><svg viewBox="0 0 32 32"><path d="M8 10H2v-6"/><path d="M3 10a13 13 0 1 1-1 10"/></svg><span>Reset</span></button><button type="button" class="reel-crop-apply" aria-label="Apply crop"><svg viewBox="0 0 48 48"><path d="M8 25.5l10.3 10L40 9.5"/></svg></button></div>';
       const cropVideo = cropLayer.querySelector('video');
+      const previewArea = cropLayer.querySelector('.reel-crop-preview-area');
       const viewport = cropLayer.querySelector('.reel-crop-viewport');
+      const cropGrid = cropLayer.querySelector('.reel-crop-grid');
       const timeLabel = cropLayer.querySelector('.reel-crop-time');
       const playButton = cropLayer.querySelector('.reel-crop-play');
       const scrubber = cropLayer.querySelector('.reel-crop-strip input');
@@ -2692,6 +2698,10 @@
       const thumbnailHost = cropLayer.querySelector('.reel-crop-thumbnails');
       const ratioHost = cropLayer.querySelector('.reel-crop-ratios');
       let draftRatio = clip.cropRatio || 'freeform';
+      let draftCropAspect = Math.max(0, Number(clip.cropAspect) || 0);
+      let draftCropX = Math.min(1, Math.max(0, Number(clip.cropX) || .5));
+      let draftCropY = Math.min(1, Math.max(0, Number(clip.cropY) || .5));
+      let freeformRect = null;
       const ratios = [
         ['freeform','Freeform','9 / 16'], ['9:16','9:16','9 / 16'], ['16:9','16:9','16 / 9'],
         ['1:1','1:1','1 / 1'], ['3:4','3:4','3 / 4'], ['4:3','4:3','4 / 3']
@@ -2707,11 +2717,40 @@
         scrubber.value = Math.max(0, Math.min(total, current - clip.sourceStart));
         stripPlayhead.style.left = (Math.max(0, Math.min(1, (current - clip.sourceStart) / total)) * 100) + '%';
       }
-      function selectCropRatio(value) {
+      function setCropRect(rect) {
+        const areaWidth = previewArea.clientWidth;
+        const areaHeight = previewArea.clientHeight;
+        const width = Math.max(72, Math.min(areaWidth, rect.width));
+        const height = Math.max(72, Math.min(areaHeight, rect.height));
+        const left = Math.max(0, Math.min(areaWidth - width, rect.left));
+        const top = Math.max(0, Math.min(areaHeight - height, rect.top));
+        viewport.style.left = left + 'px'; viewport.style.top = top + 'px';
+        viewport.style.width = width + 'px'; viewport.style.height = height + 'px';
+        viewport.style.aspectRatio = 'auto';
+        draftCropX = areaWidth ? (left + width / 2) / areaWidth : .5;
+        draftCropY = areaHeight ? (top + height / 2) / areaHeight : .5;
+        cropVideo.style.objectPosition = (draftCropX * 100) + '% ' + (draftCropY * 100) + '%';
+      }
+      function fitCropRatio(aspect, centerX, centerY) {
+        const areaWidth = previewArea.clientWidth;
+        const areaHeight = previewArea.clientHeight;
+        if (!areaWidth || !areaHeight) return;
+        const maxWidth = areaWidth * .76;
+        let width = maxWidth, height = width / aspect;
+        if (height > areaHeight) { height = areaHeight; width = height * aspect; }
+        const x = centerX == null ? .5 : centerX, y = centerY == null ? .5 : centerY;
+        setCropRect({ left: areaWidth * x - width / 2, top: areaHeight * y - height / 2, width: width, height: height });
+      }
+      function selectCropRatio(value, preserveFreeform) {
+        if (preserveFreeform !== false && draftRatio === 'freeform' && viewport.clientWidth) freeformRect = { left: viewport.offsetLeft, top: viewport.offsetTop, width: viewport.clientWidth, height: viewport.clientHeight };
         draftRatio = value;
         const selected = ratios.find(function (item) { return item[0] === value; }) || ratios[0];
-        viewport.style.aspectRatio = selected[2];
         ratioHost.querySelectorAll('button').forEach(function (button) { button.classList.toggle('is-active', button.dataset.ratio === value); });
+        requestAnimationFrame(function () {
+          if (value === 'freeform' && freeformRect) setCropRect(freeformRect);
+          else if (value === 'freeform') fitCropRatio(draftCropAspect || (9 / 16), draftCropX, draftCropY);
+          else fitCropRatio(Number(selected[2].split('/')[0]) / Number(selected[2].split('/')[1]), .5, .5);
+        });
       }
       ratios.forEach(function (ratio) {
         const button = document.createElement('button');
@@ -2720,6 +2759,43 @@
         button.innerHTML = '<span class="reel-crop-ratio-icon" style="aspect-ratio:' + ratio[2] + '"></span><strong>' + ratio[1] + '</strong>';
         button.addEventListener('click', function () { selectCropRatio(ratio[0]); });
         ratioHost.appendChild(button);
+      });
+      cropGrid.addEventListener('pointerdown', function (event) {
+        if (draftRatio !== 'freeform') return;
+        const rect = viewport.getBoundingClientRect();
+        const threshold = 30;
+        const edges = {
+          left: Math.abs(event.clientX - rect.left) <= threshold,
+          right: Math.abs(event.clientX - rect.right) <= threshold,
+          top: Math.abs(event.clientY - rect.top) <= threshold,
+          bottom: Math.abs(event.clientY - rect.bottom) <= threshold
+        };
+        if (!edges.left && !edges.right && !edges.top && !edges.bottom) return;
+        event.preventDefault(); event.stopPropagation();
+        const startX = event.clientX, startY = event.clientY;
+        const start = { left: viewport.offsetLeft, top: viewport.offsetTop, width: viewport.clientWidth, height: viewport.clientHeight };
+        function resize(moveEvent) {
+          moveEvent.preventDefault();
+          const dx = moveEvent.clientX - startX, dy = moveEvent.clientY - startY;
+          let left = start.left, top = start.top, width = start.width, height = start.height;
+          if (edges.left) { left += dx; width -= dx; }
+          if (edges.right) width += dx;
+          if (edges.top) { top += dy; height -= dy; }
+          if (edges.bottom) height += dy;
+          if (width < 72) { if (edges.left) left -= 72 - width; width = 72; }
+          if (height < 72) { if (edges.top) top -= 72 - height; height = 72; }
+          setCropRect({ left: left, top: top, width: width, height: height });
+          draftCropAspect = viewport.clientWidth / Math.max(1, viewport.clientHeight);
+          freeformRect = { left: viewport.offsetLeft, top: viewport.offsetTop, width: viewport.clientWidth, height: viewport.clientHeight };
+        }
+        function finish() {
+          window.removeEventListener('pointermove', resize);
+          window.removeEventListener('pointerup', finish);
+          window.removeEventListener('pointercancel', finish);
+        }
+        window.addEventListener('pointermove', resize, { passive: false });
+        window.addEventListener('pointerup', finish, { once: true });
+        window.addEventListener('pointercancel', finish, { once: true });
       });
       const frames = clip.thumbnail ? [{ src: clip.thumbnail }] : timelineFrameSources.filter(function (frame) { return frame.time >= clip.sourceStart - .1 && frame.time <= clip.sourceEnd + .1; });
       const visibleFrames = frames.length ? frames : timelineFrameSources.slice(0, 12);
@@ -2745,11 +2821,17 @@
         if (cropVideo.paused) cropVideo.play().catch(function () {}); else cropVideo.pause();
       });
       scrubber.addEventListener('input', function () { try { cropVideo.currentTime = clip.sourceStart + Number(scrubber.value); } catch (error) {} updateCropTime(); });
-      cropLayer.querySelector('.reel-crop-reset').addEventListener('click', function () { selectCropRatio('freeform'); });
+      cropLayer.querySelector('.reel-crop-reset').addEventListener('click', function () {
+        freeformRect = null; draftCropAspect = 0; draftCropX = .5; draftCropY = .5;
+        selectCropRatio('freeform', false);
+      });
       function closeCropEditor(apply) {
         cropVideo.pause();
         if (apply) {
           clip.cropRatio = draftRatio;
+          clip.cropAspect = draftRatio === 'freeform' ? draftCropAspect : 0;
+          clip.cropX = draftRatio === 'freeform' ? draftCropX : .5;
+          clip.cropY = draftRatio === 'freeform' ? draftCropY : .5;
           applyPreviewEdits();
           renderClipTimeline();
           recordEditorChange(before);
@@ -2760,9 +2842,9 @@
         seekSequenceTime(currentSequenceTime, true);
       }
       cropLayer.querySelector('.reel-crop-apply').addEventListener('click', function () { closeCropEditor(true); });
-      selectCropRatio(draftRatio);
       editPanel.appendChild(cropLayer);
       flow.classList.add('is-crop-editing');
+      selectCropRatio(draftRatio);
       cropVideo.load();
     }
 
@@ -2911,10 +2993,13 @@
       let sx = 0, sy = 0, sw = video.videoWidth, sh = video.videoHeight;
       let dx = xOffset || 0, dy = 0, dw = canvas.width, dh = canvas.height;
       const cropRatios = { '9:16': 9 / 16, '16:9': 16 / 9, '1:1': 1, '3:4': 3 / 4, '4:3': 4 / 3 };
-      const cropRatio = cropRatios[clip.cropRatio];
+      const customCropRatio = clip.cropRatio === 'freeform' ? Math.max(0, Number(clip.cropAspect) || 0) : 0;
+      const cropRatio = cropRatios[clip.cropRatio] || customCropRatio;
+      const cropX = Number.isFinite(Number(clip.cropX)) ? Math.min(1, Math.max(0, Number(clip.cropX))) : .5;
+      const cropY = Number.isFinite(Number(clip.cropY)) ? Math.min(1, Math.max(0, Number(clip.cropY))) : .5;
       if (cropRatio) {
-        if (sourceRatio > cropRatio) { sw = video.videoHeight * cropRatio; sx = (video.videoWidth - sw) / 2; }
-        else { sh = video.videoWidth / cropRatio; sy = (video.videoHeight - sh) / 2; }
+        if (sourceRatio > cropRatio) { sw = video.videoHeight * cropRatio; sx = (video.videoWidth - sw) * cropX; }
+        else { sh = video.videoWidth / cropRatio; sy = (video.videoHeight - sh) * cropY; }
         sourceRatio = cropRatio;
       }
       if (clip.fit === 'cover') {
