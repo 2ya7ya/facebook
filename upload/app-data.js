@@ -1103,7 +1103,8 @@
     function inheritedClipSettings(source) {
       source = source || editState;
       return {
-        speed: Math.min(4, Math.max(.25, Number(source.speed) || 1)),
+        speed: Math.min(10, Math.max(.1, Number(source.speed) || 1)),
+        speedCurve: ['none','custom','montage','highlight','bullet','jump-cut','flash-in','flash-out'].includes(source.speedCurve) ? source.speedCurve : 'none',
         brightness: Math.min(1.5, Math.max(.5, Number(source.brightness) || 1)),
         contrast: Math.min(1.5, Math.max(.5, Number(source.contrast) || 1)),
         saturation: Math.min(2, Math.max(0, Number(source.saturation) || 1)),
@@ -1155,7 +1156,61 @@
       if (!activePlaybackClipId || !editState.clips.some(function (clip) { return clip.id === activePlaybackClipId; })) activePlaybackClipId = selectedClipId;
       return editState.clips;
     }
-    function clipOutputDuration(clip) { return Math.max(.05, (clip.sourceEnd - clip.sourceStart) / (Number(clip.speed) || 1)); }
+    const speedCurveProfiles = {
+      custom: [1, 1.7, .65, 2.1, .72, 1.45, 1],
+      montage: [1, 2.5, .55, 2.25, .62, 2, 1],
+      highlight: [1, 1.75, .55, 1.9, .52, 1.65, 1],
+      bullet: [1.8, 1.25, .72, .3, .72, 1.25, 1.8],
+      'jump-cut': [.65, 1, 2.9, 1, .65],
+      'flash-in': [3, 2.35, 1.45, .8, 1],
+      'flash-out': [1, .8, 1.45, 2.35, 3]
+    };
+    const speedTimingCache = new WeakMap();
+    function speedAtSourceOffset(clip, sourceOffset) {
+      const profile = speedCurveProfiles[clip.speedCurve];
+      if (!profile) return Math.min(10, Math.max(.1, Number(clip.speed) || 1));
+      const span = Math.max(.001, clip.sourceEnd - clip.sourceStart);
+      const position = Math.min(1, Math.max(0, Number(sourceOffset) / span)) * (profile.length - 1);
+      const index = Math.min(profile.length - 2, Math.floor(position));
+      const mix = position - index;
+      return profile[index] + (profile[index + 1] - profile[index]) * mix;
+    }
+    function speedTimingMap(clip) {
+      const signature = [clip.sourceStart, clip.sourceEnd, clip.speed, clip.speedCurve].join(':');
+      const cached = speedTimingCache.get(clip);
+      if (cached && cached.signature === signature) return cached;
+      const span = Math.max(.05, clip.sourceEnd - clip.sourceStart);
+      const steps = 240;
+      const sourceStep = span / steps;
+      const sourceOffsets = [0];
+      const outputOffsets = [0];
+      let output = 0;
+      for (let index = 1; index <= steps; index += 1) {
+        output += sourceStep / speedAtSourceOffset(clip, (index - .5) * sourceStep);
+        sourceOffsets.push(index * sourceStep);
+        outputOffsets.push(output);
+      }
+      const result = { signature: signature, sourceOffsets: sourceOffsets, outputOffsets: outputOffsets, total: output, sourceStep: sourceStep };
+      speedTimingCache.set(clip, result);
+      return result;
+    }
+    function sourceOffsetForOutputTime(clip, outputTime) {
+      const map = speedTimingMap(clip);
+      const target = Math.min(map.total, Math.max(0, Number(outputTime) || 0));
+      let low = 0, high = map.outputOffsets.length - 1;
+      while (low + 1 < high) { const middle = (low + high) >> 1; if (map.outputOffsets[middle] <= target) low = middle; else high = middle; }
+      const range = Math.max(.000001, map.outputOffsets[high] - map.outputOffsets[low]);
+      return map.sourceOffsets[low] + (map.sourceOffsets[high] - map.sourceOffsets[low]) * ((target - map.outputOffsets[low]) / range);
+    }
+    function outputOffsetForSourceOffset(clip, sourceOffset) {
+      const map = speedTimingMap(clip);
+      const target = Math.min(map.sourceOffsets[map.sourceOffsets.length - 1], Math.max(0, Number(sourceOffset) || 0));
+      const position = Math.min(map.sourceOffsets.length - 1, target / map.sourceStep);
+      const low = Math.floor(position), high = Math.min(map.sourceOffsets.length - 1, low + 1);
+      return map.outputOffsets[low] + (map.outputOffsets[high] - map.outputOffsets[low]) * (position - low);
+    }
+    function clipOutputDuration(clip) { return Math.max(.05, speedTimingMap(clip).total); }
+    function effectiveClipSpeed(clip) { return (clip.sourceEnd - clip.sourceStart) / clipOutputDuration(clip); }
     function sequenceLayout() {
       const clips = ensureClipState();
       let cursor = 0;
@@ -1213,13 +1268,14 @@
       if (!item) return bounded;
       activePlaybackClipId = item.clip.id;
       const local = Math.min(item.duration, Math.max(0, bounded - item.start));
-      const sourceTime = Math.min(item.clip.sourceEnd - .001, item.clip.sourceStart + local * item.clip.speed);
-      editVideo.playbackRate = item.clip.speed;
+      const sourceOffset = sourceOffsetForOutputTime(item.clip, local);
+      const sourceTime = Math.min(item.clip.sourceEnd - .001, item.clip.sourceStart + sourceOffset);
+      editVideo.playbackRate = speedAtSourceOffset(item.clip, sourceOffset);
       if (syncVideo !== false) {
         sequenceSeekInProgress = true;
         const desiredSource = item.clip.sourceData || selectedVideoData;
         const applySeek = function () {
-          editVideo.playbackRate = item.clip.speed;
+          editVideo.playbackRate = speedAtSourceOffset(item.clip, sourceOffset);
           sequenceBoundarySeekActive = true;
           sequenceBoundaryWallStart = performance.now();
           sequenceBoundaryTimeStart = bounded;
@@ -1409,7 +1465,9 @@
       const item = currentClipItem();
       if (!item) return 0;
       const sourceTime = Number(editVideo.currentTime || item.clip.sourceStart);
-      currentSequenceTime = Math.min(item.end, Math.max(item.start, item.start + (sourceTime - item.clip.sourceStart) / item.clip.speed));
+      const sourceOffset = Math.max(0, sourceTime - item.clip.sourceStart);
+      currentSequenceTime = Math.min(item.end, Math.max(item.start, item.start + outputOffsetForSourceOffset(item.clip, sourceOffset)));
+      editVideo.playbackRate = speedAtSourceOffset(item.clip, sourceOffset);
       updateTransitionPreview(item);
       return currentSequenceTime;
     }
@@ -1507,9 +1565,11 @@
     }
     function closeToolPanel() {
       toolPanel.classList.remove('is-open');
+      toolPanel.classList.remove('is-speed-panel');
       toolPanel.setAttribute('aria-hidden', 'true');
     }
     function openToolPanel(title, body) {
+      toolPanel.classList.remove('is-speed-panel');
       toolPanel.innerHTML = '<header><strong></strong><button type="button" aria-label="Close">×</button></header><div class="reel-tool-panel-body"></div>';
       toolPanel.querySelector('strong').textContent = title;
       toolPanel.querySelector('.reel-tool-panel-body').appendChild(body);
@@ -1735,19 +1795,20 @@
         const initialEnd = item.end;
         const initialSourceStart = clip.sourceStart;
         const initialSourceEnd = clip.sourceEnd;
+        const trimSpeed = clip.speedCurve === 'none' ? clip.speed : effectiveClipSpeed(clip);
         let pendingStart = initialStart;
         let pendingEnd = initialEnd;
         function move(moveEvent) {
           moveEvent.preventDefault();
           const delta = (moveEvent.clientX - startX) / pixelsPerSecond;
           if (edge === 'start') {
-            const minDelta = (clip.availableStart - initialSourceStart) / clip.speed;
-            const maxDelta = (initialSourceEnd - initialSourceStart) / clip.speed - .1;
+            const minDelta = (clip.availableStart - initialSourceStart) / trimSpeed;
+            const maxDelta = (initialSourceEnd - initialSourceStart) / trimSpeed - .1;
             const boundedDelta = Math.max(minDelta, Math.min(maxDelta, delta));
             pendingStart = initialStart + boundedDelta;
           } else {
-            const minDelta = -((initialSourceEnd - initialSourceStart) / clip.speed - .1);
-            const maxDelta = (clip.availableEnd - initialSourceEnd) / clip.speed;
+            const minDelta = -((initialSourceEnd - initialSourceStart) / trimSpeed - .1);
+            const maxDelta = (clip.availableEnd - initialSourceEnd) / trimSpeed;
             const boundedDelta = Math.max(minDelta, Math.min(maxDelta, delta));
             pendingEnd = initialEnd + boundedDelta;
           }
@@ -1761,8 +1822,8 @@
           trimCounterFrozen = false;
           if (finishEvent && finishEvent.type === 'pointerup') {
             const historyBeforeTrim = captureEditorSnapshot();
-            if (edge === 'start') clip.sourceStart = Math.max(clip.availableStart, Math.min(clip.sourceEnd - .05, initialSourceStart + (pendingStart - initialStart) * clip.speed));
-            else clip.sourceEnd = Math.min(clip.availableEnd, Math.max(clip.sourceStart + .05, initialSourceEnd + (pendingEnd - initialEnd) * clip.speed));
+            if (edge === 'start') clip.sourceStart = Math.max(clip.availableStart, Math.min(clip.sourceEnd - .05, initialSourceStart + (pendingStart - initialStart) * trimSpeed));
+            else clip.sourceEnd = Math.min(clip.availableEnd, Math.max(clip.sourceStart + .05, initialSourceEnd + (pendingEnd - initialEnd) * trimSpeed));
             refreshSequenceDuration();
             renderClipTimeline();
             recordEditorChange(historyBeforeTrim);
@@ -1854,10 +1915,16 @@
           image.alt = '';
           image.src = frame.src;
           const sourceOffset = Math.max(0, Math.min(sourceSpan, frame.time - item.clip.sourceStart));
-          image.style.left = item.clip.thumbnail ? '0px' : (((sourceOffset / item.clip.speed) * pixelsPerSecond) + 'px');
-          image.style.width = item.clip.thumbnail ? '100%' : (Math.max(2, pixelsPerSecond / item.clip.speed + 1) + 'px');
+          image.style.left = item.clip.thumbnail ? '0px' : ((outputOffsetForSourceOffset(item.clip, sourceOffset) * pixelsPerSecond) + 'px');
+          image.style.width = item.clip.thumbnail ? '100%' : (Math.max(2, pixelsPerSecond / speedAtSourceOffset(item.clip, sourceOffset) + 1) + 'px');
           segment.appendChild(image);
         });
+        const meta = document.createElement('span');
+        meta.className = 'reel-clip-meta';
+        const changedSpeed = item.clip.speedCurve !== 'none' || Math.abs((Number(item.clip.speed) || 1) - 1) > .001;
+        const speedLabel = effectiveClipSpeed(item.clip).toFixed(1) + 'X';
+        meta.innerHTML = '<span class="reel-clip-duration">' + item.duration.toFixed(1) + 's</span>' + (changedSpeed ? '<span class="reel-clip-speed"><i aria-hidden="true"></i>' + speedLabel + '</span>' : '');
+        segment.appendChild(meta);
         segment.addEventListener('pointerdown', function (event) {
           const startX = event.clientX;
           const before = captureEditorSnapshot();
@@ -2023,9 +2090,10 @@
             const continuousBoundary = currentSource === nextSource && Math.abs(item.clip.sourceEnd - next.clip.sourceStart) <= .035;
             if (continuousBoundary) {
               activePlaybackClipId = next.clip.id;
-              const carriedLocal = Math.max(0, (Number(editVideo.currentTime) - next.clip.sourceStart) / Math.max(.25, Number(next.clip.speed) || 1));
+              const carriedSource = Math.max(0, Number(editVideo.currentTime) - next.clip.sourceStart);
+              const carriedLocal = outputOffsetForSourceOffset(next.clip, carriedSource);
               currentSequenceTime = Math.min(next.end, Math.max(next.start, next.start + carriedLocal));
-              editVideo.playbackRate = next.clip.speed;
+              editVideo.playbackRate = speedAtSourceOffset(next.clip, carriedSource);
               sequenceSeekInProgress = false;
               sequenceBoundarySeekActive = false;
               updateTransitionPreview(next);
@@ -2079,7 +2147,7 @@
     editVideo.addEventListener('play', function () {
       if (currentSequenceTime >= timelineDuration - .01) seekSequenceTime(0, true);
       const playingItem = currentClipItem();
-      if (playingItem) editVideo.playbackRate = playingItem.clip.speed;
+      if (playingItem) editVideo.playbackRate = speedAtSourceOffset(playingItem.clip, Math.max(0, Number(editVideo.currentTime) - playingItem.clip.sourceStart));
       syncFullscreenPauseUi();
       if (editPlayIcon) editPlayIcon.src = 'data:image/png;base64,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';
       cancelTimelineFollow();
@@ -2482,7 +2550,7 @@
       const item = clipAtSequenceTime(currentSequenceTime);
       if (!item) return;
       const local = currentSequenceTime - item.start;
-      const cutSource = item.clip.sourceStart + local * item.clip.speed;
+      const cutSource = item.clip.sourceStart + sourceOffsetForOutputTime(item.clip, local);
       if (cutSource <= item.clip.sourceStart + .05 || cutSource >= item.clip.sourceEnd - .05) {
         reelMessage(root, 'Move the playhead inside the clip to split it.');
         return;
@@ -2591,20 +2659,81 @@
       picker.click();
     }
 
-    function cycleSelectedClipSpeed() {
+    function openSpeedEditor() {
       const clip = selectedClip();
       if (!clip) return;
-      const speeds = [1, 1.25, 1.5, 2, .5];
       const before = captureEditorSnapshot();
-      const currentIndex = speeds.indexOf(Number(clip.speed));
-      clip.speed = speeds[(currentIndex + 1) % speeds.length];
-      refreshSequenceDuration();
-      renderClipTimeline();
-      const item = layoutForClip(clip.id);
-      seekSequenceTime(item ? item.start : 0, true);
-      updateTrimSelection();
-      recordEditorChange(before);
-      reelMessage(root, clip.speed + '× speed');
+      let historyRecorded = false;
+      const editor = document.createElement('div');
+      editor.className = 'reel-speed-editor';
+      editor.innerHTML = '<div class="reel-speed-tabs-row"><div class="reel-speed-tabs" role="tablist"><button type="button" data-speed-tab="normal">Normal</button><button type="button" data-speed-tab="curve">Curve</button></div><button type="button" class="reel-speed-done" aria-label="Apply speed">✓</button></div><section class="reel-speed-pane reel-speed-normal"><output class="reel-speed-value"></output><div class="reel-speed-scale"><div class="reel-speed-labels"><span style="left:0%">0.1x</span><span style="left:50%">1x</span><span style="left:65%">2x</span><span style="left:85%">5x</span><span style="left:100%">10x</span></div><input type="range" min="0" max="100" step=".25" aria-label="Clip speed"><div class="reel-speed-ticks" aria-hidden="true"></div></div></section><section class="reel-speed-pane reel-speed-curve" hidden><div class="reel-speed-presets"></div></section>';
+      const normalTab = editor.querySelector('[data-speed-tab="normal"]');
+      const curveTab = editor.querySelector('[data-speed-tab="curve"]');
+      const normalPane = editor.querySelector('.reel-speed-normal');
+      const curvePane = editor.querySelector('.reel-speed-curve');
+      const slider = editor.querySelector('input[type="range"]');
+      const value = editor.querySelector('.reel-speed-value');
+      const presetHost = editor.querySelector('.reel-speed-presets');
+      const speedFromPosition = function (position) { return .1 * Math.pow(100, Number(position) / 100); };
+      const positionFromSpeed = function (speed) { return Math.log(Math.max(.1, Number(speed)) / .1) / Math.log(100) * 100; };
+      function recordOnce() { if (!historyRecorded) { recordEditorChange(before); historyRecorded = true; } }
+      function refreshSpeedChange(message) {
+        refreshSequenceDuration();
+        renderClipTimeline();
+        const item = layoutForClip(clip.id);
+        seekSequenceTime(item ? item.start : 0, true);
+        updateTrimSelection();
+        if (message) reelMessage(root, message);
+      }
+      function selectTab(name) {
+        const normal = name === 'normal';
+        normalTab.classList.toggle('is-active', normal);
+        curveTab.classList.toggle('is-active', !normal);
+        normalPane.hidden = !normal;
+        curvePane.hidden = normal;
+      }
+      slider.value = positionFromSpeed(clip.speedCurve === 'none' ? clip.speed : 1);
+      value.textContent = (clip.speedCurve === 'none' ? Number(clip.speed) : 1).toFixed(1) + 'X';
+      slider.addEventListener('input', function () {
+        const next = Math.min(10, Math.max(.1, Math.round(speedFromPosition(slider.value) * 10) / 10));
+        clip.speedCurve = 'none';
+        clip.speed = next;
+        value.textContent = next.toFixed(1) + 'X';
+        refreshSpeedChange();
+        recordOnce();
+      });
+      const presets = [
+        ['none','None'], ['custom','Custom'], ['montage','Montage'], ['highlight','Highlight'],
+        ['bullet','Bullet'], ['jump-cut','Jump Cut'], ['flash-in','Flash In'], ['flash-out','Flash Out']
+      ];
+      function curveSvg(key) {
+        if (key === 'none') return '<svg viewBox="0 0 72 56" aria-hidden="true"><path d="M19 13L53 47M53 13L19 47"/></svg>';
+        if (key === 'custom') return '<svg viewBox="0 0 72 56" aria-hidden="true"><path d="M12 18H60M12 38H60"/><circle cx="27" cy="18" r="5"/><circle cx="46" cy="38" r="5"/></svg>';
+        const values = speedCurveProfiles[key];
+        const max = Math.max.apply(null, values), min = Math.min.apply(null, values);
+        const points = values.map(function (point, index) { return (8 + index * 56 / (values.length - 1)).toFixed(1) + ',' + (46 - (point - min) / Math.max(.01, max - min) * 36).toFixed(1); }).join(' ');
+        return '<svg viewBox="0 0 72 56" aria-hidden="true"><polyline points="' + points + '"/></svg>';
+      }
+      presets.forEach(function (preset) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'reel-speed-preset' + (clip.speedCurve === preset[0] ? ' is-active' : '');
+        button.innerHTML = '<span class="reel-speed-curve-card">' + curveSvg(preset[0]) + '</span><span>' + preset[1] + '</span>';
+        button.addEventListener('click', function () {
+          clip.speedCurve = preset[0];
+          clip.speed = 1;
+          presetHost.querySelectorAll('.reel-speed-preset').forEach(function (option) { option.classList.toggle('is-active', option === button); });
+          refreshSpeedChange(preset[1] + ' speed curve');
+          recordOnce();
+        });
+        presetHost.appendChild(button);
+      });
+      normalTab.addEventListener('click', function () { selectTab('normal'); });
+      curveTab.addEventListener('click', function () { selectTab('curve'); });
+      editor.querySelector('.reel-speed-done').addEventListener('click', function () { closeToolPanel(); });
+      selectTab(clip.speedCurve === 'none' ? 'normal' : 'curve');
+      openToolPanel('Change speed', editor);
+      toolPanel.classList.add('is-speed-panel');
     }
 
     document.addEventListener('click', function (event) {
@@ -2616,7 +2745,7 @@
       if (toolName === 'split') splitAtPlayhead();
       else if (toolName === 'replace') replaceSelectedClip();
       else if (toolName === 'delete') deleteSelectedClip();
-      else if (toolName === 'speed') cycleSelectedClipSpeed();
+      else if (toolName === 'speed') openSpeedEditor();
       else if (toolName === 'filters' || toolName === 'effects' || toolName === 'magic') {
         const clip = selectedClip(); if (!clip) return;
         const before = captureEditorSnapshot();
@@ -2752,7 +2881,7 @@
           await waitForMedia(active);
         }
         await seekMedia(active, clip.sourceStart);
-        active.playbackRate = clip.speed;
+        active.playbackRate = speedAtSourceOffset(clip, 0);
         if (activeGain) activeGain.gain.value = 1;
         await active.play().catch(function () {});
         const duration = clipOutputDuration(clip);
@@ -2765,6 +2894,7 @@
           frozenContext.drawImage(canvas, 0, 0);
         }
         await runFrames(duration, function (progress) {
+          active.playbackRate = speedAtSourceOffset(clip, Math.max(0, Number(active.currentTime) - clip.sourceStart));
           context.fillStyle = '#000'; context.fillRect(0, 0, canvas.width, canvas.height);
           const elapsed = progress * duration;
           if (transitionDuration && elapsed < transitionDuration && frozen) {
