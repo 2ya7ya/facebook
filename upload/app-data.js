@@ -796,6 +796,55 @@
     video.src = reel.video;
     const edits = Object.assign({ trimStart: 0, trimEnd: 0, brightness: 1, contrast: 1, saturation: 1, effect: 'none', text: '', sticker: '', captions: false, overlay: false, fit: 'contain' }, reel.editData || {});
     const effectFilters = { none: '', warm: 'sepia(.22) hue-rotate(-8deg)', cool: 'hue-rotate(18deg) saturate(.9)', mono: 'grayscale(1)', vivid: 'saturate(1.45) contrast(1.08)' };
+    const clipAnimationPresets = {
+      in: [['none','None'],['slice-in','Slice In'],['folding-fan','Folding Fan'],['paddling','Paddling'],['spin-in','Spin In'],['zoom-in','Zoom In'],['zoom-out-in','Zoom Out'],['fade-in','Fade In'],['slide-left','Slide Left'],['slide-right','Slide Right'],['slide-up','Slide Up'],['slide-down','Slide Down'],['flip-in','Flip In'],['roll-in','Roll In'],['bounce-in','Bounce In'],['blur-in','Blur In']],
+      out: [['none','None'],['slice-out','Slice Out'],['folding-fan','Folding Fan'],['paddling','Paddling'],['spin-out','Spin Out'],['zoom-out','Zoom Out'],['zoom-in-out','Zoom In'],['fade-out','Fade Out'],['slide-left','Slide Left'],['slide-right','Slide Right'],['slide-up','Slide Up'],['slide-down','Slide Down'],['flip-out','Flip Out'],['roll-out','Roll Out'],['bounce-out','Bounce Out'],['blur-out','Blur Out']],
+      combo: [['none','None'],['pendulum','Pendulum'],['zoom','Zoom'],['spin','Spin'],['rocking-chair','Rocking Chair'],['wobble','Wobble'],['pulse','Pulse'],['bounce','Bounce'],['swing','Swing'],['flicker','Flicker'],['rotate','Rotate'],['wave','Wave'],['stretch','Stretch'],['jitter','Jitter'],['pan-zoom','Pan & Zoom']]
+    };
+    function clipAnimationState(clip, elapsed, duration) {
+      const state = { opacity: 1, scaleX: 1, scaleY: 1, rotate: 0, x: 0, y: 0, blur: 0 };
+      const ease = function (value) { value = Math.max(0, Math.min(1, value)); return 1 - Math.pow(1 - value, 3); };
+      const inDuration = Math.min(.72, Math.max(.35, duration * .22));
+      const outDuration = Math.min(.72, Math.max(.35, duration * .22));
+      const inP = ease(elapsed / inDuration), outP = ease((duration - elapsed) / outDuration);
+      const applyEdge = function (name, p, entering) {
+        const q = entering ? 1 - p : 1 - p;
+        if (name === 'none') return;
+        if (name.indexOf('fade') === 0) state.opacity *= p;
+        else if (name.indexOf('slice') === 0) { state.scaleX *= Math.max(.02, p); state.x += (entering ? -1 : 1) * q * .42; }
+        else if (name === 'folding-fan') { state.scaleX *= .18 + .82 * p; state.rotate += (entering ? -1 : 1) * q * 52; }
+        else if (name === 'paddling') { state.rotate += Math.sin((1 - p) * Math.PI * 2.5) * 16 * q; state.x += (entering ? -1 : 1) * q * .18; }
+        else if (name.indexOf('spin') === 0) { state.rotate += (entering ? -1 : 1) * q * 180; state.scaleX *= .35 + .65 * p; state.scaleY *= .35 + .65 * p; }
+        else if (name === 'zoom-in' || name === 'zoom-in-out') { const s = .45 + .55 * p; state.scaleX *= s; state.scaleY *= s; }
+        else if (name === 'zoom-out' || name === 'zoom-out-in') { const s = 1.65 - .65 * p; state.scaleX *= s; state.scaleY *= s; }
+        else if (name === 'slide-left') state.x += -q;
+        else if (name === 'slide-right') state.x += q;
+        else if (name === 'slide-up') state.y += -q;
+        else if (name === 'slide-down') state.y += q;
+        else if (name.indexOf('flip') === 0) state.scaleX *= Math.max(.04, Math.cos(q * Math.PI / 2));
+        else if (name.indexOf('roll') === 0) { state.rotate += (entering ? -1 : 1) * q * 90; state.x += (entering ? -1 : 1) * q * .7; }
+        else if (name.indexOf('bounce') === 0) { state.scaleX *= 1 + Math.sin(p * Math.PI * 3) * q * .18; state.scaleY *= 1 + Math.sin(p * Math.PI * 3) * q * .18; }
+        else if (name.indexOf('blur') === 0) { state.blur += q * 18; state.opacity *= .3 + .7 * p; }
+      };
+      if (elapsed < inDuration) applyEdge(clip.animationIn || 'none', inP, true);
+      if (duration - elapsed < outDuration) applyEdge(clip.animationOut || 'none', outP, false);
+      const combo = clip.animationCombo || 'none', t = duration ? Math.max(0, Math.min(1, elapsed / duration)) : 0;
+      if (combo === 'pendulum') state.rotate += Math.sin(t * Math.PI * 4) * 10;
+      else if (combo === 'zoom') { const s = 1 + .16 * Math.sin(t * Math.PI); state.scaleX *= s; state.scaleY *= s; }
+      else if (combo === 'spin') state.rotate += t * 360;
+      else if (combo === 'rocking-chair') { state.rotate += Math.sin(t * Math.PI * 6) * 6; state.y += Math.abs(Math.sin(t * Math.PI * 3)) * .035; }
+      else if (combo === 'wobble') { state.rotate += Math.sin(t * Math.PI * 8) * 5; state.x += Math.sin(t * Math.PI * 6) * .035; }
+      else if (combo === 'pulse') { const s = 1 + .08 * Math.sin(t * Math.PI * 8); state.scaleX *= s; state.scaleY *= s; }
+      else if (combo === 'bounce') state.y -= Math.abs(Math.sin(t * Math.PI * 6)) * .12;
+      else if (combo === 'swing') { state.x += Math.sin(t * Math.PI * 4) * .12; state.rotate += Math.sin(t * Math.PI * 4) * 4; }
+      else if (combo === 'flicker') state.opacity *= .62 + .38 * Math.abs(Math.sin(t * Math.PI * 10));
+      else if (combo === 'rotate') state.rotate += Math.sin(t * Math.PI * 2) * 14;
+      else if (combo === 'wave') { state.x += Math.sin(t * Math.PI * 4) * .07; state.y += Math.cos(t * Math.PI * 4) * .04; }
+      else if (combo === 'stretch') { state.scaleX *= 1 + .13 * Math.sin(t * Math.PI * 4); state.scaleY *= 1 - .08 * Math.sin(t * Math.PI * 4); }
+      else if (combo === 'jitter') { state.x += Math.sin(t * Math.PI * 30) * .025; state.y += Math.cos(t * Math.PI * 26) * .02; state.rotate += Math.sin(t * Math.PI * 24) * 1.5; }
+      else if (combo === 'pan-zoom') { const s = 1 + .14 * t; state.scaleX *= s; state.scaleY *= s; state.x += (t - .5) * .08; }
+      return state;
+    }
     const baked = Boolean(edits.rendered);
     video.style.filter = baked ? '' : 'brightness(' + edits.brightness + ') contrast(' + edits.contrast + ') saturate(' + edits.saturation + ') ' + (effectFilters[edits.effect] || '');
     video.style.objectFit = baked ? 'contain' : (edits.fit === 'cover' ? 'cover' : 'contain');
@@ -1126,6 +1175,9 @@
         cropTop: Math.min(1, Math.max(0, Number(source.cropTop) || 0)),
         cropWidth: Math.min(1, Math.max(.01, Number(source.cropWidth) || 1)),
         cropHeight: Math.min(1, Math.max(.01, Number(source.cropHeight) || 1))
+        ,animationIn: String(source.animationIn || 'none')
+        ,animationOut: String(source.animationOut || 'none')
+        ,animationCombo: String(source.animationCombo || 'none')
       };
     }
     function normalizeClientClip(clip, fallbackStart, fallbackEnd) {
@@ -1315,6 +1367,7 @@
         } else applySeek();
       }
       applyPreviewEdits();
+      applyClipAnimationPreview(currentClipItem());
       return bounded;
     }
     function syncTransitionPreviewBounds() {
@@ -1633,10 +1686,22 @@
         ensureUserOverlay(video);
       });
     }
+    function applyClipAnimationPreview(item) {
+      if (!item || !editVideo) return;
+      const elapsed = Math.max(0, Math.min(item.duration, currentSequenceTime - item.start));
+      const animation = clipAnimationState(item.clip, elapsed, item.duration);
+      editVideo.style.opacity = String(animation.opacity);
+      editVideo.style.transform = 'translate3d(' + (animation.x * 100) + '%,' + (animation.y * 100) + '%,0) rotate(' + animation.rotate + 'deg) scale(' + animation.scaleX + ',' + animation.scaleY + ')';
+      editVideo.style.transformOrigin = '50% 50%';
+      const baseFilter = 'brightness(' + item.clip.brightness + ') contrast(' + item.clip.contrast + ') saturate(' + item.clip.saturation + ') ' + (effectFilters[item.clip.effect] || '');
+      editVideo.style.filter = baseFilter + (animation.blur ? ' blur(' + animation.blur + 'px)' : '');
+    }
     function closeToolPanel() {
       toolPanel.classList.remove('is-open');
       toolPanel.classList.remove('is-speed-panel');
+      toolPanel.classList.remove('is-animation-panel');
       flow.classList.remove('is-speed-editing');
+      flow.classList.remove('is-animation-editing');
       toolPanel.setAttribute('aria-hidden', 'true');
     }
     function openToolPanel(title, body) {
@@ -2188,6 +2253,7 @@
           }
         } else syncSequenceTimeFromVideo();
       }
+      applyClipAnimationPreview(currentClipItem());
       const now = performance.now();
       syncTimelineMuteVisibility(currentSequenceTime);
       if (forceText || now - timelineLastTextUpdate > 90) {
@@ -3018,17 +3084,64 @@
       flow.classList.add('is-speed-editing');
     }
 
+    function openAnimationEditor() {
+      const clip = selectedClip();
+      const item = sequenceLayout().find(function (entry) { return entry.clip.id === (clip && clip.id); });
+      if (!clip || !item) return;
+      const before = captureEditorSnapshot();
+      const editor = document.createElement('div');
+      editor.className = 'reel-animation-editor';
+      editor.innerHTML = '<div class="reel-animation-head"><div class="reel-animation-tabs"><button type="button" data-animation-tab="in">In</button><button type="button" data-animation-tab="out">Out</button><button type="button" data-animation-tab="combo">Combo</button></div><button type="button" class="reel-animation-done" aria-label="Apply animation"><svg viewBox="0 0 48 48"><path d="M8 25.5l10.3 10L40 9.5"/></svg></button></div><div class="reel-animation-options"></div>';
+      const optionHost = editor.querySelector('.reel-animation-options');
+      let activeTab = 'in';
+      function selectedValue() { return activeTab === 'in' ? clip.animationIn : activeTab === 'out' ? clip.animationOut : clip.animationCombo; }
+      function previewSelection() {
+        const latest = sequenceLayout().find(function (entry) { return entry.clip.id === clip.id; }); if (!latest) return;
+        const at = activeTab === 'out' ? Math.max(latest.start, latest.end - Math.min(.7, latest.duration * .22)) : latest.start;
+        seekSequenceTime(at, true);
+        editVideo.play().catch(function () {});
+      }
+      function renderOptions() {
+        editor.querySelectorAll('[data-animation-tab]').forEach(function (button) { button.classList.toggle('is-active', button.dataset.animationTab === activeTab); });
+        optionHost.replaceChildren();
+        clipAnimationPresets[activeTab].forEach(function (preset) {
+          const button = document.createElement('button');
+          button.type = 'button'; button.className = 'reel-animation-option'; button.dataset.animation = preset[0];
+          button.classList.toggle('is-active', selectedValue() === preset[0]);
+          const preview = document.createElement('span'); preview.className = 'reel-animation-thumb';
+          if (preset[0] === 'none') preview.innerHTML = '<i></i>';
+          else if (clip.thumbnail) preview.style.backgroundImage = 'url("' + String(clip.thumbnail).replace(/"/g, '%22') + '")';
+          const label = document.createElement('strong'); label.textContent = preset[1];
+          button.append(preview, label);
+          button.addEventListener('click', function () {
+            if (activeTab === 'in') clip.animationIn = preset[0];
+            else if (activeTab === 'out') clip.animationOut = preset[0];
+            else clip.animationCombo = preset[0];
+            renderOptions(); applyPreviewEdits(); previewSelection();
+          });
+          optionHost.appendChild(button);
+        });
+      }
+      editor.querySelectorAll('[data-animation-tab]').forEach(function (button) { button.addEventListener('click', function () { activeTab = button.dataset.animationTab; renderOptions(); }); });
+      editor.querySelector('.reel-animation-done').addEventListener('click', function () { recordEditorChange(before); closeToolPanel(); renderClipTimeline(); });
+      renderOptions();
+      openToolPanel('Animation', editor);
+      toolPanel.classList.add('is-animation-panel');
+      flow.classList.add('is-animation-editing');
+    }
+
     document.addEventListener('click', function (event) {
       const button = event.target.closest('[data-selection-tool]');
       if (!button || !flow.contains(button)) return;
       const toolName = button.dataset.selectionTool;
-      if (!['split','replace','delete','speed','crop','filters','effects','magic','adjust'].includes(toolName)) return;
+      if (!['split','replace','delete','speed','crop','animation','filters','effects','magic','adjust'].includes(toolName)) return;
       event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation();
       if (toolName === 'split') splitAtPlayhead();
       else if (toolName === 'replace') replaceSelectedClip();
       else if (toolName === 'delete') deleteSelectedClip();
       else if (toolName === 'speed') openSpeedEditor();
       else if (toolName === 'crop') openCropEditor();
+      else if (toolName === 'animation') openAnimationEditor();
       else if (toolName === 'filters' || toolName === 'effects' || toolName === 'magic') {
         const clip = selectedClip(); if (!clip) return;
         const before = captureEditorSnapshot();
@@ -3070,10 +3183,10 @@
         setTimeout(done, 1200);
       });
     }
-    function drawClipFrame(context, canvas, video, clip, alpha, xOffset, visibleWidth) {
+    function drawClipFrame(context, canvas, video, clip, alpha, xOffset, visibleWidth, extraFilter) {
       context.save();
       context.globalAlpha = alpha == null ? 1 : alpha;
-      context.filter = 'brightness(' + clip.brightness + ') contrast(' + clip.contrast + ') saturate(' + clip.saturation + ') ' + (effectFilters[clip.effect] || '');
+      context.filter = 'brightness(' + clip.brightness + ') contrast(' + clip.contrast + ') saturate(' + clip.saturation + ') ' + (effectFilters[clip.effect] || '') + (extraFilter || '');
       let sourceRatio = video.videoWidth / video.videoHeight;
       const targetRatio = canvas.width / canvas.height;
       let sx = 0, sy = 0, sw = video.videoWidth, sh = video.videoHeight;
@@ -3108,6 +3221,16 @@
         context.beginPath(); context.rect(Math.max(0, dx), 0, Math.max(0, visibleWidth), canvas.height); context.clip();
       }
       context.drawImage(video, sx, sy, sw, sh, dx, dy, dw, dh);
+      context.restore();
+    }
+    function drawAnimatedClipFrame(context, canvas, video, clip, elapsed, duration, alpha, xOffset, visibleWidth) {
+      const animation = clipAnimationState(clip, elapsed, duration);
+      context.save();
+      context.translate(canvas.width / 2 + animation.x * canvas.width, canvas.height / 2 + animation.y * canvas.height);
+      context.rotate(animation.rotate * Math.PI / 180);
+      context.scale(animation.scaleX, animation.scaleY);
+      context.translate(-canvas.width / 2, -canvas.height / 2);
+      drawClipFrame(context, canvas, video, clip, (alpha == null ? 1 : alpha) * animation.opacity, xOffset, visibleWidth, animation.blur ? ' blur(' + animation.blur + 'px)' : '');
       context.restore();
     }
     function drawClipOverlay(context, canvas, clip, captionText) {
@@ -3206,46 +3329,46 @@
               if (tp < .5) {
                 context.globalAlpha = 1 - tp * 2; context.drawImage(frozen, 0, 0); context.globalAlpha = 1;
               } else {
-                context.globalAlpha = (tp - .5) * 2; drawClipFrame(context, canvas, active, clip, 1); context.globalAlpha = 1;
+                context.globalAlpha = (tp - .5) * 2; drawAnimatedClipFrame(context, canvas, active, clip, elapsed, duration, 1); context.globalAlpha = 1;
               }
             } else if (type === 'wipe') {
               context.drawImage(frozen, 0, 0);
               context.save(); context.beginPath(); context.rect(0, 0, canvas.width * tp, canvas.height); context.clip();
-              drawClipFrame(context, canvas, active, clip, 1); context.restore();
+              drawAnimatedClipFrame(context, canvas, active, clip, elapsed, duration, 1); context.restore();
             } else if (type === 'slide') {
               context.drawImage(frozen, -canvas.width * tp, 0);
-              drawClipFrame(context, canvas, active, clip, 1, canvas.width * (1 - tp));
+              drawAnimatedClipFrame(context, canvas, active, clip, elapsed, duration, 1, canvas.width * (1 - tp));
             } else if (type === 'wipe-up') {
               context.drawImage(frozen, 0, 0);
               context.save(); context.beginPath(); context.rect(0, canvas.height * (1 - tp), canvas.width, canvas.height * tp); context.clip();
-              drawClipFrame(context, canvas, active, clip, 1); context.restore();
+              drawAnimatedClipFrame(context, canvas, active, clip, elapsed, duration, 1); context.restore();
             } else if (type === 'push-up') {
               context.drawImage(frozen, 0, -canvas.height * tp);
-              context.save(); context.translate(0, canvas.height * (1 - tp)); drawClipFrame(context, canvas, active, clip, 1); context.restore();
+              context.save(); context.translate(0, canvas.height * (1 - tp)); drawAnimatedClipFrame(context, canvas, active, clip, elapsed, duration, 1); context.restore();
             } else if (type === 'push-down') {
               context.drawImage(frozen, 0, canvas.height * tp);
-              context.save(); context.translate(0, -canvas.height * (1 - tp)); drawClipFrame(context, canvas, active, clip, 1); context.restore();
+              context.save(); context.translate(0, -canvas.height * (1 - tp)); drawAnimatedClipFrame(context, canvas, active, clip, elapsed, duration, 1); context.restore();
             } else if (type === 'zoom' || type === 'spin') {
               context.save(); context.globalAlpha = 1 - tp; context.translate(canvas.width / 2, canvas.height / 2);
               context.rotate(type === 'spin' ? -tp * Math.PI / 22.5 : 0); context.scale(1 + tp * .18, 1 + tp * .18);
               context.drawImage(frozen, -canvas.width / 2, -canvas.height / 2); context.restore();
               context.save(); context.globalAlpha = tp; context.translate(canvas.width / 2, canvas.height / 2);
               context.rotate(type === 'spin' ? (1 - tp) * Math.PI / 22.5 : 0); context.scale(.82 + tp * .18, .82 + tp * .18);
-              context.translate(-canvas.width / 2, -canvas.height / 2); drawClipFrame(context, canvas, active, clip, 1); context.restore();
+              context.translate(-canvas.width / 2, -canvas.height / 2); drawAnimatedClipFrame(context, canvas, active, clip, elapsed, duration, 1); context.restore();
             } else if (type === 'blur') {
               context.save(); context.globalAlpha = 1 - tp; context.filter = 'blur(' + (tp * 10) + 'px)'; context.drawImage(frozen, 0, 0); context.restore();
-              context.save(); context.globalAlpha = tp; context.filter = 'blur(' + ((1 - tp) * 10) + 'px)'; drawClipFrame(context, canvas, active, clip, 1); context.restore(); context.filter = 'none';
+              context.save(); context.globalAlpha = tp; context.filter = 'blur(' + ((1 - tp) * 10) + 'px)'; drawAnimatedClipFrame(context, canvas, active, clip, elapsed, duration, 1); context.restore(); context.filter = 'none';
             } else if (type === 'flash') {
               context.globalAlpha = 1 - tp; context.drawImage(frozen, 0, 0);
-              context.globalAlpha = tp; drawClipFrame(context, canvas, active, clip, 1); context.globalAlpha = 1;
+              context.globalAlpha = tp; drawAnimatedClipFrame(context, canvas, active, clip, elapsed, duration, 1); context.globalAlpha = 1;
               context.fillStyle = 'rgba(255,255,255,' + (Math.sin(tp * Math.PI) * .82) + ')'; context.fillRect(0, 0, canvas.width, canvas.height);
             } else {
               context.globalAlpha = 1 - tp; context.drawImage(frozen, 0, 0);
-              context.globalAlpha = tp; drawClipFrame(context, canvas, active, clip, 1); context.globalAlpha = 1;
+              context.globalAlpha = tp; drawAnimatedClipFrame(context, canvas, active, clip, elapsed, duration, 1); context.globalAlpha = 1;
             }
             if (activeGain) activeGain.gain.value = tp;
           } else {
-            drawClipFrame(context, canvas, active, clip, 1);
+            drawAnimatedClipFrame(context, canvas, active, clip, elapsed, duration, 1);
             if (activeGain) activeGain.gain.value = 1;
           }
           drawClipOverlay(context, canvas, clip, caption.value.trim());
