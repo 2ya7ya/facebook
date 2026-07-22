@@ -1937,6 +1937,65 @@
       syncTimelineMuteVisibility(time);
       refreshTimelineMarkers();
     }
+
+    let directTransitionPreviewActive = false;
+    function resetDirectTransitionPreview() {
+      if (!directTransitionPreviewActive) return;
+      directTransitionPreviewActive = false;
+      previewVideos.forEach(function (video) {
+        video.style.opacity = '1';
+        video.style.clipPath = 'none';
+        video.style.translate = '0 0';
+        video.style.removeProperty('transition');
+      });
+    }
+    function applyDirectTransitionPreview(sequenceTime) {
+      const layout = sequenceLayout();
+      if (layout.length < 2) { resetDirectTransitionPreview(); return; }
+      let match = null;
+      for (let index = 0; index < layout.length - 1; index += 1) {
+        const fromItem = layout[index];
+        const toItem = layout[index + 1];
+        const transition = transitionForBoundary(fromItem.clip.id, toItem.clip.id);
+        if (!transition || transition.type === 'none') continue;
+        const duration = Math.min(.6, Math.max(.18, Number(transition.duration) || .35));
+        const half = duration / 2;
+        if (sequenceTime >= fromItem.end - half && sequenceTime <= fromItem.end + half) {
+          match = { transition: transition, boundary: fromItem.end, half: half };
+          break;
+        }
+      }
+      if (!match) { resetDirectTransitionPreview(); return; }
+      directTransitionPreviewActive = true;
+      const progress = Math.max(0, Math.min(1, (sequenceTime - (match.boundary - match.half)) / (match.half * 2)));
+      const distanceFromMiddle = Math.abs(progress * 2 - 1);
+      previewVideos.forEach(function (video) {
+        video.style.transition = 'none';
+        video.style.opacity = '1';
+        video.style.clipPath = 'none';
+        video.style.translate = '0 0';
+        if (match.transition.type === 'fade') {
+          video.style.opacity = String(Math.max(.02, distanceFromMiddle));
+        } else if (match.transition.type === 'dissolve') {
+          video.style.opacity = String(.18 + .82 * distanceFromMiddle);
+        } else if (match.transition.type === 'wipe') {
+          if (progress >= .5) {
+            const reveal = (progress - .5) * 2;
+            video.style.clipPath = 'inset(0 ' + ((1 - reveal) * 100) + '% 0 0)';
+          }
+        } else if (match.transition.type === 'slide') {
+          if (progress < .5) {
+            video.style.translate = String(-progress * 200) + '% 0';
+          } else {
+            video.style.translate = String((1 - progress) * 200) + '% 0';
+          }
+        }
+      });
+      // The direct video effect is the preview. Keep the obsolete canvas host off.
+      transitionPreviewHost.classList.remove('is-active');
+      transitionPreviewLayer.style.visibility = 'hidden';
+      transitionPreviewLayer.style.opacity = '0';
+    }
     function syncEditPlayback(forceText) {
       if (!sequenceSeekInProgress) {
         const item = currentClipItem();
@@ -1956,7 +2015,7 @@
               editVideo.playbackRate = next.clip.speed;
               sequenceSeekInProgress = false;
               sequenceBoundarySeekActive = false;
-              updateTransitionPreview(next);
+              applyDirectTransitionPreview(currentSequenceTime);
             } else {
               seekSequenceTime(next.start, true);
               if (wasPlaying) editVideo.play().catch(function () {});
@@ -1967,6 +2026,7 @@
           }
         } else syncSequenceTimeFromVideo();
       }
+      applyDirectTransitionPreview(currentSequenceTime);
       const now = performance.now();
       syncTimelineMuteVisibility(currentSequenceTime);
       if (forceText || now - timelineLastTextUpdate > 90) {
@@ -2011,6 +2071,7 @@
       scheduleTimelineFollow();
     });
     editVideo.addEventListener('pause', function () {
+      resetDirectTransitionPreview();
       // Stop every media element owned by the reel creation flow. Some mobile
       // browsers can leave a hidden preview clone audible after the visible
       // editor video is paused.
