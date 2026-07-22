@@ -233,11 +233,11 @@ function normalizeReelEdits(value) {
   const visualEffects = new Set([
     'none','rgb-split','glitch','vhs','scanlines','pixelate','posterize','edge-glow','thermal','mirror',
     'split-screen','kaleidoscope','fisheye','ripple','wave','zoom-pulse','shake','strobe','ghost','tunnel',
-    'bloom','grain','vignette','bokeh-blur','lens-flare','motion-blur','bling','dynamic-distort','prism','light-leak',
-    'datamosh','block-glitch','digital-rain','color-trails','echo-zoom','radial-blur','swirl','stretch','liquid-glass','flash-zoom','dream-glow',
-    'mini-zoom','zoom-lens','blur','shaky-camera-move','delay','shake-2','astral','shake-1','neon-dynamic','bounce-camera',
+    'bloom','vignette','bokeh-blur','lens-flare','motion-blur','bling','dynamic-distort','prism',
+    'color-trails','echo-zoom','radial-blur','swirl','stretch','flash-zoom','dream-glow',
+    'mini-zoom','zoom-lens','blur','shaky-camera-move','delay','astral','shake-1','neon-dynamic','bounce-camera',
     'trembling','black-flash','shake-dynamic','soul','disco-count','lyric-cut','quick-speed',
-    'energy','moon-off','shockwave','somethings-wrong','small-body-big-head','goat-eyes','halo',
+    'energy','moon-off','shockwave','somethings-wrong','small-body-big-head','black-glasses','halo',
     'facial-fisheye','laser-eyes','shy','feeling-hurt','face-mosaic'
   ]);
   const normalizeClip = (clip, index) => {
@@ -256,6 +256,8 @@ function normalizeReelEdits(value) {
       saturation: number(clip.saturation, 0, 2, 1),
       effect: effects.has(clip.effect) ? clip.effect : 'none',
       visualEffect: visualEffects.has(clip.visualEffect) ? clip.visualEffect : 'none',
+      visualEffectStart: number(clip.visualEffectStart, 0, 1, 0),
+      visualEffectEnd: number(clip.visualEffectEnd, 0.01, 1, 1),
       text: String(clip.text || '').slice(0, 100),
       sticker: String(clip.sticker || '').slice(0, 8),
       captions: Boolean(clip.captions),

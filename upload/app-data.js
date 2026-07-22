@@ -1005,41 +1005,26 @@
     cropPlaybackMask.innerHTML = '<i data-crop-mask="top"></i><i data-crop-mask="right"></i><i data-crop-mask="bottom"></i><i data-crop-mask="left"></i>';
     editVideo.insertAdjacentElement('afterend', cropPlaybackMask);
 
-    function effectPreviewImage() {
-      if (!editVideo.videoWidth || !editVideo.videoHeight) return '';
-      try {
-        const canvas = document.createElement('canvas');
-        canvas.width = 160; canvas.height = 160;
-        const context = canvas.getContext('2d');
-        const sourceRatio = editVideo.videoWidth / editVideo.videoHeight;
-        let sx = 0, sy = 0, sw = editVideo.videoWidth, sh = editVideo.videoHeight;
-        if (sourceRatio > 1) { sw = editVideo.videoHeight; sx = (editVideo.videoWidth - sw) / 2; }
-        else { sh = editVideo.videoWidth; sy = (editVideo.videoHeight - sh) / 2; }
-        context.drawImage(editVideo, sx, sy, sw, sh, 0, 0, 160, 160);
-        return canvas.toDataURL('image/jpeg', .78);
-      } catch (_error) { return ''; }
-    }
     function openBuiltInEffectsEditor() {
       const wrap = document.createElement('div');
       wrap.className = 'reel-native-effects';
-      wrap.innerHTML = '<input class="reel-effect-search" type="search" placeholder="Search for effects" aria-label="Search for effects"><div class="reel-effect-categories" role="tablist"></div><div class="reel-effect-status"></div><div class="reel-effect-grid"></div>';
+      wrap.innerHTML = '<div class="reel-effect-sheet-head"><label><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="14" cy="14" r="9"></circle><path d="M21 21l7 7"></path></svg><input class="reel-effect-search" type="search" placeholder="Search for effects" aria-label="Search for effects"></label><button type="button" class="reel-effect-done" aria-label="Apply effect"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M8 25.5l10.3 10L40 9.5"></path></svg></button></div><div class="reel-effect-categories" role="tablist"></div><div class="reel-effect-status"></div><div class="reel-effect-grid"></div>';
       const search = wrap.querySelector('.reel-effect-search');
+      const sheetHead = wrap.querySelector('.reel-effect-sheet-head');
+      const done = wrap.querySelector('.reel-effect-done');
       const categories = wrap.querySelector('.reel-effect-categories');
       const status = wrap.querySelector('.reel-effect-status');
       const grid = wrap.querySelector('.reel-effect-grid');
-      const previewImage = effectPreviewImage();
-      const previewSource = document.createElement('canvas');
-      previewSource.width = 160; previewSource.height = 160;
-      const effectPreviewCanvas = document.createElement('canvas');
-      effectPreviewCanvas.width = 160; effectPreviewCanvas.height = 160;
-      const effectThumbnailRenderer = window.ReelEffects && window.ReelEffects.createRenderer ? window.ReelEffects.createRenderer(effectPreviewCanvas, { trackFace: false }) : null;
       const effectPreviewUrls = {};
-      let effectPreviewReady = false;
-      if (previewImage) {
-        const previewContext = previewSource.getContext('2d');
-        const image = new Image();
-        image.src = previewImage;
-        image.onload = function () { previewContext.drawImage(image, 0, 0, 160, 160); effectPreviewReady = true; renderEffects(); };
+      function effectArtwork(effect) {
+        if (effectPreviewUrls[effect.id]) return effectPreviewUrls[effect.id];
+        const canvas = document.createElement('canvas'); canvas.width = canvas.height = 160; const context = canvas.getContext('2d');
+        let hash = 0; for (let index = 0; index < effect.id.length; index += 1) hash = ((hash << 5) - hash + effect.id.charCodeAt(index)) | 0;
+        const hue = Math.abs(hash) % 360; const gradient = context.createLinearGradient(0, 0, 160, 160); gradient.addColorStop(0, 'hsl(' + hue + ' 54% 22%)'); gradient.addColorStop(1, 'hsl(' + ((hue + 55) % 360) + ' 70% 8%)'); context.fillStyle = gradient; context.fillRect(0, 0, 160, 160);
+        context.save(); context.translate(80, 76); context.rotate((hash % 17) * Math.PI / 180); context.strokeStyle = 'hsla(' + ((hue + 35) % 360) + ',95%,72%,.82)'; context.lineWidth = 7; context.shadowColor = context.strokeStyle; context.shadowBlur = 18;
+        const motif = Math.abs(hash) % 4; if (motif === 0) { for (let ring = 1; ring <= 3; ring += 1) { context.beginPath(); context.arc(0, 0, ring * 20, 0, Math.PI * 2); context.stroke(); } } else if (motif === 1) { for (let line = -2; line <= 2; line += 1) { context.beginPath(); context.moveTo(-55, line * 18); context.lineTo(55, line * 18 + (line % 2 ? 12 : -12)); context.stroke(); } } else if (motif === 2) { for (let ray = 0; ray < 10; ray += 1) { const angle = ray * Math.PI / 5; context.beginPath(); context.moveTo(Math.cos(angle) * 18, Math.sin(angle) * 18); context.lineTo(Math.cos(angle) * 62, Math.sin(angle) * 62); context.stroke(); } } else { context.beginPath(); context.moveTo(-55, 25); context.bezierCurveTo(-25, -55, 15, 65, 55, -30); context.stroke(); }
+        context.restore(); context.fillStyle = 'rgba(0,0,0,.42)'; context.fillRect(0, 124, 160, 36); context.fillStyle = '#fff'; context.font = '700 18px Arial'; context.textAlign = 'center'; context.textBaseline = 'middle'; const initials = effect.name.split(/\s+/).map(function (word) { return word[0]; }).join('').slice(0, 3).toUpperCase(); context.fillText(initials, 80, 142);
+        effectPreviewUrls[effect.id] = canvas.toDataURL('image/png'); return effectPreviewUrls[effect.id];
       }
       const categoryNames = ['All'].concat(Array.from(new Set(reelVisualEffectCatalog.map(function (effect) { return effect.category; }))));
       let activeCategory = 'All';
@@ -1065,16 +1050,15 @@
           button.dataset.effectId = effect.id;
           const thumb = document.createElement('span');
           thumb.className = 'reel-effect-thumb' + (effect.id === 'none' ? ' reel-effect-none' : '');
-          if (effect.id !== 'none' && previewImage && effectThumbnailRenderer && effectPreviewReady) {
-            if (!effectPreviewUrls[effect.id] && effectThumbnailRenderer.render(previewSource, effect.id, .8)) effectPreviewUrls[effect.id] = effectPreviewCanvas.toDataURL('image/jpeg', .8);
-            thumb.style.backgroundImage = 'url("' + (effectPreviewUrls[effect.id] || previewImage) + '")';
-          } else if (previewImage) thumb.style.backgroundImage = 'url("' + previewImage + '")';
+          if (effect.id !== 'none') thumb.style.backgroundImage = 'url("' + effectArtwork(effect) + '")';
           const label = document.createElement('strong'); label.textContent = effect.name;
           button.append(thumb, label);
           button.addEventListener('click', function () {
             const before = captureEditorSnapshot();
             const target = selectedClip() || editState;
             target.visualEffect = effect.id;
+            target.visualEffectStart = 0;
+            target.visualEffectEnd = 1;
             applyPreviewEdits();
             renderClipTimeline();
             recordEditorChange(before);
@@ -1105,6 +1089,12 @@
         });
         categories.appendChild(button);
       });
+      done.addEventListener('click', closeToolPanel);
+      let pullStartY = 0; let pullDistance = 0;
+      sheetHead.addEventListener('pointerdown', function (event) { if (event.target.closest('input,button')) return; pullStartY = event.clientY; pullDistance = 0; sheetHead.setPointerCapture && sheetHead.setPointerCapture(event.pointerId); });
+      sheetHead.addEventListener('pointermove', function (event) { if (!pullStartY) return; pullDistance = Math.max(0, event.clientY - pullStartY); toolPanel.style.transform = 'translateY(' + pullDistance + 'px)'; });
+      function finishPull() { if (!pullStartY) return; const hide = pullDistance > 64; pullStartY = 0; pullDistance = 0; toolPanel.style.transform = ''; if (hide) closeToolPanel(); }
+      sheetHead.addEventListener('pointerup', finishPull); sheetHead.addEventListener('pointercancel', finishPull);
       search.addEventListener('input', renderEffects);
       renderEffects();
     }
@@ -1141,6 +1131,7 @@
     const timelineContent = document.createElement('div');
     const timelineTicks = document.createElement('div');
     const timelineFilmstrip = document.createElement('div');
+    const timelineEffectLayer = document.createElement('div');
     const timelineAudio = document.createElement('div');
     const timelineSoundLabel = document.createElement('div');
     const timelinePlayhead = document.createElement('div');
@@ -1172,6 +1163,7 @@
     timelineContent.className = 'reel-timeline-content';
     timelineTicks.className = 'reel-timeline-ticks';
     timelineFilmstrip.className = 'reel-timeline-filmstrip';
+    timelineEffectLayer.className = 'reel-timeline-effect-layer';
     timelineAudio.className = 'reel-timeline-audio';
     timelineAudio.dataset.reelTool = 'sound';
     timelineSoundLabel.className = 'reel-timeline-sound-label';
@@ -1203,7 +1195,7 @@
     trimDurationLabel.className = 'reel-trim-duration';
     timelineSelection.append(trimStartHandle, trimEndHandle);
     timelineMuteRail.appendChild(timelineMuteButton);
-    timelineContent.append(timelineFilmstrip, timelineAudio, timelineSelection, timelineMuteRail, trimDurationLabel, timelineMutedIndicator);
+    timelineContent.append(timelineFilmstrip, timelineEffectLayer, timelineAudio, timelineSelection, timelineMuteRail, trimDurationLabel, timelineMutedIndicator);
     timelineScroll.appendChild(timelineContent);
     timeline.replaceChildren(timelineScroll, timelineTicks, timelinePlayhead, timelineSoundLabel);
     if (timelineAdd) timeline.appendChild(timelineAdd);
@@ -1366,6 +1358,8 @@
         saturation: Math.min(2, Math.max(0, Number(source.saturation) || 1)),
         effect: reelEffectIds.has(source.effect) ? source.effect : 'none',
         visualEffect: reelVisualEffectIds.has(source.visualEffect) ? source.visualEffect : 'none',
+        visualEffectStart: Math.min(1, Math.max(0, Number(source.visualEffectStart) || 0)),
+        visualEffectEnd: Math.min(1, Math.max(.01, Number(source.visualEffectEnd) || 1)),
         text: String(source.text || '').slice(0, 100),
         sticker: String(source.sticker || '').slice(0, 8),
         captions: Boolean(source.captions),
@@ -1895,10 +1889,15 @@
     function renderVisualEffectPreview() {
       const item = currentClipItem();
       const settings = item ? item.clip : editState;
-      const effectId = settings && reelVisualEffectIds.has(settings.visualEffect) ? settings.visualEffect : 'none';
+      const effectLocalTime = item ? Math.max(0, currentSequenceTime - item.start) : (Number(editVideo.currentTime) || 0);
+      const effectDuration = item ? item.duration : Math.max(.01, timelineDuration || Number(editVideo.duration) || 0);
+      const effectStart = effectDuration * Math.min(1, Math.max(0, Number(settings && settings.visualEffectStart) || 0));
+      const effectEnd = effectDuration * Math.min(1, Math.max(0, Number(settings && settings.visualEffectEnd) || 1));
+      const insideEffectRange = effectLocalTime >= effectStart && effectLocalTime <= effectEnd;
+      const effectId = insideEffectRange && settings && reelVisualEffectIds.has(settings.visualEffect) ? settings.visualEffect : 'none';
       const blockedByTransition = editVideo.classList.contains('is-reel-transitioning');
       if (visualEffectRenderer && effectId !== 'none' && !blockedByTransition && editVideo.readyState >= 2) {
-        const effectTime = item ? Math.max(0, currentSequenceTime - item.start) : (Number(editVideo.currentTime) || 0);
+        const effectTime = Math.max(0, effectLocalTime - effectStart);
         const rendered = visualEffectRenderer.render(editVideo, effectId, effectTime);
         visualEffectCanvas.hidden = !rendered;
         if (rendered) {
@@ -1937,6 +1936,7 @@
       editVideo.style.filter = baseFilter + (animation.blur ? ' blur(' + animation.blur + 'px)' : '');
     }
     function closeToolPanel() {
+      toolPanel.style.transform = '';
       toolPanel.classList.remove('is-open');
       toolPanel.classList.remove('is-speed-panel');
       toolPanel.classList.remove('is-animation-panel');
@@ -2281,6 +2281,9 @@
       if (!clipLayer) return;
       const layout = refreshSequenceDuration();
       clipLayer.replaceChildren();
+      timelineEffectLayer.replaceChildren();
+      const hasEffects = layout.some(function (item) { return item.clip.visualEffect && item.clip.visualEffect !== 'none'; });
+      timeline.classList.toggle('has-effect-track', hasEffects);
       const gap = 6;
       layout.forEach(function (item, index) {
         const segment = document.createElement('button');
@@ -2391,6 +2394,18 @@
           button.addEventListener('pointerdown', function (event) { event.preventDefault(); event.stopPropagation(); }, true);
           button.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); openTransitionPicker(item.clip.id, next.clip.id); });
           clipLayer.appendChild(button);
+        }
+        if (item.clip.visualEffect && item.clip.visualEffect !== 'none') {
+          const definition = reelVisualEffectCatalog.find(function (effect) { return effect.id === item.clip.visualEffect; });
+          const startRatio = Math.min(.99, Math.max(0, Number(item.clip.visualEffectStart) || 0));
+          const endRatio = Math.min(1, Math.max(startRatio + Math.min(1, .1 / item.duration), Number(item.clip.visualEffectEnd) || 1));
+          item.clip.visualEffectStart = startRatio; item.clip.visualEffectEnd = endRatio;
+          const effectTrack = document.createElement('div'); effectTrack.className = 'reel-effect-track'; effectTrack.dataset.clipId = item.clip.id;
+          const updateTrackPosition = function () { const start = item.start + item.duration * item.clip.visualEffectStart; const end = item.start + item.duration * item.clip.visualEffectEnd; effectTrack.style.left = (start * pixelsPerSecond) + 'px'; effectTrack.style.width = Math.max(24, (end - start) * pixelsPerSecond) + 'px'; };
+          updateTrackPosition(); effectTrack.innerHTML = '<button type="button" class="reel-effect-trim reel-effect-trim-start" aria-label="Trim effect start">‹</button><span class="reel-effect-track-icon" aria-hidden="true"></span><strong></strong><button type="button" class="reel-effect-trim reel-effect-trim-end" aria-label="Trim effect end">›</button>';
+          effectTrack.querySelector('strong').textContent = definition ? definition.name : 'Effect';
+          ['start','end'].forEach(function (edge) { const handle = effectTrack.querySelector('.reel-effect-trim-' + edge); handle.addEventListener('pointerdown', function (event) { event.preventDefault(); event.stopPropagation(); const before = captureEditorSnapshot(); const startX = event.clientX; const initialStart = item.clip.visualEffectStart; const initialEnd = item.clip.visualEffectEnd; const minimum = Math.min(1, .18 / item.duration); function move(moveEvent) { moveEvent.preventDefault(); const delta = (moveEvent.clientX - startX) / Math.max(1, item.duration * pixelsPerSecond); if (edge === 'start') item.clip.visualEffectStart = Math.max(0, Math.min(initialEnd - minimum, initialStart + delta)); else item.clip.visualEffectEnd = Math.min(1, Math.max(initialStart + minimum, initialEnd + delta)); updateTrackPosition(); applyPreviewEdits(); } function finish() { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', finish); window.removeEventListener('pointercancel', finish); recordEditorChange(before); renderClipTimeline(); } window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', finish, { once: true }); window.addEventListener('pointercancel', finish, { once: true }); }); });
+          timelineEffectLayer.appendChild(effectTrack);
         }
       });
     }
@@ -3503,8 +3518,11 @@
       context.restore();
     }
     const renderedEffectCanvases = new WeakMap();
-    function drawVisualEffectFrame(context, canvas, video, clip, elapsed, alpha, xOffset, visibleWidth, extraFilter) {
+    function drawVisualEffectFrame(context, canvas, video, clip, elapsed, duration, alpha, xOffset, visibleWidth, extraFilter) {
       if (!window.ReelEffects || !window.ReelEffects.createRenderer || !reelVisualEffectIds.has(clip.visualEffect) || clip.visualEffect === 'none') return false;
+      const effectStart = duration * Math.min(1, Math.max(0, Number(clip.visualEffectStart) || 0));
+      const effectEnd = duration * Math.min(1, Math.max(0, Number(clip.visualEffectEnd) || 1));
+      if (elapsed < effectStart || elapsed > effectEnd) return false;
       let resources = renderedEffectCanvases.get(canvas);
       if (!resources) {
         const input = document.createElement('canvas');
@@ -3520,7 +3538,7 @@
       const inputContext = resources.input.getContext('2d', { alpha: false });
       inputContext.save(); inputContext.fillStyle = '#000'; inputContext.fillRect(0, 0, canvas.width, canvas.height); inputContext.restore();
       drawClipFrame(inputContext, resources.input, video, clip, 1, xOffset, visibleWidth, extraFilter);
-      if (!resources.renderer.render(resources.input, clip.visualEffect, elapsed)) return false;
+      if (!resources.renderer.render(resources.input, clip.visualEffect, Math.max(0, elapsed - effectStart))) return false;
       context.save();
       context.globalAlpha = alpha == null ? 1 : alpha;
       context.drawImage(resources.output, 0, 0, canvas.width, canvas.height);
@@ -3536,7 +3554,7 @@
       context.translate(-canvas.width / 2, -canvas.height / 2);
       const frameAlpha = (alpha == null ? 1 : alpha) * animation.opacity;
       const extraFilter = animation.blur ? ' blur(' + animation.blur + 'px)' : '';
-      if (!drawVisualEffectFrame(context, canvas, video, clip, elapsed, frameAlpha, xOffset, visibleWidth, extraFilter)) {
+      if (!drawVisualEffectFrame(context, canvas, video, clip, elapsed, duration, frameAlpha, xOffset, visibleWidth, extraFilter)) {
         drawClipFrame(context, canvas, video, clip, frameAlpha, xOffset, visibleWidth, extraFilter);
       }
       context.restore();

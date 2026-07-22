@@ -1,11 +1,13 @@
 (function () {
   'use strict';
 
+  const removedEffectIds = new Set(['old-tv','grain','shake-2','light-leak','datamosh','block-glitch','digital-rain','liquid-glass','half-face-whirl','laser']);
   const catalog = [
     ['none', 'None', 'Basic'],
     ['rgb-split', 'RGB Split', 'Glitch'],
     ['glitch', 'Glitch', 'Glitch'],
     ['vhs', 'VHS', 'Retro'],
+    ['old-tv', 'Old TV', 'Retro'],
     ['scanlines', 'Scanlines', 'Retro'],
     ['pixelate', 'Pixelate', 'Digital'],
     ['posterize', 'Posterize', 'Digital'],
@@ -65,14 +67,16 @@
     ['shockwave', 'Shockwave', 'Fancy', 64],
     ['somethings-wrong', "Something's Wrong", 'Fancy', 65],
     ['small-body-big-head', 'Small Body Big Head', 'Face Effect', 66],
-    ['goat-eyes', 'Goat Eyes', 'Face Effect', 67],
+    ['black-glasses', 'Black Glasses', 'Face Effect', 67],
     ['halo', 'Halo', 'Face Effect', 68],
     ['facial-fisheye', 'Facial Fisheye', 'Face Effect', 69],
+    ['half-face-whirl', 'Half Face Whirl', 'Face Effect', 70],
     ['laser-eyes', 'Laser Eyes', 'Face Effect', 71],
     ['shy', 'Shy', 'Face Effect', 72],
     ['feeling-hurt', 'Feeling Hurt', 'Face Effect', 73],
-    ['face-mosaic', 'Face Mosaic', 'Face Effect', 74]
-  ].map(function (item, index) { return { id: item[0], name: item[1], category: item[2], mode: item[3] == null ? index + (index >= 4 ? 1 : 0) : item[3] }; });
+    ['face-mosaic', 'Face Mosaic', 'Face Effect', 74],
+    ['laser', 'Laser', 'Face Effect', 75]
+  ].map(function (item, index) { return { id: item[0], name: item[1], category: item[2], mode: item[3] == null ? index : item[3] }; }).filter(function (effect) { return !removedEffectIds.has(effect.id); });
   const modes = Object.fromEntries(catalog.map(function (effect) { return [effect.id, effect.mode]; }));
 
   const vertexSource = [
@@ -89,7 +93,7 @@
     'void main(){',
     ' vec2 uv=v_uv; vec2 p=uv-.5; vec4 c=tex(uv); float t=u_time;',
     ' if(u_mode==1){float d=.012+.006*sin(t*3.0);c=vec4(tex(uv+vec2(d,0.)).r,tex(uv).g,tex(uv-vec2(d,0.)).b,1.);}',
-    ' else if(u_mode==2){float tick=floor(t*12.);float burst=step(.7,hash(vec2(tick,9.)));float row=floor(uv.y*46.);float band=step(.68,hash(vec2(row,tick)))*burst;float off=(hash(vec2(row,tick+3.))-.5)*.085*band;vec2 q=uv+vec2(off,0.);float split=.005+.011*band;c=vec4(tex(q+vec2(split,0.)).r,tex(q).g,tex(q-vec2(split,0.)).b,1.);float line=step(.985,fract(uv.y*u_resolution.y*.5+t*18.));c.rgb+=line*vec3(.18,.22,.26);}',
+    ' else if(u_mode==2){float tick=floor(t*15.);float burst=step(.48,hash(vec2(tick,9.)));float row=floor(uv.y*52.);float band=step(.55,hash(vec2(row,tick)))*burst;float off=(hash(vec2(row,tick+3.))-.5)*.14*band;vec2 q=uv+vec2(off,0.);float split=.008+.02*band;c=vec4(tex(q+vec2(split,0.)).r,tex(q).g,tex(q-vec2(split,0.)).b,1.);float line=step(.965,fract(uv.y*u_resolution.y*.5+t*24.));c.rgb+=line*vec3(.3,.34,.4);}',
     ' else if(u_mode==3){float wob=sin(uv.y*80.+t*5.)*.003+sin(uv.y*13.+t*2.)*.006;c=tex(uv+vec2(wob,0.));float scan=.88+.12*sin(uv.y*u_resolution.y*1.25);float noise=(hash(uv*u_resolution.xy+floor(t*30.))-.5)*.12;c.rgb=c.rgb*scan+noise;c.r+=.025;c.b+=.035;}',
     ' else if(u_mode==5){c.rgb*=.72+.28*sin(uv.y*u_resolution.y*1.55);}',
     ' else if(u_mode==6){vec2 size=vec2(28.,50.);uv=(floor(uv*size)+.5)/size;c=tex(uv);}',
@@ -103,17 +107,17 @@
     ' else if(u_mode==14){float r=length(p);uv+=normalize(p+vec2(.0001))*sin(r*38.-t*7.)*.012;c=tex(uv);}',
     ' else if(u_mode==15){uv.x+=sin(uv.y*15.+t*4.)*.025;uv.y+=cos(uv.x*12.+t*3.)*.012;c=tex(uv);}',
     ' else if(u_mode==16){float z=1.+.12*sin(t*4.);uv=.5+p/z;c=tex(uv);}',
-    ' else if(u_mode==17){vec2 j=vec2(hash(vec2(floor(t*18.),1.)),hash(vec2(floor(t*18.),2.)))-.5;uv+=j*.035;c=tex(uv);}',
+    ' else if(u_mode==17){float k=floor(t*24.);vec2 j=(vec2(hash(vec2(k,1.)),hash(vec2(k,2.)))-.5)*.07;float a=(hash(vec2(k,7.))-.5)*.045;mat2 r=mat2(cos(a),-sin(a),sin(a),cos(a));vec2 q=.5+r*(p*.96)+j;c=tex(q);}',
     ' else if(u_mode==18){float f=.42+.58*step(.48,sin(t*13.));c.rgb*=f;}',
     ' else if(u_mode==19){vec2 o=vec2(.018*sin(t*2.4),.012*cos(t*1.7));c=mix(c,tex(uv+o),.42);c=mix(c,tex(uv-o*1.8),.2);}',
     ' else if(u_mode==20){float a=atan(p.y,p.x)+t*.28;float r=length(p);uv=vec2(fract(a/6.28318*2.+r*1.8),fract(r*2.-t*.12));c=tex(uv);}',
     ' else if(u_mode==21){vec2 q=2.5/u_resolution;vec3 b=(tex(uv+vec2(q.x,0.)).rgb+tex(uv-vec2(q.x,0.)).rgb+tex(uv+vec2(0.,q.y)).rgb+tex(uv-vec2(0.,q.y)).rgb)*.25;c.rgb+=max(b-vec3(.52),0.)*1.35;}',
     ' else if(u_mode==22){float n=hash(floor(uv*u_resolution.xy)+floor(t*24.));c.rgb+=(n-.5)*.22;c.rgb=mix(c.rgb,vec3(dot(c.rgb,vec3(.299,.587,.114))),.08);}',
-    ' else if(u_mode==23){float v=1.-smoothstep(.18,.72,dot(p*vec2(.82,1.12),p*vec2(.82,1.12))*1.8);c.rgb*=.48+.52*v;}',
+    ' else if(u_mode==23){float d=dot(p*vec2(.8,1.1),p*vec2(.8,1.1));float v=1.-smoothstep(.10,.48,d);c.rgb*=.22+.78*v;}',
     ' else if(u_mode==24){vec2 q=5./u_resolution;c=(tex(uv)*4.+tex(uv+vec2(q.x,0.))+tex(uv-vec2(q.x,0.))+tex(uv+vec2(0.,q.y))+tex(uv-vec2(0.,q.y))+tex(uv+q)+tex(uv-q)+tex(uv+vec2(q.x,-q.y))+tex(uv+vec2(-q.x,q.y)))/12.;}',
     ' else if(u_mode==25){vec2 f=uv-vec2(.78+.08*sin(t*.7),.72+.05*cos(t*.9));float glow=.055/(dot(f,f)+.015);vec2 g=uv-vec2(.39,.38);float orb=.018/(dot(g,g)+.025);c.rgb+=vec3(1.,.62,.25)*glow+vec3(.25,.5,1.)*orb;}',
     ' else if(u_mode==26){vec2 d=vec2(.014,.008)*sin(t*2.2);c=(tex(uv-d*3.)+tex(uv-d*2.)+tex(uv-d)+tex(uv)*2.+tex(uv+d)+tex(uv+d*2.)+tex(uv+d*3.))/8.;}',
-    ' else if(u_mode==27){vec2 cell=floor(uv*vec2(12.,20.));vec2 local=fract(uv*vec2(12.,20.))-.5;float seed=hash(cell);float tw=step(.82,seed)*(.5+.5*sin(t*7.+seed*30.));float star=max(0.,.045/(abs(local.x)+.025)+.045/(abs(local.y)+.025)-2.1)*tw;float lum=dot(c.rgb,vec3(.299,.587,.114));c.rgb+=vec3(1.,.9,.65)*star*step(.45,lum);}',
+    ' else if(u_mode==27){vec2 cell=floor(uv*vec2(16.,26.));vec2 local=fract(uv*vec2(16.,26.))-.5;float seed=hash(cell);float tw=step(.66,seed)*pow(.5+.5*sin(t*9.+seed*40.),3.);float star=max(0.,.065/(abs(local.x)+.022)+.065/(abs(local.y)+.022)-2.7)*tw;float lum=dot(c.rgb,vec3(.299,.587,.114));c.rgb+=vec3(1.,.9,.55)*star*(.35+step(.34,lum));}',
     ' else if(u_mode==28){float r=length(p);float a=atan(p.y,p.x)+.12*sin(t*1.7+r*9.);float rr=r*(1.+.35*r*r)+.018*sin(t*3.+r*28.);uv=.5+vec2(cos(a),sin(a))*rr;c=tex(uv);}',
     ' else if(u_mode==29){float r=length(p);vec2 d=normalize(p+vec2(.0001))*(.008+.025*r);c=vec4(tex(uv+d).r,tex(uv).g,tex(uv-d).b,1.);}',
     ' else if(u_mode==30){vec2 f=uv-vec2(-.08+.12*sin(t*.45),.68+.1*cos(t*.6));float leak=smoothstep(.72,.02,length(f));vec2 f2=uv-vec2(1.08,.25+.12*sin(t*.5));float leak2=smoothstep(.62,.03,length(f2));c.rgb=1.-(1.-c.rgb)*(1.-vec3(1.,.22,.04)*leak*.8)*(1.-vec3(.45,.08,1.)*leak2*.55);}',
@@ -131,7 +135,7 @@
     ' else if(u_mode==42){float ph=fract(t*1.8);float z=1.+.075*sin(ph*6.28318);uv=.5+p/z;c=tex(uv);}',
     ' else if(u_mode==43){vec2 lc=vec2(.5+.18*sin(t*.7),.52+.12*cos(t*.9));vec2 lp=uv-lc;float inside=1.-step(.23,length(lp));vec2 q=lc+lp/(1.+.7*inside);c=mix(c,tex(q),inside);c.rgb+=vec3(.12)*smoothstep(.012,0.,abs(length(lp)-.23));}',
     ' else if(u_mode==44){vec2 q=7./u_resolution;c=(tex(uv)*4.+tex(uv+vec2(q.x,0.))+tex(uv-vec2(q.x,0.))+tex(uv+vec2(0.,q.y))+tex(uv-vec2(0.,q.y))+tex(uv+q)+tex(uv-q)+tex(uv+vec2(q.x,-q.y))+tex(uv+vec2(-q.x,q.y)))/12.;}',
-    ' else if(u_mode==45){vec2 j=vec2(hash(vec2(floor(t*9.),3.)),hash(vec2(floor(t*9.),7.)))-.5;float a=(hash(vec2(floor(t*9.),11.))-.5)*.055;mat2 r=mat2(cos(a),-sin(a),sin(a),cos(a));uv=.5+r*p+j*.05;c=tex(uv);}',
+    ' else if(u_mode==45){float a=.027*sin(t*4.2)+.013*sin(t*7.7);vec2 j=vec2(.018*sin(t*5.1),.014*cos(t*4.4));mat2 r=mat2(cos(a),-sin(a),sin(a),cos(a));vec2 q=.5+r*(p*.985)+j;if(q.x<0.||q.x>1.||q.y<0.||q.y>1.)c=vec4(0.,0.,0.,1.);else c=tex(q);}',
     ' else if(u_mode==46){vec2 d=vec2(.018*sin(t*1.6),.012*cos(t*1.3));c=tex(uv)*.48+tex(uv-d)*.28+tex(uv-d*2.)*.16+tex(uv-d*3.)*.08;}',
     ' else if(u_mode==47){float k=floor(t*14.);vec2 j=(vec2(hash(vec2(k,2.)),hash(vec2(k,8.)))-.5)*.085;uv+=j;c=tex(uv);}',
     ' else if(u_mode==48){float z=.035+.014*sin(t*2.);vec2 q1=.5+p*(1.-z);vec2 q2=.5+p*(1.-z*2.);c=vec4(tex(q1).r,tex(uv).g,tex(q2).b,1.);c.rgb=mix(c.rgb,tex(q2).rgb,.22);}',
@@ -140,7 +144,7 @@
     ' else if(u_mode==51){float b=abs(sin(t*3.2));float z=1.+.1*b;uv=.5+vec2(p.x,p.y+.035*b)/z;c=tex(uv);}',
     ' else if(u_mode==52){vec2 j=vec2(sin(t*38.)+sin(t*61.),cos(t*43.)+cos(t*57.))*.006;uv+=j;c=tex(uv);}',
     ' else if(u_mode==53){float f=step(.2,fract(t*1.7));c.rgb*=f;}',
-    ' else if(u_mode==54){float k=floor(t*11.);vec2 j=(vec2(hash(vec2(k,5.)),hash(vec2(k,9.)))-.5)*.045;uv+=j;c=tex(uv);}',
+    ' else if(u_mode==54){float k=floor(t*18.);vec2 j=(vec2(hash(vec2(k,5.)),hash(vec2(k,9.)))-.5)*.075;float a=(hash(vec2(k,13.))-.5)*.035;mat2 r=mat2(cos(a),-sin(a),sin(a),cos(a));c=tex(.5+r*(p*.97)+j);}',
     ' else if(u_mode==55){c=tex(uv);}',
     ' else if(u_mode==56){c=tex(uv);}',
     ' else if(u_mode==57){float ang=atan(p.y,p.x);float rr=length(p);float spin=smoothstep(.025,0.,abs(rr-.18))*step(0.,sin(ang*10.-t*5.));c.rgb*=.72;c.rgb+=vec3(.2,.8,1.)*spin;float bar=smoothstep(.018,0.,abs(p.y+.27))*step(abs(p.x),.28);c.rgb+=vec3(.95)*bar;}',
@@ -189,10 +193,13 @@
     const frame = state.frame, person = state.person;
     if (frame.width !== width || frame.height !== height) { frame.width = person.width = width; frame.height = person.height = height; }
     const frameContext = frame.getContext('2d'); frameContext.setTransform(1, 0, 0, 1, 0, 0); frameContext.globalCompositeOperation = 'source-over'; frameContext.globalAlpha = 1; frameContext.filter = 'none'; frameContext.clearRect(0, 0, width, height); frameContext.drawImage(context.canvas, 0, 0, width, height);
-    const scene = Math.floor(time * 1.35) % 6; const phase = (time * 1.35) % 1; const colors = ['#42a5ff','#e3c466','#17213f','#15398b','#e85c37','#55a8d9'];
-    context.save(); context.clearRect(0, 0, width, height); context.fillStyle = colors[scene]; context.fillRect(0, 0, width, height); context.globalCompositeOperation = 'screen'; context.filter = 'blur(' + Math.max(4, width * .018) + 'px) saturate(1.3)';
-    for (let layer = 0; layer < 8; layer += 1) { const scale = 1.04 + layer * .055 + phase * .035; const dw = width * scale, dh = height * scale; context.globalAlpha = .15; context.drawImage(frame, (width - dw) / 2, (height - dh) / 2, dw, dh); }
-    context.globalCompositeOperation = 'source-over'; context.filter = 'none'; context.globalAlpha = .24; context.fillStyle = colors[scene]; context.fillRect(0, 0, width, height); context.restore();
+    const scene = Math.floor(time * 1.35) % 6; const phase = (time * 1.35) % 1;
+    const palettes = [['#091b3a','#2467a5','#f6b75d'],['#2b1837','#a14170','#ffbe66'],['#071625','#154854','#49b7b0'],['#26130d','#a43d26','#ffc46c'],['#101021','#383b77','#8bbaff'],['#18251c','#4c7c62','#e4b65a']]; const palette = palettes[scene];
+    context.save(); context.clearRect(0, 0, width, height); const sky = context.createLinearGradient(0, 0, 0, height); sky.addColorStop(0, palette[0]); sky.addColorStop(.58, palette[1]); sky.addColorStop(1, '#090909'); context.fillStyle = sky; context.fillRect(0, 0, width, height);
+    const horizon = height * .47; context.fillStyle = 'rgba(4,7,12,.84)'; for (let building = -2; building < 15; building += 1) { const bw = width * (.07 + Math.abs(seededNoise(building + scene * 9)) * .08); const bh = height * (.13 + Math.abs(seededNoise(building * 3.1 + scene)) * .3); const x = ((building * width * .11 - phase * width * .34) % (width * 1.35)) - width * .15; context.fillRect(x, horizon - bh, bw, bh); context.fillStyle = 'rgba(255,220,145,.45)'; for (let windowIndex = 0; windowIndex < 3; windowIndex += 1) context.fillRect(x + bw * .18, horizon - bh + bh * (.2 + windowIndex * .24), bw * .14, Math.max(1, height * .006)); context.fillStyle = 'rgba(4,7,12,.84)'; }
+    context.fillStyle = '#11151c'; context.beginPath(); context.moveTo(width * .1, height); context.lineTo(width * .43, horizon); context.lineTo(width * .57, horizon); context.lineTo(width * .9, height); context.closePath(); context.fill();
+    context.globalCompositeOperation = 'screen'; context.strokeStyle = palette[2]; context.lineCap = 'round'; for (let streak = 0; streak < 22; streak += 1) { const seed = Math.abs(seededNoise(streak * 5.7 + scene)); const y = horizon + seed * height * .5; const x = ((seededNoise(streak * 2.2) + phase * 2.4) % 1.4) * width; context.globalAlpha = .18 + seed * .5; context.lineWidth = Math.max(1, width * (.002 + seed * .009)); context.beginPath(); context.moveTo(x - width * (.12 + seed * .3), y); context.lineTo(x + width * .08, y); context.stroke(); }
+    const roadGlow = context.createRadialGradient(width / 2, height * .72, 0, width / 2, height * .72, width * .7); roadGlow.addColorStop(0, palette[2] + '77'); roadGlow.addColorStop(1, 'rgba(0,0,0,0)'); context.fillStyle = roadGlow; context.fillRect(0, horizon, width, height - horizon); context.restore();
     if (state.maskReady && state.mask && state.mask.width) {
       const personContext = person.getContext('2d'); personContext.setTransform(1, 0, 0, 1, 0, 0); personContext.globalCompositeOperation = 'source-over'; personContext.filter = 'none'; personContext.globalAlpha = 1; personContext.clearRect(0, 0, width, height); personContext.drawImage(frame, 0, 0, width, height); personContext.globalCompositeOperation = 'destination-in'; personContext.drawImage(state.mask, 0, 0, width, height); personContext.globalCompositeOperation = 'source-over';
       context.drawImage(person, 0, 0, width, height);
@@ -205,8 +212,8 @@
     const cx = width * .5, cy = height * .5, outer = Math.hypot(width, height) * .62, innerBase = Math.min(width, height) * .27;
     context.save(); context.fillStyle = '#050505';
     for (let index = 0; index < 58; index += 1) {
-      const angle = index * Math.PI * 2 / 58 + Math.sin(time * 1.6 + index) * .006;
-      const random = Math.abs(seededNoise(index * 7.31)); const inner = innerBase * (.72 + random * .72); const spread = .0028 + random * .007;
+      const random = Math.abs(seededNoise(index * 7.31)); const travel = (time * (1.4 + random * 1.8) + random * 5) % 1; const angle = index * Math.PI * 2 / 58 + time * .17 + Math.sin(time * 3.2 + index) * .018;
+      const inner = innerBase * (.58 + random * .42 + travel * .72); const spread = .0035 + random * .009;
       context.globalAlpha = .45 + random * .5; context.beginPath(); context.moveTo(cx + Math.cos(angle) * inner, cy + Math.sin(angle) * inner); context.lineTo(cx + Math.cos(angle - spread) * outer, cy + Math.sin(angle - spread) * outer); context.lineTo(cx + Math.cos(angle + spread) * outer, cy + Math.sin(angle + spread) * outer); context.closePath(); context.fill();
     }
     context.restore();
@@ -245,16 +252,11 @@
     const phase = (time % 1.9) / 1.9; const eased = 1 - Math.pow(1 - phase, 2); const scale = 1 + eased * .16;
     context.save(); context.globalCompositeOperation = 'screen'; context.globalAlpha = Math.max(0, .58 * (1 - phase)); context.filter = 'grayscale(0.35) brightness(1.38) blur(' + Math.max(1, width * .004 * eased) + 'px)'; context.translate(width * .5, height * .5 - height * .13 * eased); context.scale(scale, scale); context.drawImage(person, -width / 2, -height / 2, width, height); context.restore();
   }
-  function drawGoatEyes(context, width, height, state) {
-    const tracked = trackedFeatures(state, width, height); const rx = Math.max(4, tracked.faceWidth * .105); const ry = Math.max(2.5, tracked.faceHeight * .043);
-    context.save();
-    tracked.eyes.forEach(function (eye) {
-      const gradient = context.createRadialGradient(eye[0], eye[1] - ry * .25, ry * .15, eye[0], eye[1], rx);
-      gradient.addColorStop(0, '#fff9a8'); gradient.addColorStop(.48, '#e8c83a'); gradient.addColorStop(1, '#8d6504');
-      context.shadowColor = 'rgba(255,221,63,.72)'; context.shadowBlur = rx * .55; context.fillStyle = gradient; context.strokeStyle = 'rgba(40,25,0,.9)'; context.lineWidth = Math.max(1, rx * .1); context.beginPath(); context.ellipse(eye[0], eye[1], rx, ry, 0, 0, Math.PI * 2); context.fill(); context.stroke();
-      context.shadowBlur = 0; context.fillStyle = '#090704'; context.fillRect(eye[0] - rx * .69, eye[1] - ry * .2, rx * 1.38, ry * .4);
-      context.fillStyle = 'rgba(255,255,255,.82)'; context.beginPath(); context.ellipse(eye[0] - rx * .28, eye[1] - ry * .38, rx * .12, ry * .13, 0, 0, Math.PI * 2); context.fill();
-    });
+  function drawBlackGlasses(context, width, height, state) {
+    const tracked = trackedFeatures(state, width, height); const left = tracked.eyes[0], right = tracked.eyes[1]; const span = Math.max(18, Math.abs(right[0] - left[0])); const lensWidth = span * .92; const lensHeight = Math.max(8, tracked.faceHeight * .105); const line = Math.max(2, tracked.faceWidth * .035);
+    context.save(); context.lineCap = 'round'; context.lineJoin = 'round'; context.strokeStyle = '#050505'; context.lineWidth = line; context.shadowColor = 'rgba(0,0,0,.55)'; context.shadowBlur = line * 1.5;
+    context.beginPath(); context.moveTo(left[0] - lensWidth * .48, left[1]); context.lineTo(left[0] - tracked.faceWidth * .62, left[1] - lensHeight * .12); context.moveTo(right[0] + lensWidth * .48, right[1]); context.lineTo(right[0] + tracked.faceWidth * .62, right[1] - lensHeight * .12); context.moveTo(left[0] + lensWidth * .48, left[1]); context.quadraticCurveTo((left[0] + right[0]) / 2, Math.min(left[1], right[1]) - lensHeight * .18, right[0] - lensWidth * .48, right[1]); context.stroke();
+    [left, right].forEach(function (eye) { const gradient = context.createLinearGradient(eye[0], eye[1] - lensHeight / 2, eye[0], eye[1] + lensHeight / 2); gradient.addColorStop(0, '#090909'); gradient.addColorStop(.58, '#020202'); gradient.addColorStop(1, '#171717'); context.fillStyle = gradient; context.beginPath(); context.moveTo(eye[0] - lensWidth * .5, eye[1] - lensHeight * .38); context.quadraticCurveTo(eye[0], eye[1] - lensHeight * .62, eye[0] + lensWidth * .5, eye[1] - lensHeight * .38); context.lineTo(eye[0] + lensWidth * .42, eye[1] + lensHeight * .38); context.quadraticCurveTo(eye[0], eye[1] + lensHeight * .58, eye[0] - lensWidth * .42, eye[1] + lensHeight * .38); context.closePath(); context.fill(); context.stroke(); context.strokeStyle = 'rgba(255,255,255,.18)'; context.lineWidth = Math.max(1, line * .18); context.beginPath(); context.moveTo(eye[0] - lensWidth * .3, eye[1] - lensHeight * .28); context.lineTo(eye[0] + lensWidth * .08, eye[1] - lensHeight * .4); context.stroke(); context.strokeStyle = '#050505'; context.lineWidth = line; });
     context.restore();
   }
   function drawLaserEyes(context, width, height, time, state) {
@@ -316,7 +318,7 @@
       else { context.fillStyle = '#f4f3e9'; context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.fill(); context.fillStyle = 'rgba(42,42,46,.9)'; context.beginPath(); context.arc(x + radius * .4, y - radius * .2, radius * .84, 0, Math.PI * 2); context.fill(); }
       const sx = x - boxWidth / 2, sy = bottom + radius * 2.1; context.fillStyle = '#f8d338'; context.beginPath(); context.arc(sx, sy, radius * .27, 0, Math.PI * 2); context.fill(); for (let index = 0; index < 8; index += 1) { const a = index * Math.PI / 4; context.beginPath(); context.moveTo(sx + Math.cos(a) * radius * .42, sy + Math.sin(a) * radius * .42); context.lineTo(sx + Math.cos(a) * radius * .72, sy + Math.sin(a) * radius * .72); context.stroke(); } context.restore();
     } else if (effectId === 'shockwave') drawShockwave(context, width, height, t);
-    else if (effectId === 'goat-eyes') drawGoatEyes(context, width, height, state);
+    else if (effectId === 'black-glasses') drawBlackGlasses(context, width, height, state);
     else if (effectId === 'laser-eyes') drawLaserEyes(context, width, height, t, state);
     else if (effectId === 'shy') drawShy(context, width, height, t, state);
   }
