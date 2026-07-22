@@ -1109,6 +1109,57 @@
     const effectOrder = ['none', 'warm', 'cool', 'mono', 'vivid'];
     const stickers = ['', '✨', '❤️', '🔥', '😊'];
     const effectFilters = { none: '', warm: 'sepia(.22) hue-rotate(-8deg)', cool: 'hue-rotate(18deg) saturate(.9)', mono: 'grayscale(1)', vivid: 'saturate(1.45) contrast(1.08)' };
+    // These belong to the editor. Keeping them in this scope makes the
+    // animation menu, live preview and canvas export use the same data.
+    const clipAnimationPresets = {
+      in: [['none','None'],['slice-in','Slice In'],['folding-fan','Folding Fan'],['paddling','Paddling'],['spin-in','Spin In'],['zoom-in','Zoom In'],['zoom-out-in','Zoom Out'],['fade-in','Fade In'],['slide-left','Slide Left'],['slide-right','Slide Right'],['slide-up','Slide Up'],['slide-down','Slide Down'],['flip-in','Flip In'],['roll-in','Roll In'],['bounce-in','Bounce In'],['blur-in','Blur In']],
+      out: [['none','None'],['slice-out','Slice Out'],['folding-fan','Folding Fan'],['paddling','Paddling'],['spin-out','Spin Out'],['zoom-out','Zoom Out'],['zoom-in-out','Zoom In'],['fade-out','Fade Out'],['slide-left','Slide Left'],['slide-right','Slide Right'],['slide-up','Slide Up'],['slide-down','Slide Down'],['flip-out','Flip Out'],['roll-out','Roll Out'],['bounce-out','Bounce Out'],['blur-out','Blur Out']],
+      combo: [['none','None'],['pendulum','Pendulum'],['zoom','Zoom'],['spin','Spin'],['rocking-chair','Rocking Chair'],['wobble','Wobble'],['pulse','Pulse'],['bounce','Bounce'],['swing','Swing'],['flicker','Flicker'],['rotate','Rotate'],['wave','Wave'],['stretch','Stretch'],['jitter','Jitter'],['pan-zoom','Pan & Zoom']]
+    };
+    function clipAnimationState(clip, elapsed, duration) {
+      const state = { opacity: 1, scaleX: 1, scaleY: 1, rotate: 0, x: 0, y: 0, blur: 0 };
+      const ease = function (value) { value = Math.max(0, Math.min(1, value)); return 1 - Math.pow(1 - value, 3); };
+      const inDuration = Math.min(.72, Math.max(.35, duration * .22));
+      const outDuration = Math.min(.72, Math.max(.35, duration * .22));
+      const inP = ease(elapsed / inDuration), outP = ease((duration - elapsed) / outDuration);
+      const applyEdge = function (name, p, entering) {
+        const q = 1 - p;
+        if (!name || name === 'none') return;
+        if (name.indexOf('fade') === 0) state.opacity *= p;
+        else if (name.indexOf('slice') === 0) { state.scaleX *= Math.max(.02, p); state.x += (entering ? -1 : 1) * q * .42; }
+        else if (name === 'folding-fan') { state.scaleX *= .18 + .82 * p; state.rotate += (entering ? -1 : 1) * q * 52; }
+        else if (name === 'paddling') { state.rotate += Math.sin((1 - p) * Math.PI * 2.5) * 16 * q; state.x += (entering ? -1 : 1) * q * .18; }
+        else if (name.indexOf('spin') === 0) { state.rotate += (entering ? -1 : 1) * q * 180; state.scaleX *= .35 + .65 * p; state.scaleY *= .35 + .65 * p; }
+        else if (name === 'zoom-in' || name === 'zoom-in-out') { const s = .45 + .55 * p; state.scaleX *= s; state.scaleY *= s; }
+        else if (name === 'zoom-out' || name === 'zoom-out-in') { const s = 1.65 - .65 * p; state.scaleX *= s; state.scaleY *= s; }
+        else if (name === 'slide-left') state.x -= q;
+        else if (name === 'slide-right') state.x += q;
+        else if (name === 'slide-up') state.y -= q;
+        else if (name === 'slide-down') state.y += q;
+        else if (name.indexOf('flip') === 0) state.scaleX *= Math.max(.04, Math.cos(q * Math.PI / 2));
+        else if (name.indexOf('roll') === 0) { state.rotate += (entering ? -1 : 1) * q * 90; state.x += (entering ? -1 : 1) * q * .7; }
+        else if (name.indexOf('bounce') === 0) { state.scaleX *= 1 + Math.sin(p * Math.PI * 3) * q * .18; state.scaleY *= 1 + Math.sin(p * Math.PI * 3) * q * .18; }
+        else if (name.indexOf('blur') === 0) { state.blur += q * 18; state.opacity *= .3 + .7 * p; }
+      };
+      if (elapsed < inDuration) applyEdge(clip.animationIn || 'none', inP, true);
+      if (duration - elapsed < outDuration) applyEdge(clip.animationOut || 'none', outP, false);
+      const combo = clip.animationCombo || 'none', t = duration ? Math.max(0, Math.min(1, elapsed / duration)) : 0;
+      if (combo === 'pendulum') state.rotate += Math.sin(t * Math.PI * 4) * 10;
+      else if (combo === 'zoom') { const s = 1 + .16 * Math.sin(t * Math.PI); state.scaleX *= s; state.scaleY *= s; }
+      else if (combo === 'spin') state.rotate += t * 360;
+      else if (combo === 'rocking-chair') { state.rotate += Math.sin(t * Math.PI * 6) * 6; state.y += Math.abs(Math.sin(t * Math.PI * 3)) * .035; }
+      else if (combo === 'wobble') { state.rotate += Math.sin(t * Math.PI * 8) * 5; state.x += Math.sin(t * Math.PI * 6) * .035; }
+      else if (combo === 'pulse') { const s = 1 + .08 * Math.sin(t * Math.PI * 8); state.scaleX *= s; state.scaleY *= s; }
+      else if (combo === 'bounce') state.y -= Math.abs(Math.sin(t * Math.PI * 6)) * .12;
+      else if (combo === 'swing') { state.x += Math.sin(t * Math.PI * 4) * .12; state.rotate += Math.sin(t * Math.PI * 4) * 4; }
+      else if (combo === 'flicker') state.opacity *= .62 + .38 * Math.abs(Math.sin(t * Math.PI * 10));
+      else if (combo === 'rotate') state.rotate += Math.sin(t * Math.PI * 2) * 14;
+      else if (combo === 'wave') { state.x += Math.sin(t * Math.PI * 4) * .07; state.y += Math.cos(t * Math.PI * 4) * .04; }
+      else if (combo === 'stretch') { state.scaleX *= 1 + .13 * Math.sin(t * Math.PI * 4); state.scaleY *= 1 - .08 * Math.sin(t * Math.PI * 4); }
+      else if (combo === 'jitter') { state.x += Math.sin(t * Math.PI * 30) * .025; state.y += Math.cos(t * Math.PI * 26) * .02; state.rotate += Math.sin(t * Math.PI * 24) * 1.5; }
+      else if (combo === 'pan-zoom') { const s = 1 + .14 * t; state.scaleX *= s; state.scaleY *= s; state.x += (t - .5) * .08; }
+      return state;
+    }
     const toolPanel = document.createElement('section');
     toolPanel.className = 'reel-tool-panel';
     toolPanel.setAttribute('aria-hidden', 'true');
@@ -3148,16 +3199,17 @@
 
     document.addEventListener('click', function (event) {
       const button = event.target.closest('[data-selection-tool]');
-      if (!button || !flow.contains(button)) return;
+      if (!button) return;
       const toolName = button.dataset.selectionTool;
       if (!['split','replace','delete','speed','crop','animation','filters','effects','magic','adjust'].includes(toolName)) return;
+      if (toolName !== 'animation' && !flow.contains(button)) return;
       event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation();
       if (toolName === 'split') splitAtPlayhead();
       else if (toolName === 'replace') replaceSelectedClip();
       else if (toolName === 'delete') deleteSelectedClip();
       else if (toolName === 'speed') openSpeedEditor();
       else if (toolName === 'crop') openCropEditor();
-      else if (toolName === 'animation') { if (button.dataset.animationOpening === '1') return; openAnimationEditor(); }
+      else if (toolName === 'animation') openAnimationEditor();
       else if (toolName === 'filters' || toolName === 'effects' || toolName === 'magic') {
         const clip = selectedClip(); if (!clip) return;
         const before = captureEditorSnapshot();
@@ -3170,16 +3222,6 @@
         openToolPanel('Adjust clip', wrap);
       }
     }, true);
-    flow.addEventListener('pointerup', function (event) {
-      const button = event.target.closest('[data-selection-tool="animation"]');
-      if (!button || !flow.contains(button)) return;
-      event.preventDefault(); event.stopPropagation();
-      if (button.dataset.animationOpening === '1') return;
-      button.dataset.animationOpening = '1';
-      openAnimationEditor();
-      setTimeout(function () { delete button.dataset.animationOpening; }, 350);
-    }, true);
-
     function blobToDataUrl(blob) {
       return new Promise(function (resolve, reject) {
         const reader = new FileReader();
