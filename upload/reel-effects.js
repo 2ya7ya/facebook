@@ -1,7 +1,12 @@
 (function () {
   'use strict';
 
-  const removedEffectIds = new Set(['old-tv','grain','shake-2','light-leak','datamosh','block-glitch','digital-rain','liquid-glass','half-face-whirl','laser']);
+  const removedEffectIds = new Set([
+    'rgb-split','glitch','datamosh','block-glitch',
+    'vhs','old-tv','scanlines','grain',
+    'shake-2','light-leak','digital-rain','liquid-glass',
+    'half-face-whirl','laser','bloom','bling'
+  ]);
   const catalog = [
     ['none', 'None', 'Basic'],
     ['rgb-split', 'RGB Split', 'Glitch'],
