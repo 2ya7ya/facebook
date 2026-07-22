@@ -1425,6 +1425,7 @@
       editVideo.style.removeProperty('opacity');
       editVideo.style.removeProperty('clip-path');
       editVideo.style.removeProperty('transform');
+      requestAnimationFrame(applyPreviewEdits);
     }
     function updateTransitionPreview(item) {
       function hideTransitionPreview() {
@@ -1566,11 +1567,16 @@
         const cropRatio = settings.cropRatio && settings.cropRatio !== 'freeform' ? settings.cropRatio.replace(':', ' / ') : (Number(settings.cropAspect) > 0 ? String(settings.cropAspect) : '');
         video.style.objectFit = cropRatio ? 'cover' : settings.fit;
         video.style.objectPosition = ((Number(settings.cropX) || .5) * 100) + '% ' + ((Number(settings.cropY) || .5) * 100) + '%';
-        if (video === editVideo) {
-          video.classList.toggle('has-crop-ratio', Boolean(cropRatio));
-          if (cropRatio) video.style.setProperty('--reel-crop-ratio', cropRatio);
-          else video.style.removeProperty('--reel-crop-ratio');
-        }
+        video.classList.toggle('has-crop-ratio', Boolean(cropRatio));
+        if (cropRatio) {
+          const parts = cropRatio.split('/').map(Number);
+          const aspect = parts.length > 1 ? parts[0] / parts[1] : Number(parts[0]);
+          const boxAspect = video.clientWidth / Math.max(1, video.clientHeight);
+          let insetX = 0, insetY = 0;
+          if (aspect > 0 && boxAspect > aspect) insetX = (1 - aspect / boxAspect) * 50;
+          else if (aspect > 0 && boxAspect < aspect) insetY = (1 - boxAspect / aspect) * 50;
+          video.style.clipPath = 'inset(' + insetY + '% ' + insetX + '% ' + insetY + '% ' + insetX + '%)';
+        } else video.style.removeProperty('clip-path');
         ensureUserOverlay(video);
       });
     }
@@ -1637,6 +1643,7 @@
       editStage.classList.toggle('is-editor-fullscreen', Boolean(enabled));
       document.body.classList.toggle('reel-fullscreen-open', Boolean(enabled));
       if (enabled) updateEditTimeDisplay(currentSequenceTime);
+      requestAnimationFrame(applyPreviewEdits);
     }
     function enterEditorFullscreen() {
       if (!editStage) return;
@@ -2686,7 +2693,7 @@
       const cropLayer = document.createElement('section');
       cropLayer.className = 'reel-crop-editor';
       cropLayer.setAttribute('aria-label', 'Crop video');
-      cropLayer.innerHTML = '<div class="reel-crop-preview-area"><div class="reel-crop-viewport"><video playsinline preload="auto"></video><div class="reel-crop-grid" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></div></div></div><div class="reel-crop-transport"><span class="reel-crop-time">00:00/00:00</span><button type="button" class="reel-crop-play" aria-label="Play video"><svg viewBox="0 0 40 40"><path d="M12 7l21 13-21 13z"/></svg></button></div><div class="reel-crop-strip"><div class="reel-crop-thumbnails"></div><input type="range" min="0" value="0" step=".01" aria-label="Crop timeline"><span class="reel-crop-strip-playhead"></span></div><div class="reel-crop-ratios"></div><div class="reel-crop-actions"><button type="button" class="reel-crop-reset"><svg viewBox="0 0 32 32"><path d="M8 10H2v-6"/><path d="M3 10a13 13 0 1 1-1 10"/></svg><span>Reset</span></button><button type="button" class="reel-crop-apply" aria-label="Apply crop"><svg viewBox="0 0 48 48"><path d="M8 25.5l10.3 10L40 9.5"/></svg></button></div>';
+      cropLayer.innerHTML = '<div class="reel-crop-preview-area"><video class="reel-crop-source" playsinline preload="auto"></video><div class="reel-crop-viewport"><div class="reel-crop-grid" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></div></div></div><div class="reel-crop-transport"><span class="reel-crop-time">00:00/00:00</span><button type="button" class="reel-crop-play" aria-label="Play video"><svg viewBox="0 0 40 40"><path d="M12 7l21 13-21 13z"/></svg></button></div><div class="reel-crop-strip"><div class="reel-crop-thumbnails"></div><input type="range" min="0" value="0" step=".01" aria-label="Crop timeline"><span class="reel-crop-strip-playhead"></span></div><div class="reel-crop-ratios"></div><div class="reel-crop-actions"><button type="button" class="reel-crop-reset"><svg viewBox="0 0 32 32"><path d="M8 10H2v-6"/><path d="M3 10a13 13 0 1 1-1 10"/></svg><span>Reset</span></button><button type="button" class="reel-crop-apply" aria-label="Apply crop"><svg viewBox="0 0 48 48"><path d="M8 25.5l10.3 10L40 9.5"/></svg></button></div>';
       const cropVideo = cropLayer.querySelector('video');
       const previewArea = cropLayer.querySelector('.reel-crop-preview-area');
       const viewport = cropLayer.querySelector('.reel-crop-viewport');
@@ -2729,7 +2736,6 @@
         viewport.style.aspectRatio = 'auto';
         draftCropX = areaWidth ? (left + width / 2) / areaWidth : .5;
         draftCropY = areaHeight ? (top + height / 2) / areaHeight : .5;
-        cropVideo.style.objectPosition = (draftCropX * 100) + '% ' + (draftCropY * 100) + '%';
       }
       function fitCropRatio(aspect, centerX, centerY) {
         const areaWidth = previewArea.clientWidth;
