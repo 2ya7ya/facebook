@@ -948,6 +948,13 @@
     let videoLoadGeneration = 0;
     let editState = freshEditState();
     const editVideo = flow.querySelector('#reelEditVideo');
+    let snapCameraKit = null;
+    let snapSession = null;
+    let snapLenses = [];
+    let snapLoadingPromise = null;
+    let activeSnapLensId = '';
+    const snapCanvasHost = document.createElement('div');
+    snapCanvasHost.className = 'reel-snap-canvas-host';
     const editTime = flow.querySelector('#reelEditTime');
     const editPlayButton = flow.querySelector('[data-reel-flow-action="toggle-edit-play"]');
     const editPlayIcon = flow.querySelector('#reelEditPlayIcon');
@@ -956,6 +963,107 @@
     cropPlaybackMask.className = 'reel-playback-crop-mask';
     cropPlaybackMask.innerHTML = '<i data-crop-mask="top"></i><i data-crop-mask="right"></i><i data-crop-mask="bottom"></i><i data-crop-mask="left"></i>';
     editVideo.insertAdjacentElement('afterend', cropPlaybackMask);
+
+    function loadCameraKitBundle() {
+      if (window.SnapCameraKitWeb) return Promise.resolve(window.SnapCameraKitWeb);
+      return new Promise(function (resolve, reject) {
+        const existing = document.querySelector('script[data-camera-kit-bundle]');
+        if (existing) {
+          existing.addEventListener('load', function () { resolve(window.SnapCameraKitWeb); }, { once: true });
+          existing.addEventListener('error', function () { reject(new Error('Could not load Camera Kit.')); }, { once: true });
+          return;
+        }
+        const script = document.createElement('script');
+        script.src = '/camera-kit.bundle.js';
+        script.dataset.cameraKitBundle = '1';
+        script.onload = function () { resolve(window.SnapCameraKitWeb); };
+        script.onerror = function () { reject(new Error('Could not load Camera Kit.')); };
+        document.head.appendChild(script);
+      });
+    }
+    async function ensureSnapCameraKit() {
+      if (snapSession && snapLenses.length) return snapLenses;
+      if (snapLoadingPromise) return snapLoadingPromise;
+      snapLoadingPromise = (async function () {
+        const configResponse = await fetch('/api/camera-kit/config', { credentials: 'same-origin', cache: 'no-store' });
+        const config = await configResponse.json();
+        if (!configResponse.ok) throw new Error(config.error || 'Camera Kit configuration is unavailable.');
+        const sdk = await loadCameraKitBundle();
+        snapCameraKit = await sdk.bootstrapCameraKit({ apiToken: config.apiToken });
+        snapSession = await snapCameraKit.createSession();
+        const source = sdk.createVideoSource(editVideo);
+        await snapSession.setSource(source);
+        const result = await snapCameraKit.lensRepository.loadLensGroups([config.lensGroupId]);
+        snapLenses = result.lenses || [];
+        const canvas = snapSession.output.live;
+        canvas.classList.add('reel-snap-output');
+        editVideo.insertAdjacentElement('afterend', canvas);
+        snapSession.events.addEventListener('error', function (event) {
+          const detail = event.detail || {};
+          reelMessage(root, detail.error && detail.error.message ? detail.error.message : 'This Lens could not be rendered.');
+        });
+        return snapLenses;
+      })().catch(function (error) {
+        snapLoadingPromise = null;
+        throw error;
+      });
+      return snapLoadingPromise;
+    }
+    async function applySnapLens(lens, button, grid) {
+      grid.querySelectorAll('.reel-snap-effect').forEach(function (item) { item.disabled = true; });
+      if (button) button.classList.add('is-loading');
+      try {
+        const clip = selectedClip();
+        if (!lens) {
+          if (snapSession) { await snapSession.removeLens(); snapSession.pause(); }
+          activeSnapLensId = '';
+          editStage.classList.remove('has-snap-lens');
+          if (clip) { clip.snapLensId = ''; clip.snapLensName = ''; }
+        } else {
+          await snapSession.applyLens(lens);
+          snapSession.play('live');
+          activeSnapLensId = lens.id;
+          editStage.classList.add('has-snap-lens');
+          if (clip) { clip.snapLensId = lens.id; clip.snapLensName = lens.name; clip.snapLensGroupId = lens.groupId; }
+        }
+        grid.querySelectorAll('.reel-snap-effect').forEach(function (item) { item.classList.toggle('is-active', item.dataset.lensId === activeSnapLensId); });
+      } finally {
+        grid.querySelectorAll('.reel-snap-effect').forEach(function (item) { item.disabled = false; item.classList.remove('is-loading'); });
+      }
+    }
+    function openSnapEffectsEditor() {
+      const wrap = document.createElement('div');
+      wrap.className = 'reel-snap-effects';
+      wrap.innerHTML = '<input class="reel-snap-search" type="search" placeholder="Search for effects" aria-label="Search for effects"><div class="reel-snap-status">Loading effects…</div><div class="reel-snap-grid"></div>';
+      const search = wrap.querySelector('.reel-snap-search');
+      const status = wrap.querySelector('.reel-snap-status');
+      const grid = wrap.querySelector('.reel-snap-grid');
+      openToolPanel('Effects', wrap);
+      function renderLenses(query) {
+        const normalized = String(query || '').trim().toLowerCase();
+        const visible = snapLenses.filter(function (lens) { return !normalized || lens.name.toLowerCase().includes(normalized); });
+        grid.replaceChildren();
+        const none = document.createElement('button');
+        none.type = 'button'; none.className = 'reel-snap-effect' + (!activeSnapLensId ? ' is-active' : ''); none.dataset.lensId = '';
+        none.innerHTML = '<span class="reel-snap-effect-thumb reel-snap-none"></span><strong>None</strong>';
+        none.addEventListener('click', function () { applySnapLens(null, none, grid).catch(function (error) { reelMessage(root, error.message); }); });
+        grid.appendChild(none);
+        visible.forEach(function (lens) {
+          const button = document.createElement('button');
+          button.type = 'button'; button.className = 'reel-snap-effect' + (lens.id === activeSnapLensId ? ' is-active' : ''); button.dataset.lensId = lens.id;
+          const thumb = document.createElement('span'); thumb.className = 'reel-snap-effect-thumb';
+          const imageUrl = lens.preview && lens.preview.imageUrl ? lens.preview.imageUrl : lens.iconUrl;
+          if (imageUrl) thumb.style.backgroundImage = 'url("' + String(imageUrl).replace(/"/g, '%22') + '")';
+          const label = document.createElement('strong'); label.textContent = lens.name;
+          button.append(thumb, label);
+          button.addEventListener('click', function () { applySnapLens(lens, button, grid).catch(function (error) { reelMessage(root, error.message); }); });
+          grid.appendChild(button);
+        });
+        status.textContent = visible.length ? visible.length + ' effects available' : 'No matching effects';
+      }
+      search.addEventListener('input', function () { renderLenses(search.value); });
+      ensureSnapCameraKit().then(function () { renderLenses(''); }).catch(function (error) { status.textContent = error.message; reelMessage(root, error.message); });
+    }
     const editCurrentLabel = flow.querySelector('#reelEditCurrent');
     const editTotalLabel = flow.querySelector('#reelEditTotal');
     const undoButton = flow.querySelector('#reelUndoButton');
@@ -3240,7 +3348,8 @@
       else if (toolName === 'speed') openSpeedEditor();
       else if (toolName === 'crop') openCropEditor();
       else if (toolName === 'animation') openAnimationEditor();
-      else if (toolName === 'filters' || toolName === 'effects' || toolName === 'magic') {
+      else if (toolName === 'effects') openSnapEffectsEditor();
+      else if (toolName === 'filters' || toolName === 'magic') {
         const clip = selectedClip(); if (!clip) return;
         const before = captureEditorSnapshot();
         clip.effect = effectOrder[(effectOrder.indexOf(clip.effect) + 1) % effectOrder.length];
@@ -3539,7 +3648,9 @@
           applyPreviewEdits();
           recordEditorChange(historyBefore);
           reelMessage(root, target.fit === 'cover' ? 'Video fills the frame' : 'Full video is visible');
-        } else if (name === 'effects' || name === 'filters' || name === 'magic') {
+        } else if (name === 'effects') {
+          openSnapEffectsEditor();
+        } else if (name === 'filters' || name === 'magic') {
           const historyBefore = captureEditorSnapshot();
           const target = currentEditingTarget();
           target.effect = effectOrder[(effectOrder.indexOf(target.effect) + 1) % effectOrder.length];

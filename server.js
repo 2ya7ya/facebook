@@ -754,6 +754,18 @@ app.get('/app-data.js', requireAuth, (_request, response) => {
   response.type('application/javascript').sendFile(path.join(publicDirectory, 'app-data.js'));
 });
 
+app.get('/camera-kit.bundle.js', requireAuth, (_request, response) => {
+  response.type('application/javascript').sendFile(path.join(publicDirectory, 'camera-kit.bundle.js'));
+});
+
+app.get('/api/camera-kit/config', requireAuth, (_request, response) => {
+  const apiToken = String(process.env.SNAP_CAMERA_KIT_API_TOKEN || '').trim();
+  const lensGroupId = String(process.env.SNAP_CAMERA_KIT_LENS_GROUP_ID || '9e005ddd-4076-4b57-8a6b-fb4292331869').trim();
+  if (!apiToken) return response.status(503).json({ error: 'Camera Kit is not configured. Add SNAP_CAMERA_KIT_API_TOKEN in Render.' });
+  response.set('Cache-Control', 'no-store');
+  response.json({ apiToken, lensGroupId });
+});
+
 app.get('/reel-ui/:asset', requireAuth, (request, response) => {
   const allowed = new Set(['reel-undo.png', 'reel-redo.png', 'reel-fullscreen.png', 'reel-minimize.png']);
   if (!allowed.has(request.params.asset)) return response.sendStatus(404);
