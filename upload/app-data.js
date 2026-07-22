@@ -1245,58 +1245,22 @@
     }
     function syncTransitionPreviewBounds() {
       if (!editStage || !editVideo || !transitionPreviewLayer) return;
-      const width = Math.max(1, editVideo.offsetWidth);
-      const height = Math.max(1, editVideo.offsetHeight);
-      transitionPreviewLayer.style.left = Math.max(0, editVideo.offsetLeft) + 'px';
-      transitionPreviewLayer.style.top = Math.max(0, editVideo.offsetTop) + 'px';
-      transitionPreviewLayer.style.width = width + 'px';
-      transitionPreviewLayer.style.height = height + 'px';
+      transitionPreviewLayer.style.left = editVideo.offsetLeft + 'px';
+      transitionPreviewLayer.style.top = editVideo.offsetTop + 'px';
+      transitionPreviewLayer.style.width = editVideo.offsetWidth + 'px';
+      transitionPreviewLayer.style.height = editVideo.offsetHeight + 'px';
       transitionPreviewLayer.style.right = 'auto';
       transitionPreviewLayer.style.bottom = 'auto';
-      const ratio = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
-      const pixelWidth = Math.max(2, Math.round(width * ratio));
-      const pixelHeight = Math.max(2, Math.round(height * ratio));
-      if (transitionPreviewLayer.width !== pixelWidth) transitionPreviewLayer.width = pixelWidth;
-      if (transitionPreviewLayer.height !== pixelHeight) transitionPreviewLayer.height = pixelHeight;
     }
     function captureTransitionPreview(fromClip, toClip) {
-      syncTransitionPreviewBounds();
       const transition = transitionForBoundary(fromClip.id, toClip.id);
-      if (!transition || transition.type === 'none' || !editVideo.videoWidth || !editVideo.videoHeight) {
-        transitionPreviewKey = '';
-        transitionPreviewLayer.className = 'reel-transition-preview-layer';
-        const clear = transitionPreviewLayer.getContext('2d');
-        if (clear) clear.clearRect(0, 0, transitionPreviewLayer.width, transitionPreviewLayer.height);
-        return;
-      }
-      try {
-        const canvas = transitionPreviewLayer;
-        const context = canvas.getContext('2d', { alpha: false });
-        const cw = canvas.width, ch = canvas.height;
-        context.save();
-        context.setTransform(1, 0, 0, 1, 0, 0);
-        context.fillStyle = '#000';
-        context.fillRect(0, 0, cw, ch);
-        const sourceRatio = editVideo.videoWidth / editVideo.videoHeight;
-        const targetRatio = cw / ch;
-        const fit = getComputedStyle(editVideo).objectFit || 'contain';
-        let sx = 0, sy = 0, sw = editVideo.videoWidth, sh = editVideo.videoHeight;
-        let dx = 0, dy = 0, dw = cw, dh = ch;
-        if (fit === 'cover') {
-          if (sourceRatio > targetRatio) { sw = editVideo.videoHeight * targetRatio; sx = (editVideo.videoWidth - sw) / 2; }
-          else { sh = editVideo.videoWidth / targetRatio; sy = (editVideo.videoHeight - sh) / 2; }
-        } else {
-          if (sourceRatio > targetRatio) { dh = cw / sourceRatio; dy = (ch - dh) / 2; }
-          else { dw = ch * sourceRatio; dx = (cw - dw) / 2; }
-        }
-        context.drawImage(editVideo, sx, sy, sw, sh, dx, dy, dw, dh);
-        context.restore();
-        transitionPreviewKey = fromClip.id + '>' + toClip.id;
-      } catch (error) { transitionPreviewKey = ''; }
+      transitionPreviewKey = transition && transition.type !== 'none' ? fromClip.id + '>' + toClip.id : '';
+      syncTransitionPreviewBounds();
     }
     function updateTransitionPreview(item) {
       if (!item || !transitionPreviewKey) {
         transitionPreviewLayer.className = 'reel-transition-preview-layer';
+        transitionPreviewLayer.style.removeProperty('--transition-progress');
         return;
       }
       const layout = sequenceLayout();
@@ -1311,13 +1275,14 @@
       const local = Math.max(0, currentSequenceTime - item.start);
       if (!duration || local >= duration) {
         transitionPreviewLayer.className = 'reel-transition-preview-layer';
+        transitionPreviewLayer.style.removeProperty('--transition-progress');
         transitionPreviewKey = '';
         return;
       }
       const progress = Math.min(1, local / duration);
       syncTransitionPreviewBounds();
       transitionPreviewLayer.className = 'reel-transition-preview-layer is-active is-' + transition.type;
-      transitionPreviewLayer.style.setProperty('--transition-progress', progress);
+      transitionPreviewLayer.style.setProperty('--transition-progress', String(progress));
     }
 
     function syncSequenceTimeFromVideo() {
@@ -1939,7 +1904,7 @@
             if (continuousBoundary) {
               activePlaybackClipId = next.clip.id;
               const carriedLocal = Math.max(0, (Number(editVideo.currentTime) - next.clip.sourceStart) / Math.max(.25, Number(next.clip.speed) || 1));
-              currentSequenceTime = Math.min(next.end, next.start + carriedLocal);
+              currentSequenceTime = Math.min(next.end, Math.max(next.start, next.start + carriedLocal));
               editVideo.playbackRate = next.clip.speed;
               sequenceSeekInProgress = false;
               sequenceBoundarySeekActive = false;
@@ -1979,14 +1944,7 @@
       // instead of letting a separate CSS animation drift away from playback.
       function followFrame() {
         if (editVideo.paused || timelineDragging) return;
-        if (sequenceBoundarySeekActive || editVideo.seeking) {
-          const elapsed = Math.max(0, (performance.now() - sequenceBoundaryWallStart) / 1000);
-          currentSequenceTime = Math.min(timelineDuration, sequenceBoundaryTimeStart + elapsed);
-          const virtualItem = clipAtSequenceTime(currentSequenceTime);
-          updateTransitionPreview(virtualItem);
-        } else {
-          syncSequenceTimeFromVideo();
-        }
+        syncSequenceTimeFromVideo();
         renderTimelineAt(currentSequenceTime);
         updateEditTimeDisplay(currentSequenceTime);
         timelineAnimationFrame = requestAnimationFrame(followFrame);
@@ -2604,6 +2562,10 @@
     }
     async function renderEditedVideoData(sourceData, state) {
       const clips = ensureClipState().map(function (clip) { return JSON.parse(JSON.stringify(clip)); });
+      const renderTransitions = Array.isArray(state && state.transitions) ? state.transitions.map(function (item) { return JSON.parse(JSON.stringify(item)); }) : [];
+      const renderTransitionForBoundary = function (fromId, toId) {
+        return renderTransitions.find(function (item) { return item.fromId === fromId && item.toId === toId; }) || null;
+      };
       if (!clips.length) return sourceData;
       if (!window.MediaRecorder || !HTMLCanvasElement.prototype.captureStream) throw new Error('This browser cannot render edited video output.');
       const videoA = document.createElement('video');
@@ -2660,7 +2622,7 @@
         if (activeGain) activeGain.gain.value = 1;
         await active.play().catch(function () {});
         const duration = clipOutputDuration(clip);
-        const previousTransition = index > 0 ? transitionForBoundary(clips[index - 1].id, clip.id) : null;
+        const previousTransition = index > 0 ? renderTransitionForBoundary(clips[index - 1].id, clip.id) : null;
         const transitionDuration = previousTransition && previousTransition.type !== 'none' ? Math.min(.6, Math.max(.15, Number(previousTransition.duration) || .35), duration * .45) : 0;
         let frozen = null;
         if (transitionDuration) {
@@ -2675,13 +2637,21 @@
             const tp = elapsed / transitionDuration;
             const type = previousTransition.type;
             if (type === 'fade') {
-              context.globalAlpha = 1 - tp; context.drawImage(frozen, 0, 0); context.globalAlpha = tp; drawClipFrame(context, canvas, active, clip, 1); context.globalAlpha = 1;
+              if (tp < .5) {
+                context.globalAlpha = 1 - tp * 2; context.drawImage(frozen, 0, 0); context.globalAlpha = 1;
+              } else {
+                context.globalAlpha = (tp - .5) * 2; drawClipFrame(context, canvas, active, clip, 1); context.globalAlpha = 1;
+              }
             } else if (type === 'wipe') {
-              context.drawImage(frozen, 0, 0); drawClipFrame(context, canvas, active, clip, 1, 0, canvas.width * tp);
+              context.drawImage(frozen, 0, 0);
+              context.save(); context.beginPath(); context.rect(0, 0, canvas.width * tp, canvas.height); context.clip();
+              drawClipFrame(context, canvas, active, clip, 1); context.restore();
             } else if (type === 'slide') {
-              context.drawImage(frozen, -canvas.width * tp, 0); drawClipFrame(context, canvas, active, clip, 1, canvas.width * (1 - tp));
+              context.drawImage(frozen, -canvas.width * tp, 0);
+              drawClipFrame(context, canvas, active, clip, 1, canvas.width * (1 - tp));
             } else {
-              context.globalAlpha = 1 - tp; context.drawImage(frozen, 0, 0); context.globalAlpha = tp; drawClipFrame(context, canvas, active, clip, 1); context.globalAlpha = 1;
+              context.globalAlpha = 1 - tp; context.drawImage(frozen, 0, 0);
+              context.globalAlpha = tp; drawClipFrame(context, canvas, active, clip, 1); context.globalAlpha = 1;
             }
             if (activeGain) activeGain.gain.value = tp;
           } else {
