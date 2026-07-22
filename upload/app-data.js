@@ -3160,6 +3160,29 @@
       editor.className = 'reel-animation-editor';
       editor.innerHTML = '<div class="reel-animation-head"><div class="reel-animation-tabs"><button type="button" data-animation-tab="in">In</button><button type="button" data-animation-tab="out">Out</button><button type="button" data-animation-tab="combo">Combo</button></div><button type="button" class="reel-animation-done" aria-label="Apply animation"><svg viewBox="0 0 48 48"><path d="M8 25.5l10.3 10L40 9.5"/></svg></button></div><div class="reel-animation-options"></div>';
       const optionHost = editor.querySelector('.reel-animation-options');
+      let animationPreviewSource = clip.thumbnail || '';
+      if (!animationPreviewSource && timelineFrameSources.length) {
+        const inClip = timelineFrameSources.filter(function (frame) {
+          return frame.time >= clip.sourceStart && frame.time <= clip.sourceEnd;
+        });
+        const candidates = inClip.length ? inClip : timelineFrameSources;
+        animationPreviewSource = candidates.reduce(function (nearest, frame) {
+          return !nearest || Math.abs(frame.time - clip.sourceStart) < Math.abs(nearest.time - clip.sourceStart) ? frame : nearest;
+        }, null).src;
+      }
+      if (!animationPreviewSource && editVideo.readyState >= 2 && editVideo.videoWidth) {
+        try {
+          const snapshot = document.createElement('canvas');
+          snapshot.width = 160;
+          snapshot.height = 160;
+          const context = snapshot.getContext('2d');
+          const sourceRatio = editVideo.videoWidth / editVideo.videoHeight;
+          const sourceWidth = sourceRatio > 1 ? editVideo.videoHeight : editVideo.videoWidth;
+          const sourceHeight = sourceRatio > 1 ? editVideo.videoHeight : editVideo.videoWidth;
+          context.drawImage(editVideo, (editVideo.videoWidth - sourceWidth) / 2, (editVideo.videoHeight - sourceHeight) / 2, sourceWidth, sourceHeight, 0, 0, 160, 160);
+          animationPreviewSource = snapshot.toDataURL('image/jpeg', .76);
+        } catch (error) {}
+      }
       let activeTab = 'in';
       function selectedValue() { return activeTab === 'in' ? clip.animationIn : activeTab === 'out' ? clip.animationOut : clip.animationCombo; }
       function previewSelection() {
@@ -3182,7 +3205,7 @@
           else {
             const movingImage = document.createElement('span');
             movingImage.className = 'reel-animation-thumb-image';
-            if (clip.thumbnail) movingImage.style.backgroundImage = 'url("' + String(clip.thumbnail).replace(/"/g, '%22') + '")';
+            if (animationPreviewSource) movingImage.style.backgroundImage = 'url("' + String(animationPreviewSource).replace(/"/g, '%22') + '")';
             preview.appendChild(movingImage);
           }
           const label = document.createElement('strong'); label.textContent = preset[1];
