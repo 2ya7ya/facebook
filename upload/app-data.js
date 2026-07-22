@@ -1030,11 +1030,13 @@
       }
       function animateEffectThumbnails(now) {
         if (!wrap.isConnected || !toolPanel.classList.contains('is-effects-panel')) return;
-        if (thumbnailRenderer && thumbnailRecords.length && now - thumbnailLastFrame >= 58 && refreshThumbnailSource()) {
+        if (thumbnailRenderer && thumbnailRecords.length && now - thumbnailLastFrame >= 90 && refreshThumbnailSource()) {
           thumbnailLastFrame = now;
-          const work = thumbnailRecords.length;
+          const gridRect = grid.getBoundingClientRect();
+          const visibleRecords = thumbnailRecords.filter(function (record) { const rect = record.canvas.getBoundingClientRect(); return rect.bottom >= gridRect.top && rect.top <= gridRect.bottom; });
+          const work = Math.min(4, visibleRecords.length);
           for (let count = 0; count < work; count += 1) {
-            const record = thumbnailRecords[count]; thumbnailCursor += 1;
+            const record = visibleRecords[thumbnailCursor % visibleRecords.length]; thumbnailCursor += 1;
             if (record.canvas.isConnected && thumbnailRenderer.render(thumbnailSource, record.effect.id, now / 1000)) {
               record.context.drawImage(thumbnailStage, 0, 0, record.canvas.width, record.canvas.height);
             }
@@ -1111,23 +1113,14 @@
       function slideToCategory(name, direction) {
         if (name === activeCategory || categoryAnimating) return;
         categoryAnimating = true;
-        const finishSwap = function () {
-          activeCategory = name;
-          updateCategoryTabs();
-          renderEffects();
-          if (!grid.animate) { categoryAnimating = false; return; }
-          grid.animate([
-            { transform: 'translate3d(' + (direction > 0 ? '24%' : '-24%') + ',0,0)', opacity: .28 },
-            { transform: 'translate3d(0,0,0)', opacity: 1 }
-          ], { duration: 240, easing: 'cubic-bezier(.22,.74,.22,1)', fill: 'both' }).finished.then(function () {
-            categoryAnimating = false;
-          }).catch(function () { categoryAnimating = false; });
-        };
-        if (!grid.animate) { finishSwap(); return; }
+        activeCategory = name;
+        updateCategoryTabs();
+        renderEffects();
+        if (!grid.animate) { categoryAnimating = false; return; }
         grid.animate([
-          { transform: 'translate3d(0,0,0)', opacity: 1 },
-          { transform: 'translate3d(' + (direction > 0 ? '-24%' : '24%') + ',0,0)', opacity: .28 }
-        ], { duration: 170, easing: 'cubic-bezier(.4,0,.6,1)', fill: 'both' }).finished.then(finishSwap).catch(finishSwap);
+          { transform: 'translate3d(' + (direction > 0 ? '12px' : '-12px') + ',0,0)', opacity: .55 },
+          { transform: 'translate3d(0,0,0)', opacity: 1 }
+        ], { duration: 170, easing: 'ease-out' }).finished.then(function () { categoryAnimating = false; }).catch(function () { categoryAnimating = false; });
       }
       categoryNames.forEach(function (name) {
         const button = document.createElement('button');
@@ -1147,10 +1140,10 @@
         editVideo.__effectThumbRaf = 0;
         editVideo.__effectMenuCleanup = null;
       };
-      let pullStartY = null; let pullDistance = 0; let pullStartedAt = 0; let pullActive = false;
+      let pullStartY = null; let pullDistance = 0; let pullStartedAt = 0; let pullActive = false; let pullFrame = 0;
       function beginPull(event) { if (event.target.closest('.reel-effect-done')) return; pullStartY = event.clientY; pullDistance = 0; pullStartedAt = performance.now(); pullActive = false; }
-      function movePull(event) { if (pullStartY == null) return; pullDistance = Math.max(0, event.clientY - pullStartY); if (!pullActive && pullDistance < 7) return; pullActive = true; event.preventDefault(); search.blur(); toolPanel.style.transition = 'none'; toolPanel.style.transform = 'translate3d(0,' + pullDistance + 'px,0)'; }
-      function finishPull() { if (pullStartY == null) return; const elapsed = Math.max(1, performance.now() - pullStartedAt); const hide = pullActive && (pullDistance > 46 || pullDistance / elapsed > .65); pullStartY = null; pullDistance = 0; pullActive = false; toolPanel.style.transition = ''; toolPanel.style.transform = ''; if (hide) closeToolPanel(); }
+      function movePull(event) { if (pullStartY == null) return; pullDistance = Math.max(0, event.clientY - pullStartY); if (!pullActive && pullDistance < 7) return; pullActive = true; event.preventDefault(); search.blur(); if (pullFrame) return; pullFrame = window.requestAnimationFrame(function () { pullFrame = 0; toolPanel.style.transition = 'none'; toolPanel.style.transform = 'translate3d(0,' + pullDistance + 'px,0)'; }); }
+      function finishPull() { if (pullStartY == null) return; const elapsed = Math.max(1, performance.now() - pullStartedAt); const hide = pullActive && (pullDistance > 46 || pullDistance / elapsed > .65); pullStartY = null; pullDistance = 0; pullActive = false; window.cancelAnimationFrame(pullFrame); pullFrame = 0; toolPanel.style.transition = 'transform 180ms cubic-bezier(.2,.75,.25,1)'; if (hide) { toolPanel.style.transform = 'translate3d(0,105%,0)'; window.setTimeout(closeToolPanel, 175); } else { toolPanel.style.transform = 'translate3d(0,0,0)'; window.setTimeout(function () { toolPanel.style.transition = ''; }, 185); } }
       dragZone.addEventListener('pointerdown', beginPull, { signal: effectMenuController.signal }); sheetHead.addEventListener('pointerdown', beginPull, { signal: effectMenuController.signal });
       window.addEventListener('pointermove', movePull, { passive: false, signal: effectMenuController.signal }); window.addEventListener('pointerup', finishPull, { signal: effectMenuController.signal }); window.addEventListener('pointercancel', finishPull, { signal: effectMenuController.signal });
       let categoryStartX = null; let categoryStartY = null;
@@ -1229,7 +1222,7 @@
     let timelineSettleTimer = 0;
     let timelineSelected = false;
     let timelineStageVisible = false;
-    let selectedMusicTrack = false;
+    let selectedMusicTrackId = '';
     let trimCounterFrozen = false;
     let staticCounterText = '00:00/00:00';
     let staticTrimDurationText = '0s';
@@ -1276,7 +1269,7 @@
     timelineMuteRail.hidden = true;
     function syncTimelineMuteButton() {
       // Video mute is independent from the music tape.
-      if (!editState.music && timelineAudio.textContent) timelineAudio.textContent = '';
+      if (!ensureMusicTracks().length && timelineAudio.textContent) timelineAudio.textContent = '';
       timeline.querySelectorAll('.reel-timeline-sound-label').forEach(function (label, index) {
         if (index > 0) label.remove();
       });
@@ -1388,7 +1381,7 @@
     loadingIndicator.innerHTML = '<span></span><strong>Loading video…</strong>';
     flow.appendChild(loadingIndicator);
     function freshEditState() {
-      return { trimStart: 0, trimEnd: 0, brightness: 1, contrast: 1, saturation: 1, effect: 'none', visualEffect: 'none', text: '', sticker: '', captions: false, overlay: false, fit: 'contain', cropRatio: 'freeform', clips: [], transitions: [], music: null, rendered: false };
+      return { trimStart: 0, trimEnd: 0, brightness: 1, contrast: 1, saturation: 1, effect: 'none', visualEffect: 'none', text: '', sticker: '', captions: false, overlay: false, fit: 'contain', cropRatio: 'freeform', clips: [], transitions: [], music: null, musicTracks: [], rendered: false };
     }
 
     let sourceMediaDuration = 0;
@@ -1426,6 +1419,7 @@
       syncEffectSelectionToolbar();
     }
     function selectEffectTrack(clipId) {
+      clearMusicTrackSelection();
       selectedEffectTrackClipId = clipId;
       timelineSelected = false;
       timeline.classList.remove('is-selected');
@@ -1464,6 +1458,60 @@
         clip.visualEffect = 'none'; clip.visualEffectStart = 0; clip.visualEffectEnd = 1;
         clearEffectTrackSelection(); applyPreviewEdits(); renderClipTimeline(); recordEditorChange(before);
         reelMessage(root, 'Effect deleted'); return;
+      }
+    });
+
+    const musicSelectionToolbar = document.createElement('div');
+    musicSelectionToolbar.className = 'reel-effect-selection-toolbar reel-music-selection-toolbar';
+    musicSelectionToolbar.setAttribute('aria-hidden', 'true');
+    musicSelectionToolbar.innerHTML = '<button type="button" data-music-track-action="close" aria-label="Close sound controls"><svg viewBox="0 0 32 32"><path d="M7 11l9 9 9-9"/></svg></button><button type="button" data-music-track-action="replace"><svg viewBox="0 0 32 32"><path d="M7 10h16l-4-4M25 22H9l4 4M23 10l3 3-3 3M9 22l-3-3 3-3"/></svg><span>Replace sound</span></button><button type="button" data-music-track-action="copy"><svg viewBox="0 0 32 32"><rect x="10" y="7" width="14" height="14" rx="2"/><rect x="6" y="11" width="14" height="14" rx="2"/></svg><span>Copy</span></button><button type="button" data-music-track-action="delete"><svg viewBox="0 0 32 32"><path d="M8 10h16M13 6h6l1 4M11 10l1 16h8l1-16M15 14v8M18 14v8"/></svg><span>Delete</span></button>';
+    if (editStage) editStage.appendChild(musicSelectionToolbar);
+    function ensureMusicTracks() {
+      if (!Array.isArray(editState.musicTracks)) editState.musicTracks = [];
+      if (editState.music && !editState.musicTracks.length) {
+        editState.music.trackId = editState.music.trackId || ('music-' + Date.now());
+        editState.musicTracks.push(editState.music); editState.music = null;
+      }
+      return editState.musicTracks;
+    }
+    function selectedMusicTrackData() { return ensureMusicTracks().find(function (track) { return track.trackId === selectedMusicTrackId; }) || null; }
+    function syncMusicSelectionToolbar() {
+      const visible = Boolean(selectedMusicTrackData());
+      musicSelectionToolbar.classList.toggle('is-visible', visible);
+      musicSelectionToolbar.setAttribute('aria-hidden', visible ? 'false' : 'true');
+      if (editStage) editStage.classList.toggle('is-music-track-selected', visible);
+    }
+    function clearMusicTrackSelection() {
+      selectedMusicTrackId = '';
+      timelineAudio.querySelectorAll('.reel-music-track').forEach(function (track) { track.classList.remove('is-selected'); });
+      syncMusicSelectionToolbar();
+    }
+    function selectMusicTrack(trackId) {
+      clearEffectTrackSelection(); selectedMusicTrackId = trackId;
+      timelineAudio.querySelectorAll('.reel-music-track').forEach(function (track) { track.classList.toggle('is-selected', track.dataset.musicTrackId === trackId); });
+      syncMusicSelectionToolbar();
+    }
+    musicSelectionToolbar.addEventListener('pointerdown', function (event) { event.stopPropagation(); });
+    musicSelectionToolbar.addEventListener('click', function (event) {
+      const button = event.target.closest('[data-music-track-action]'); if (!button) return;
+      event.preventDefault(); event.stopPropagation();
+      const action = button.dataset.musicTrackAction; const music = selectedMusicTrackData();
+      if (action === 'close') { clearMusicTrackSelection(); return; }
+      if (!music) return;
+      if (action === 'replace') { openDeviceMusicPicker(music.trackId); return; }
+      if (action === 'delete') {
+        const before = captureEditorSnapshot(); editState.musicTracks = ensureMusicTracks().filter(function (track) { return track.trackId !== music.trackId; });
+        clearMusicTrackSelection(); renderMusicTrack(); recordEditorChange(before); reelMessage(root, 'Sound deleted'); return;
+      }
+      if (action === 'copy') {
+        const layout = sequenceLayout();
+        const sourceIndex = layout.findIndex(function (item) { return music.start >= item.start && music.start < item.end; });
+        const target = layout[sourceIndex + 1] || layout[sourceIndex - 1];
+        if (!target || sourceIndex < 0) return;
+        const before = captureEditorSnapshot(); const duration = Math.min(target.duration, music.end - music.start);
+        const copy = Object.assign({}, music, { trackId: 'music-' + Date.now(), start: target.start, end: target.start + duration });
+        ensureMusicTracks().push(copy); selectedMusicTrackId = copy.trackId; renderMusicTrack(); recordEditorChange(before); syncMusicSelectionToolbar();
+        reelMessage(root, 'Sound copied');
       }
     });
 
@@ -2101,74 +2149,76 @@
       toolPanel.setAttribute('aria-hidden', 'false');
       toolPanel.querySelector('button').addEventListener('click', closeToolPanel);
     }
-    const reelMusicCatalog = [
-      { id: 'midnight-drive', name: 'Midnight Drive', artist: 'Nova Lane', colors: ['#6657df', '#b14db7'] },
-      { id: 'golden-hour', name: 'Golden Hour', artist: 'Mira Vale', colors: ['#d78b2e', '#f1c35a'] },
-      { id: 'afterglow', name: 'Afterglow', artist: 'Neon Coast', colors: ['#d44c82', '#6a4bd8'] },
-      { id: 'city-lights', name: 'City Lights', artist: 'Aster', colors: ['#238ad1', '#31c4c7'] },
-      { id: 'slow-motion', name: 'Slow Motion', artist: 'Kairo', colors: ['#2ca06f', '#7bc65a'] },
-      { id: 'summer-memory', name: 'Summer Memory', artist: 'Luma', colors: ['#e06445', '#e7aa45'] }
-    ];
-    function openMusicPicker() {
-      const picker = document.createElement('section');
-      picker.className = 'reel-music-picker';
-      picker.innerHTML = '<label class="reel-music-search"><span aria-hidden="true"></span><input type="search" placeholder="Search music" aria-label="Search music"></label><div class="reel-music-list"></div>';
-      const list = picker.querySelector('.reel-music-list');
-      const searchInput = picker.querySelector('input');
-      function renderSongs() {
-        const query = searchInput.value.trim().toLowerCase();
-        list.replaceChildren();
-        reelMusicCatalog.filter(function (song) { return !query || (song.name + ' ' + song.artist).toLowerCase().includes(query); }).forEach(function (song) {
-          const row = document.createElement('button');
-          row.type = 'button'; row.className = 'reel-music-option';
-          row.innerHTML = '<span class="reel-music-cover"><i></i><i></i><i></i><i></i></span><span><strong></strong><small></small></span><b>＋</b>';
-          row.querySelector('.reel-music-cover').style.background = 'linear-gradient(135deg,' + song.colors[0] + ',' + song.colors[1] + ')';
-          row.querySelector('strong').textContent = song.name; row.querySelector('small').textContent = song.artist;
-          row.addEventListener('click', function () {
-            const before = captureEditorSnapshot();
-            editState.music = { id: song.id, name: song.name, artist: song.artist, start: 0, end: Math.max(.5, timelineDuration || 1) };
-            selectedMusicTrack = true;
-            renderMusicTrack(); recordEditorChange(before); closeToolPanel();
-            reelMessage(root, song.name + ' added');
-          });
-          list.appendChild(row);
-        });
-      }
-      searchInput.addEventListener('input', renderSongs);
-      renderSongs(); openToolPanel('Music', picker); toolPanel.classList.add('is-music-panel');
+    function openDeviceMusicPicker(replaceTrackId) {
+      const input = document.createElement('input');
+      input.type = 'file'; input.accept = 'audio/*'; input.style.display = 'none';
+      document.body.appendChild(input);
+      input.addEventListener('change', function () {
+        const file = input.files && input.files[0]; input.remove(); if (!file) return;
+        const before = captureEditorSnapshot(); const sourceUrl = URL.createObjectURL(file);
+        const existing = replaceTrackId ? ensureMusicTracks().find(function (track) { return track.trackId === replaceTrackId; }) : null;
+        if (existing) {
+          existing.name = file.name.replace(/\.[^.]+$/, ''); existing.fileName = file.name; existing.sourceUrl = sourceUrl; selectedMusicTrackId = existing.trackId;
+        } else {
+          const item = currentClipItem() || sequenceLayout()[0];
+          const start = item ? item.start : 0; const end = item ? item.end : Math.max(.5, timelineDuration || 1);
+          const music = { trackId: 'music-' + Date.now(), name: file.name.replace(/\.[^.]+$/, ''), fileName: file.name, sourceUrl: sourceUrl, start: start, end: end };
+          ensureMusicTracks().push(music); selectedMusicTrackId = music.trackId;
+        }
+        renderMusicTrack(); recordEditorChange(before); syncMusicSelectionToolbar();
+        reelMessage(root, (existing ? 'Sound replaced with ' : '') + file.name);
+      }, { once: true });
+      input.addEventListener('cancel', function () { input.remove(); }, { once: true });
+      input.click();
     }
+    function openMusicPicker() { openDeviceMusicPicker(''); }
+    const musicPreviewAudio = document.createElement('audio');
+    musicPreviewAudio.className = 'reel-device-music-preview'; musicPreviewAudio.preload = 'metadata'; musicPreviewAudio.hidden = true;
+    flow.appendChild(musicPreviewAudio);
+    function syncDeviceMusicPlayback() {
+      const music = ensureMusicTracks().find(function (track) { return track.sourceUrl && currentSequenceTime >= track.start && currentSequenceTime < track.end; });
+      if (!music) { musicPreviewAudio.pause(); return; }
+      if (musicPreviewAudio.dataset.trackId !== music.trackId) {
+        musicPreviewAudio.pause(); musicPreviewAudio.src = music.sourceUrl; musicPreviewAudio.dataset.trackId = music.trackId;
+      }
+      const offset = Math.max(0, currentSequenceTime - music.start);
+      if (Number.isFinite(musicPreviewAudio.duration) && musicPreviewAudio.duration > 0 && offset >= musicPreviewAudio.duration) { musicPreviewAudio.pause(); return; }
+      if (Math.abs((musicPreviewAudio.currentTime || 0) - offset) > .22) { try { musicPreviewAudio.currentTime = offset; } catch (error) {} }
+      if (editVideo.paused) musicPreviewAudio.pause(); else musicPreviewAudio.play().catch(function () {});
+    }
+    editVideo.addEventListener('timeupdate', function () { window.requestAnimationFrame(syncDeviceMusicPlayback); });
+    editVideo.addEventListener('play', function () { window.requestAnimationFrame(syncDeviceMusicPlayback); });
+    editVideo.addEventListener('pause', function () { musicPreviewAudio.pause(); });
+    editVideo.addEventListener('seeked', function () { window.requestAnimationFrame(syncDeviceMusicPlayback); });
     function renderMusicTrack() {
-      const music = editState.music;
-      timeline.classList.toggle('has-music-track', Boolean(music));
-      timelineAudio.classList.toggle('has-selected-song', Boolean(music));
+      const tracks = ensureMusicTracks();
+      timeline.classList.toggle('has-music-track', Boolean(tracks.length));
+      timelineAudio.classList.toggle('has-selected-song', Boolean(tracks.length));
       timelineAudio.replaceChildren();
-      timelineSoundLabel.style.display = music ? 'none' : '';
-      if (!music) { selectedMusicTrack = false; return; }
-      music.start = Math.max(0, Math.min(timelineDuration, Number(music.start) || 0));
-      music.end = Math.max(music.start + .18, Math.min(timelineDuration || music.end, Number(music.end) || timelineDuration));
-      const track = document.createElement('div');
-      track.className = 'reel-music-track' + (selectedMusicTrack ? ' is-selected' : '');
-      track.style.left = (music.start * pixelsPerSecond) + 'px';
-      track.style.width = Math.max(32, (music.end - music.start) * pixelsPerSecond) + 'px';
-      track.innerHTML = '<button type="button" class="reel-music-trim reel-music-trim-start" aria-label="Trim song start">‹</button><span class="reel-music-note" aria-hidden="true">♪</span><strong></strong><button type="button" class="reel-music-trim reel-music-trim-end" aria-label="Trim song end">›</button>';
-      track.querySelector('strong').textContent = music.name;
-      track.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); selectedMusicTrack = true; track.classList.add('is-selected'); });
-      ['start', 'end'].forEach(function (edge) {
-        const handle = track.querySelector('.reel-music-trim-' + edge);
-        handle.addEventListener('pointerdown', function (event) {
-          event.preventDefault(); event.stopPropagation(); selectedMusicTrack = true; track.classList.add('is-selected');
-          const before = captureEditorSnapshot(); const startX = event.clientX; const initialStart = music.start; const initialEnd = music.end;
-          function move(moveEvent) {
-            moveEvent.preventDefault(); const delta = (moveEvent.clientX - startX) / pixelsPerSecond;
-            if (edge === 'start') music.start = Math.max(0, Math.min(initialEnd - .18, initialStart + delta));
-            else music.end = Math.min(timelineDuration, Math.max(initialStart + .18, initialEnd + delta));
-            track.style.left = (music.start * pixelsPerSecond) + 'px'; track.style.width = Math.max(32, (music.end - music.start) * pixelsPerSecond) + 'px';
-          }
-          function finish() { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', finish); window.removeEventListener('pointercancel', finish); recordEditorChange(before); }
-          window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', finish, { once: true }); window.addEventListener('pointercancel', finish, { once: true });
+      timelineSoundLabel.style.display = tracks.length ? 'none' : '';
+      if (!tracks.length) { selectedMusicTrackId = ''; syncMusicSelectionToolbar(); return; }
+      tracks.forEach(function (music) {
+        music.start = Math.max(0, Math.min(timelineDuration, Number(music.start) || 0));
+        music.end = Math.max(music.start + .18, Math.min(timelineDuration || music.end, Number(music.end) || timelineDuration));
+        const track = document.createElement('div'); track.dataset.musicTrackId = music.trackId;
+        track.className = 'reel-music-track' + (selectedMusicTrackId === music.trackId ? ' is-selected' : '');
+        track.style.left = (music.start * pixelsPerSecond) + 'px'; track.style.width = Math.max(32, (music.end - music.start) * pixelsPerSecond) + 'px';
+        track.innerHTML = '<button type="button" class="reel-music-trim reel-music-trim-start" aria-label="Trim song start">‹</button><span class="reel-music-note" aria-hidden="true">♪</span><strong></strong><button type="button" class="reel-music-trim reel-music-trim-end" aria-label="Trim song end">›</button>';
+        track.querySelector('strong').textContent = music.name;
+        track.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); selectMusicTrack(music.trackId); });
+        ['start', 'end'].forEach(function (edge) {
+          const handle = track.querySelector('.reel-music-trim-' + edge);
+          handle.addEventListener('pointerdown', function (event) {
+            event.preventDefault(); event.stopPropagation(); selectMusicTrack(music.trackId);
+            const before = captureEditorSnapshot(); const startX = event.clientX; const initialStart = music.start; const initialEnd = music.end;
+            function move(moveEvent) { moveEvent.preventDefault(); const delta = (moveEvent.clientX - startX) / pixelsPerSecond; if (edge === 'start') music.start = Math.max(0, Math.min(initialEnd - .18, initialStart + delta)); else music.end = Math.min(timelineDuration, Math.max(initialStart + .18, initialEnd + delta)); track.style.left = (music.start * pixelsPerSecond) + 'px'; track.style.width = Math.max(32, (music.end - music.start) * pixelsPerSecond) + 'px'; }
+            function finish() { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', finish); window.removeEventListener('pointercancel', finish); recordEditorChange(before); }
+            window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', finish, { once: true }); window.addEventListener('pointercancel', finish, { once: true });
+          });
         });
+        timelineAudio.appendChild(track);
       });
-      timelineAudio.appendChild(track);
+      syncMusicSelectionToolbar();
     }
     function rangeControl(label, key, min, max, step) {
       const row = document.createElement('label');
@@ -3079,6 +3129,11 @@
       event.stopImmediatePropagation();
     }
     timelineAudio.addEventListener('click', blockDraggedSoundClick, true);
+    flow.addEventListener('pointerdown', function (event) {
+      if (!selectedMusicTrackId) return;
+      if (event.target.closest('.reel-music-track,.reel-music-selection-toolbar')) return;
+      clearMusicTrackSelection();
+    }, true);
     window.addEventListener('pointerup', function () { endTimelineDrag(false); }, { passive: true });
     window.addEventListener('pointercancel', function () { endTimelineDrag(true); }, { passive: true });
     function loadVisibleVideo(video) {
