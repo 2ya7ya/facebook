@@ -1020,7 +1020,7 @@
       const thumbnailSourceContext = thumbnailSource.getContext('2d', { alpha: false });
       const thumbnailStage = document.createElement('canvas'); thumbnailStage.width = thumbnailStage.height = 96;
       const thumbnailRenderer = window.ReelEffects && window.ReelEffects.createRenderer ? window.ReelEffects.createRenderer(thumbnailStage, { trackFace: false }) : null;
-      let thumbnailRecords = []; let thumbnailCursor = 0;
+      let thumbnailRecords = []; let thumbnailCursor = 0; let thumbnailLastFrame = 0;
       function refreshThumbnailSource() {
         if (!thumbnailSourceContext || editVideo.readyState < 2) return false;
         const width = editVideo.videoWidth || 1, height = editVideo.videoHeight || 1;
@@ -1030,10 +1030,11 @@
       }
       function animateEffectThumbnails(now) {
         if (!wrap.isConnected || !toolPanel.classList.contains('is-effects-panel')) return;
-        if (thumbnailRenderer && thumbnailRecords.length && refreshThumbnailSource()) {
-          const work = Math.min(5, thumbnailRecords.length);
+        if (thumbnailRenderer && thumbnailRecords.length && now - thumbnailLastFrame >= 58 && refreshThumbnailSource()) {
+          thumbnailLastFrame = now;
+          const work = thumbnailRecords.length;
           for (let count = 0; count < work; count += 1) {
-            const record = thumbnailRecords[thumbnailCursor % thumbnailRecords.length]; thumbnailCursor += 1;
+            const record = thumbnailRecords[count]; thumbnailCursor += 1;
             if (record.canvas.isConnected && thumbnailRenderer.render(thumbnailSource, record.effect.id, now / 1000)) {
               record.context.drawImage(thumbnailStage, 0, 0, record.canvas.width, record.canvas.height);
             }
@@ -2361,7 +2362,27 @@
       return clientX >= left && clientX <= right && clientY >= top && clientY <= bottom;
     }
     document.addEventListener('pointerdown', function (event) {
-      if (selectedEffectTrackClipId && !event.target.closest('.reel-effect-track,.reel-effect-selection-toolbar')) clearEffectTrackSelection();
+      if (selectedEffectTrackClipId && !event.target.closest('.reel-effect-track,.reel-effect-selection-toolbar')) {
+        const originX = event.clientX, originY = event.clientY;
+        let moved = false;
+        function watchOutsideMove(moveEvent) {
+          if (Math.hypot(moveEvent.clientX - originX, moveEvent.clientY - originY) > 8) moved = true;
+        }
+        function finishOutsideSelection() {
+          window.removeEventListener('pointermove', watchOutsideMove);
+          window.removeEventListener('pointerup', finishOutsideSelection);
+          window.removeEventListener('pointercancel', cancelOutsideSelection);
+          if (!moved) clearEffectTrackSelection();
+        }
+        function cancelOutsideSelection() {
+          window.removeEventListener('pointermove', watchOutsideMove);
+          window.removeEventListener('pointerup', finishOutsideSelection);
+          window.removeEventListener('pointercancel', cancelOutsideSelection);
+        }
+        window.addEventListener('pointermove', watchOutsideMove, { passive: true });
+        window.addEventListener('pointerup', finishOutsideSelection, { once: true });
+        window.addEventListener('pointercancel', cancelOutsideSelection, { once: true });
+      }
       if (!timelineSelected) return;
       if (event.target.closest('.reel-timeline-audio,.reel-timeline-sound-label')) {
         setTimelineSelected(false);
@@ -2539,33 +2560,49 @@
             const startX = event.clientX;
             const initialGlobalStart = item.start + item.duration * item.clip.visualEffectStart;
             const effectDuration = Math.max(.18, item.duration * (item.clip.visualEffectEnd - item.clip.visualEffectStart));
+            const dragBounds = timeline.getBoundingClientRect();
+            const dragCenterX = dragBounds.left + dragBounds.width / 2;
+            const grabOffset = currentSequenceTime + (startX - dragCenterX) / pixelsPerSecond - initialGlobalStart;
             let movedStart = initialGlobalStart;
             let dragging = false;
             let cancelled = false;
+            let lastDragX = startX;
+            let autoPanTimer = 0;
+            function updateGlobalEffectDrag(clientX, allowPan) {
+              let panTo = currentSequenceTime;
+              const edgeZone = Math.min(74, dragBounds.width * .18);
+              if (allowPan && clientX < dragBounds.left + edgeZone) panTo -= .14 + (dragBounds.left + edgeZone - clientX) / pixelsPerSecond * .08;
+              else if (allowPan && clientX > dragBounds.right - edgeZone) panTo += .14 + (clientX - (dragBounds.right - edgeZone)) / pixelsPerSecond * .08;
+              panTo = Math.max(0, Math.min(timelineDuration, panTo));
+              if (Math.abs(panTo - currentSequenceTime) > .001) { seekSequenceTime(panTo, true); renderTimelineAt(panTo); }
+              movedStart = Math.max(0, Math.min(Math.max(0, timelineDuration - effectDuration), currentSequenceTime + (clientX - dragCenterX) / pixelsPerSecond - grabOffset));
+              effectTrack.style.left = (movedStart * pixelsPerSecond) + 'px';
+            }
             const timer = window.setTimeout(function () {
               if (cancelled) return;
               dragging = true; suppressEffectTrackClick = true;
               selectEffectTrack(item.clip.id); effectTrack.classList.add('is-moving');
+              autoPanTimer = window.setInterval(function () { if (dragging) updateGlobalEffectDrag(lastDragX, true); }, 65);
               if (navigator.vibrate) navigator.vibrate(18);
             }, 360);
             function move(moveEvent) {
               const dx = moveEvent.clientX - startX;
+              lastDragX = moveEvent.clientX;
               if (!dragging && Math.abs(dx) > 9) { cancelled = true; window.clearTimeout(timer); return; }
               if (!dragging) return;
               moveEvent.preventDefault();
-              movedStart = Math.max(0, Math.min(Math.max(0, timelineDuration - effectDuration), initialGlobalStart + dx / pixelsPerSecond));
-              effectTrack.style.left = (movedStart * pixelsPerSecond) + 'px';
+              updateGlobalEffectDrag(lastDragX, false);
             }
             function finish() {
               window.clearTimeout(timer);
+              window.clearInterval(autoPanTimer);
               window.removeEventListener('pointermove', move);
               window.removeEventListener('pointerup', finish);
               window.removeEventListener('pointercancel', finish);
               if (!dragging) return;
               effectTrack.classList.remove('is-moving');
               const currentLayout = sequenceLayout();
-              const center = movedStart + effectDuration / 2;
-              const destination = currentLayout.find(function (entry) { return center >= entry.start && center <= entry.end; }) || currentLayout[currentLayout.length - 1];
+              const destination = currentLayout.find(function (entry) { return movedStart >= entry.start && movedStart < entry.end; }) || currentLayout[currentLayout.length - 1];
               if (destination) {
                 const sourceEffect = item.clip.visualEffect;
                 const localDuration = Math.min(effectDuration, destination.duration);
@@ -2867,7 +2904,6 @@
       if (event.target.closest('.reel-trim-handle')) return;
       if (event.target.closest('.reel-timeline-add')) return;
       if (event.target.closest('.reel-timeline-mute')) return;
-      if (selectedEffectTrackClipId && !event.target.closest('.reel-effect-track')) clearEffectTrackSelection();
       timelinePointerOnSound = Boolean(event.target.closest('.reel-timeline-audio,.reel-timeline-sound-label'));
       const stoppedSoundInertia = Boolean(timelineInertiaFrame && timelinePointerOnSound);
       cancelTimelineInertia();
