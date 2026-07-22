@@ -3175,9 +3175,16 @@
           const button = document.createElement('button');
           button.type = 'button'; button.className = 'reel-animation-option'; button.dataset.animation = preset[0];
           button.classList.toggle('is-active', selectedValue() === preset[0]);
-          const preview = document.createElement('span'); preview.className = 'reel-animation-thumb';
+          const preview = document.createElement('span');
+          preview.className = 'reel-animation-thumb';
+          preview.dataset.animationPreview = preset[0];
           if (preset[0] === 'none') preview.innerHTML = '<i></i>';
-          else if (clip.thumbnail) preview.style.backgroundImage = 'url("' + String(clip.thumbnail).replace(/"/g, '%22') + '")';
+          else {
+            const movingImage = document.createElement('span');
+            movingImage.className = 'reel-animation-thumb-image';
+            if (clip.thumbnail) movingImage.style.backgroundImage = 'url("' + String(clip.thumbnail).replace(/"/g, '%22') + '")';
+            preview.appendChild(movingImage);
+          }
           const label = document.createElement('strong'); label.textContent = preset[1];
           button.append(preview, label);
           button.addEventListener('click', function () {
