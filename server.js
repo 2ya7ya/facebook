@@ -230,6 +230,10 @@ function normalizeReelEdits(value) {
     'cinematic','blockbuster','film','vintage','matte','fade','dream','sepia','mono','noir','silvertone','washed','dramatic',
     'lowlight','midnight','neon','cyber','electric','infrared','negative','haze'
   ]);
+  const visualEffects = new Set([
+    'none','rgb-split','glitch','vhs','old-tv','scanlines','pixelate','posterize','edge-glow','thermal','mirror',
+    'split-screen','kaleidoscope','fisheye','ripple','wave','zoom-pulse','shake','strobe','ghost','tunnel'
+  ]);
   const normalizeClip = (clip, index) => {
     clip = clip && typeof clip === 'object' ? clip : {};
     const start = number(clip.sourceStart, 0, 3600, 0);
@@ -245,6 +249,7 @@ function normalizeReelEdits(value) {
       contrast: number(clip.contrast, 0.5, 1.5, 1),
       saturation: number(clip.saturation, 0, 2, 1),
       effect: effects.has(clip.effect) ? clip.effect : 'none',
+      visualEffect: visualEffects.has(clip.visualEffect) ? clip.visualEffect : 'none',
       text: String(clip.text || '').slice(0, 100),
       sticker: String(clip.sticker || '').slice(0, 8),
       captions: Boolean(clip.captions),
@@ -267,6 +272,7 @@ function normalizeReelEdits(value) {
     contrast: number(source.contrast, 0.5, 1.5, 1),
     saturation: number(source.saturation, 0, 2, 1),
     effect: effects.has(source.effect) ? source.effect : 'none',
+    visualEffect: visualEffects.has(source.visualEffect) ? source.visualEffect : 'none',
     text: String(source.text || '').slice(0, 100),
     sticker: String(source.sticker || '').slice(0, 8),
     captions: Boolean(source.captions),
@@ -756,6 +762,10 @@ app.get('/app', requireAuth, (_request, response) => {
 
 app.get('/app-data.js', requireAuth, (_request, response) => {
   response.type('application/javascript').sendFile(path.join(publicDirectory, 'app-data.js'));
+});
+
+app.get('/reel-effects.js', requireAuth, (_request, response) => {
+  response.type('application/javascript').sendFile(path.join(publicDirectory, 'reel-effects.js'));
 });
 
 app.get('/reel-ui/:asset', requireAuth, (request, response) => {

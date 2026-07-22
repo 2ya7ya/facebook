@@ -53,6 +53,8 @@
   ].map(function (item) { return { id: item[0], name: item[1], category: item[2], filter: item[3] }; });
   const reelEffectFilters = Object.fromEntries(reelEffectCatalog.map(function (effect) { return [effect.id, effect.filter]; }));
   const reelEffectIds = new Set(reelEffectCatalog.map(function (effect) { return effect.id; }));
+  const reelVisualEffectCatalog = window.ReelEffects ? window.ReelEffects.catalog : [{ id: 'none', name: 'None', category: 'Basic', mode: 0 }];
+  const reelVisualEffectIds = new Set(reelVisualEffectCatalog.map(function (effect) { return effect.id; }));
 
   function readCachedProfile() {
     try {
@@ -993,6 +995,11 @@
     const editPlayButton = flow.querySelector('[data-reel-flow-action="toggle-edit-play"]');
     const editPlayIcon = flow.querySelector('#reelEditPlayIcon');
     const editStage = flow.querySelector('[data-reel-create-stage="edit"]');
+    const visualEffectCanvas = document.createElement('canvas');
+    visualEffectCanvas.className = 'reel-edit-preview reel-webgl-preview';
+    visualEffectCanvas.hidden = true;
+    editVideo.insertAdjacentElement('afterend', visualEffectCanvas);
+    const visualEffectRenderer = window.ReelEffects && window.ReelEffects.createRenderer ? window.ReelEffects.createRenderer(visualEffectCanvas) : null;
     const cropPlaybackMask = document.createElement('div');
     cropPlaybackMask.className = 'reel-playback-crop-mask';
     cropPlaybackMask.innerHTML = '<i data-crop-mask="top"></i><i data-crop-mask="right"></i><i data-crop-mask="bottom"></i><i data-crop-mask="left"></i>';
@@ -1021,17 +1028,30 @@
       const status = wrap.querySelector('.reel-effect-status');
       const grid = wrap.querySelector('.reel-effect-grid');
       const previewImage = effectPreviewImage();
-      const categoryNames = ['All'].concat(Array.from(new Set(reelEffectCatalog.map(function (effect) { return effect.category; }))));
+      const previewSource = document.createElement('canvas');
+      previewSource.width = 160; previewSource.height = 160;
+      const effectPreviewCanvas = document.createElement('canvas');
+      effectPreviewCanvas.width = 160; effectPreviewCanvas.height = 160;
+      const effectThumbnailRenderer = window.ReelEffects && window.ReelEffects.createRenderer ? window.ReelEffects.createRenderer(effectPreviewCanvas) : null;
+      const effectPreviewUrls = {};
+      let effectPreviewReady = false;
+      if (previewImage) {
+        const previewContext = previewSource.getContext('2d');
+        const image = new Image();
+        image.src = previewImage;
+        image.onload = function () { previewContext.drawImage(image, 0, 0, 160, 160); effectPreviewReady = true; renderEffects(); };
+      }
+      const categoryNames = ['All'].concat(Array.from(new Set(reelVisualEffectCatalog.map(function (effect) { return effect.category; }))));
       let activeCategory = 'All';
       openToolPanel('Effects', wrap);
 
       function activeEffectId() {
         const target = selectedClip() || editState;
-        return target && reelEffectIds.has(target.effect) ? target.effect : 'none';
+        return target && reelVisualEffectIds.has(target.visualEffect) ? target.visualEffect : 'none';
       }
       function renderEffects() {
         const normalized = String(search.value || '').trim().toLowerCase();
-        const visible = reelEffectCatalog.filter(function (effect) {
+        const visible = reelVisualEffectCatalog.filter(function (effect) {
           return (activeCategory === 'All' || effect.category === activeCategory)
             && (!normalized || effect.name.toLowerCase().includes(normalized) || effect.category.toLowerCase().includes(normalized));
         });
@@ -1043,14 +1063,16 @@
           button.dataset.effectId = effect.id;
           const thumb = document.createElement('span');
           thumb.className = 'reel-effect-thumb' + (effect.id === 'none' ? ' reel-effect-none' : '');
-          if (previewImage) thumb.style.backgroundImage = 'url("' + previewImage + '")';
-          thumb.style.filter = effect.filter || 'none';
+          if (effect.id !== 'none' && previewImage && effectThumbnailRenderer && effectPreviewReady) {
+            if (!effectPreviewUrls[effect.id] && effectThumbnailRenderer.render(previewSource, effect.id, .8)) effectPreviewUrls[effect.id] = effectPreviewCanvas.toDataURL('image/jpeg', .8);
+            thumb.style.backgroundImage = 'url("' + (effectPreviewUrls[effect.id] || previewImage) + '")';
+          } else if (previewImage) thumb.style.backgroundImage = 'url("' + previewImage + '")';
           const label = document.createElement('strong'); label.textContent = effect.name;
           button.append(thumb, label);
           button.addEventListener('click', function () {
             const before = captureEditorSnapshot();
             const target = selectedClip() || editState;
-            target.effect = effect.id;
+            target.visualEffect = effect.id;
             applyPreviewEdits();
             renderClipTimeline();
             recordEditorChange(before);
@@ -1059,7 +1081,7 @@
           });
           grid.appendChild(button);
         });
-        status.textContent = visible.length ? visible.length + ' built-in effects' : 'No effects match this search';
+        status.textContent = visible.length ? visible.length + ' animated video effects · rendered on device' : 'No effects match this search';
       }
       categoryNames.forEach(function (name) {
         const button = document.createElement('button');
@@ -1287,7 +1309,7 @@
     loadingIndicator.innerHTML = '<span></span><strong>Loading video…</strong>';
     flow.appendChild(loadingIndicator);
     function freshEditState() {
-      return { trimStart: 0, trimEnd: 0, brightness: 1, contrast: 1, saturation: 1, effect: 'none', text: '', sticker: '', captions: false, overlay: false, fit: 'contain', cropRatio: 'freeform', clips: [], transitions: [], rendered: false };
+      return { trimStart: 0, trimEnd: 0, brightness: 1, contrast: 1, saturation: 1, effect: 'none', visualEffect: 'none', text: '', sticker: '', captions: false, overlay: false, fit: 'contain', cropRatio: 'freeform', clips: [], transitions: [], rendered: false };
     }
 
     let sourceMediaDuration = 0;
@@ -1331,6 +1353,7 @@
         contrast: Math.min(1.5, Math.max(.5, Number(source.contrast) || 1)),
         saturation: Math.min(2, Math.max(0, Number(source.saturation) || 1)),
         effect: reelEffectIds.has(source.effect) ? source.effect : 'none',
+        visualEffect: reelVisualEffectIds.has(source.visualEffect) ? source.visualEffect : 'none',
         text: String(source.text || '').slice(0, 100),
         sticker: String(source.sticker || '').slice(0, 8),
         captions: Boolean(source.captions),
@@ -1857,6 +1880,27 @@
         ensureUserOverlay(video);
       });
     }
+    function renderVisualEffectPreview() {
+      const item = currentClipItem();
+      const settings = item ? item.clip : editState;
+      const effectId = settings && reelVisualEffectIds.has(settings.visualEffect) ? settings.visualEffect : 'none';
+      const blockedByTransition = editVideo.classList.contains('is-reel-transitioning');
+      if (visualEffectRenderer && effectId !== 'none' && !blockedByTransition && editVideo.readyState >= 2) {
+        const rendered = visualEffectRenderer.render(editVideo, effectId, Number(editVideo.currentTime) || 0);
+        visualEffectCanvas.hidden = !rendered;
+        if (rendered) {
+          visualEffectCanvas.style.filter = editVideo.style.filter;
+          visualEffectCanvas.style.clipPath = editVideo.style.clipPath;
+          visualEffectCanvas.style.transform = editVideo.style.transform;
+          visualEffectCanvas.style.transformOrigin = editVideo.style.transformOrigin;
+          visualEffectCanvas.style.opacity = editVideo.style.opacity;
+          visualEffectCanvas.classList.toggle('has-crop-ratio', editVideo.classList.contains('has-crop-ratio'));
+          visualEffectCanvas.classList.toggle('has-freeform-crop', editVideo.classList.contains('has-freeform-crop'));
+        }
+      } else visualEffectCanvas.hidden = true;
+      requestAnimationFrame(renderVisualEffectPreview);
+    }
+    requestAnimationFrame(renderVisualEffectPreview);
     function applyClipAnimationPreview(item) {
       if (!item || !editVideo) return;
       const hasAnimation = (item.clip.animationIn && item.clip.animationIn !== 'none') || (item.clip.animationOut && item.clip.animationOut !== 'none') || (item.clip.animationCombo && item.clip.animationCombo !== 'none');
@@ -3439,6 +3483,31 @@
       context.drawImage(video, sx, sy, sw, sh, dx, dy, dw, dh);
       context.restore();
     }
+    const renderedEffectCanvases = new WeakMap();
+    function drawVisualEffectFrame(context, canvas, video, clip, elapsed, alpha, xOffset, visibleWidth, extraFilter) {
+      if (!window.ReelEffects || !window.ReelEffects.createRenderer || !reelVisualEffectIds.has(clip.visualEffect) || clip.visualEffect === 'none') return false;
+      let resources = renderedEffectCanvases.get(canvas);
+      if (!resources) {
+        const input = document.createElement('canvas');
+        const output = document.createElement('canvas');
+        const renderer = window.ReelEffects.createRenderer(output);
+        if (!renderer) return false;
+        resources = { input: input, output: output, renderer: renderer };
+        renderedEffectCanvases.set(canvas, resources);
+      }
+      if (resources.input.width !== canvas.width || resources.input.height !== canvas.height) {
+        resources.input.width = canvas.width; resources.input.height = canvas.height;
+      }
+      const inputContext = resources.input.getContext('2d', { alpha: false });
+      inputContext.save(); inputContext.fillStyle = '#000'; inputContext.fillRect(0, 0, canvas.width, canvas.height); inputContext.restore();
+      drawClipFrame(inputContext, resources.input, video, clip, 1, xOffset, visibleWidth, extraFilter);
+      if (!resources.renderer.render(resources.input, clip.visualEffect, elapsed)) return false;
+      context.save();
+      context.globalAlpha = alpha == null ? 1 : alpha;
+      context.drawImage(resources.output, 0, 0, canvas.width, canvas.height);
+      context.restore();
+      return true;
+    }
     function drawAnimatedClipFrame(context, canvas, video, clip, elapsed, duration, alpha, xOffset, visibleWidth) {
       const animation = clipAnimationState(clip, elapsed, duration);
       context.save();
@@ -3446,7 +3515,11 @@
       context.rotate(animation.rotate * Math.PI / 180);
       context.scale(animation.scaleX, animation.scaleY);
       context.translate(-canvas.width / 2, -canvas.height / 2);
-      drawClipFrame(context, canvas, video, clip, (alpha == null ? 1 : alpha) * animation.opacity, xOffset, visibleWidth, animation.blur ? ' blur(' + animation.blur + 'px)' : '');
+      const frameAlpha = (alpha == null ? 1 : alpha) * animation.opacity;
+      const extraFilter = animation.blur ? ' blur(' + animation.blur + 'px)' : '';
+      if (!drawVisualEffectFrame(context, canvas, video, clip, elapsed, frameAlpha, xOffset, visibleWidth, extraFilter)) {
+        drawClipFrame(context, canvas, video, clip, frameAlpha, xOffset, visibleWidth, extraFilter);
+      }
       context.restore();
     }
     function drawClipOverlay(context, canvas, clip, captionText) {
