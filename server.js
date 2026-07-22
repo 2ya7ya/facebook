@@ -232,7 +232,9 @@ function normalizeReelEdits(value) {
   ]);
   const visualEffects = new Set([
     'none','rgb-split','glitch','vhs','old-tv','scanlines','pixelate','posterize','edge-glow','thermal','mirror',
-    'split-screen','kaleidoscope','fisheye','ripple','wave','zoom-pulse','shake','strobe','ghost','tunnel'
+    'split-screen','kaleidoscope','fisheye','ripple','wave','zoom-pulse','shake','strobe','ghost','tunnel',
+    'bloom','grain','vignette','bokeh-blur','lens-flare','motion-blur','bling','dynamic-distort','prism','light-leak',
+    'datamosh','block-glitch','digital-rain','color-trails','echo-zoom','radial-blur','swirl','stretch','liquid-glass','flash-zoom','dream-glow'
   ]);
   const normalizeClip = (clip, index) => {
     clip = clip && typeof clip === 'object' ? clip : {};
