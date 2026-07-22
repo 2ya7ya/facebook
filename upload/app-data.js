@@ -1044,6 +1044,7 @@
       const categoryNames = ['All'].concat(Array.from(new Set(reelVisualEffectCatalog.map(function (effect) { return effect.category; }))));
       let activeCategory = 'All';
       openToolPanel('Effects', wrap);
+      flow.classList.add('is-effects-editing');
 
       function activeEffectId() {
         const target = selectedClip() || editState;
@@ -1886,7 +1887,8 @@
       const effectId = settings && reelVisualEffectIds.has(settings.visualEffect) ? settings.visualEffect : 'none';
       const blockedByTransition = editVideo.classList.contains('is-reel-transitioning');
       if (visualEffectRenderer && effectId !== 'none' && !blockedByTransition && editVideo.readyState >= 2) {
-        const rendered = visualEffectRenderer.render(editVideo, effectId, Number(editVideo.currentTime) || 0);
+        const effectTime = item ? Math.max(0, currentSequenceTime - item.start) : (Number(editVideo.currentTime) || 0);
+        const rendered = visualEffectRenderer.render(editVideo, effectId, effectTime);
         visualEffectCanvas.hidden = !rendered;
         if (rendered) {
           visualEffectCanvas.style.filter = editVideo.style.filter;
@@ -1929,11 +1931,15 @@
       toolPanel.classList.remove('is-animation-panel');
       flow.classList.remove('is-speed-editing');
       flow.classList.remove('is-animation-editing');
+      flow.classList.remove('is-effects-editing');
       toolPanel.setAttribute('aria-hidden', 'true');
     }
     function openToolPanel(title, body) {
       toolPanel.classList.remove('is-speed-panel');
+      toolPanel.classList.remove('is-animation-panel');
       flow.classList.remove('is-speed-editing');
+      flow.classList.remove('is-animation-editing');
+      flow.classList.remove('is-effects-editing');
       toolPanel.innerHTML = '<header><strong></strong><button type="button" aria-label="Close">×</button></header><div class="reel-tool-panel-body"></div>';
       toolPanel.querySelector('strong').textContent = title;
       toolPanel.querySelector('.reel-tool-panel-body').appendChild(body);

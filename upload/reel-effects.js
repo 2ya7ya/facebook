@@ -149,12 +149,12 @@
     ' else if(u_mode==56){c=tex(uv);}',
     ' else if(u_mode==57){float ang=atan(p.y,p.x);float rr=length(p);float spin=smoothstep(.025,0.,abs(rr-.18))*step(0.,sin(ang*10.-t*5.));c.rgb*=.72;c.rgb+=vec3(.2,.8,1.)*spin;float bar=smoothstep(.018,0.,abs(p.y+.27))*step(abs(p.x),.28);c.rgb+=vec3(.95)*bar;}',
     ' else if(u_mode==58){c=tex(uv);}',
-    ' else if(u_mode==59){float cut=floor(t*1.35);float ph=fract(t*1.35);float z=1.05+.34*(1.-ph);vec2 q=.5+p/z;vec2 d=normalize(p+vec2(.0001))*.055;c=tex(q)*.5+tex(q-d)*.27+tex(q-d*2.)*.15+tex(q-d*3.)*.08;vec3 grade=.72+.28*cos(vec3(0.,2.,4.)+cut*1.7);c.rgb=mix(c.rgb,c.rgb*grade*1.35,.34);}',
+    ' else if(u_mode==59){c=tex(uv);}',
     ' else if(u_mode==60){vec2 grid=vec2(16.,28.);vec2 id=floor(uv*grid);vec2 q=fract(uv*grid)-.5;float seed=hash(id);float y=fract(q.y+t*(.3+seed));float dotp=smoothstep(.13,0.,length(vec2(q.x,y-.5)))*step(.62,seed);c.rgb+=dotp*(.5+.5*cos(vec3(0.,2.,4.)+seed*8.+t));}',
     ' else if(u_mode==61){vec2 q=p*3.;float ring=smoothstep(.12,.08,abs(length(q-vec2(0.,.16))-.42))*step(-.05,q.y);float stem=smoothstep(.08,.03,abs(q.x))*step(-.25,q.y)*step(q.y,.12);float dotq=smoothstep(.09,.035,length(q-vec2(0.,-.38)));c.rgb=mix(c.rgb,vec3(1.,.2,.65),clamp(ring+stem+dotq,0.,1.));}',
-    ' else if(u_mode==62){float a=atan(p.y,p.x);float r=length(p);float sector=floor((a+3.14159)*34./6.28318);float seed=hash(vec2(sector,floor(t*2.)));float spoke=1.-smoothstep(.035,.095,abs(fract((a+3.14159)*34./6.28318)-.5));float inner=.17+.17*hash(vec2(sector,4.));float rays=spoke*step(.47,seed)*smoothstep(inner,inner+.22,r);c.rgb*=1.-rays*.82;}',
-    ' else if(u_mode==63){float off=fract(t*.29);c.rgb*=1.-off*.82;}',
-    ' else if(u_mode==64){float edge=max(abs(p.x),abs(p.y));float n=.5+.5*sin(uv.x*41.+uv.y*57.+t*8.)*sin(uv.x*73.-uv.y*31.-t*5.);float border=smoothstep(.27,.49,edge)*(.42+.58*n);float pulse=.72+.28*sin(t*7.);c.rgb=mix(c.rgb,c.rgb*vec3(1.35,.3,.2),.42);c.rgb+=vec3(1.,.03,.01)*border*pulse;float crack=(1.-smoothstep(.012,.035,abs(sin((uv.x+uv.y)*29.+sin(uv.y*18.)*2.+t*2.))))*smoothstep(.3,.49,edge);c.rgb+=vec3(1.,.45,.25)*crack;}',
+    ' else if(u_mode==62){c=tex(uv);}',
+    ' else if(u_mode==63){float ph=clamp(mod(t,3.5)/3.25,0.,1.);float off=smoothstep(.03,.92,ph);c.rgb*=1.-off*.76;}',
+    ' else if(u_mode==64){float ph=mod(t,3.55)/3.55;float env=smoothstep(0.,.09,ph)*(1.-smoothstep(.72,.96,ph));c.rgb=mix(c.rgb,c.rgb*vec3(1.32,.34,.26)+vec3(.12,0.,0.),env*.5);}',
     ' else if(u_mode==65){float ph=fract(t*.22);float z=1.+ph*.78;uv=.5+p/z;c=tex(uv);}',
     ' else if(u_mode==66){vec2 fs=max(u_face.zw,vec2(.001));vec2 hc=u_face.xy+vec2(0.,fs.y*.14);vec2 fp=(uv-hc)/fs;float head=1.-smoothstep(.76,1.08,length(fp*vec2(.82,.72)));float body=step(uv.y,u_face.y-fs.y*.38);vec2 qb=vec2(.5+(uv.x-.5)*1.38,uv.y);vec2 qh=hc+(uv-hc)/vec2(1.82,1.92);vec2 q=mix(uv,qb,body*.82);q=mix(q,qh,head);c=tex(q);}',
     ' else if(u_mode==67){vec2 es=max(u_face.zw*vec2(.13,.075),vec2(.002));vec2 ep1=(uv-u_eyes.xy)/es;vec2 ep2=(uv-u_eyes.zw)/es;float e1=smoothstep(1.,.72,length(ep1));float e2=smoothstep(1.,.72,length(ep2));float pupil1=smoothstep(.2,.08,abs(ep1.y))*step(abs(ep1.x),.8);float pupil2=smoothstep(.2,.08,abs(ep2.y))*step(abs(ep2.x),.8);c.rgb=mix(c.rgb,vec3(.95,.85,.22),max(e1,e2));c.rgb=mix(c.rgb,vec3(.02),max(pupil1,pupil2));}',
@@ -189,7 +189,48 @@
     });
     context.restore();
   }
-  function drawFancyOverlay(context, width, height, effectId, time) {
+  function seededNoise(value) { return (Math.sin(value * 127.1 + 311.7) * 43758.5453) % 1; }
+  function drawQuickSpeed(context, width, height, time, state) {
+    if (!state) return;
+    const frame = state.frame, person = state.person;
+    if (frame.width !== width || frame.height !== height) { frame.width = person.width = width; frame.height = person.height = height; }
+    const frameContext = frame.getContext('2d'); frameContext.setTransform(1, 0, 0, 1, 0, 0); frameContext.globalCompositeOperation = 'source-over'; frameContext.globalAlpha = 1; frameContext.filter = 'none'; frameContext.clearRect(0, 0, width, height); frameContext.drawImage(context.canvas, 0, 0, width, height);
+    const scene = Math.floor(time * 1.35) % 6; const phase = (time * 1.35) % 1; const colors = ['#42a5ff','#e3c466','#17213f','#15398b','#e85c37','#55a8d9'];
+    context.save(); context.clearRect(0, 0, width, height); context.fillStyle = colors[scene]; context.fillRect(0, 0, width, height); context.globalCompositeOperation = 'screen'; context.filter = 'blur(' + Math.max(4, width * .018) + 'px) saturate(1.3)';
+    for (let layer = 0; layer < 8; layer += 1) { const scale = 1.04 + layer * .055 + phase * .035; const dw = width * scale, dh = height * scale; context.globalAlpha = .15; context.drawImage(frame, (width - dw) / 2, (height - dh) / 2, dw, dh); }
+    context.globalCompositeOperation = 'source-over'; context.filter = 'none'; context.globalAlpha = .24; context.fillStyle = colors[scene]; context.fillRect(0, 0, width, height); context.restore();
+    if (state.mask && state.mask.width) {
+      const personContext = person.getContext('2d'); personContext.setTransform(1, 0, 0, 1, 0, 0); personContext.globalCompositeOperation = 'source-over'; personContext.filter = 'none'; personContext.globalAlpha = 1; personContext.clearRect(0, 0, width, height); personContext.drawImage(frame, 0, 0, width, height); personContext.globalCompositeOperation = 'destination-in'; personContext.drawImage(state.mask, 0, 0, width, height); personContext.globalCompositeOperation = 'source-over';
+      context.drawImage(person, 0, 0, width, height);
+    }
+    context.save(); context.strokeStyle = 'rgba(255,255,255,.25)'; context.lineWidth = Math.max(1, width * .004); const cx = width * .5, cy = height * .48;
+    for (let line = 0; line < 18; line += 1) { const angle = line * Math.PI * 2 / 18 + scene * .19; const inner = Math.min(width, height) * (.28 + phase * .08); const outer = Math.max(width, height) * .8; context.beginPath(); context.moveTo(cx + Math.cos(angle) * inner, cy + Math.sin(angle) * inner); context.lineTo(cx + Math.cos(angle) * outer, cy + Math.sin(angle) * outer); context.stroke(); }
+    context.restore();
+  }
+  function drawEnergyLines(context, width, height, time) {
+    const cx = width * .5, cy = height * .5, outer = Math.hypot(width, height) * .62, innerBase = Math.min(width, height) * .27;
+    context.save(); context.fillStyle = '#050505';
+    for (let index = 0; index < 58; index += 1) {
+      const angle = index * Math.PI * 2 / 58 + Math.sin(time * 1.6 + index) * .006;
+      const random = Math.abs(seededNoise(index * 7.31)); const inner = innerBase * (.72 + random * .72); const spread = .0028 + random * .007;
+      context.globalAlpha = .45 + random * .5; context.beginPath(); context.moveTo(cx + Math.cos(angle) * inner, cy + Math.sin(angle) * inner); context.lineTo(cx + Math.cos(angle - spread) * outer, cy + Math.sin(angle - spread) * outer); context.lineTo(cx + Math.cos(angle + spread) * outer, cy + Math.sin(angle + spread) * outer); context.closePath(); context.fill();
+    }
+    context.restore();
+  }
+  function drawShockwave(context, width, height, time) {
+    const phase = (time % 3.55) / 3.55; const envelope = Math.min(1, phase / .09, (1 - phase) / .16); if (envelope <= 0) return;
+    context.save(); context.globalCompositeOperation = 'screen'; context.lineCap = 'round'; context.lineJoin = 'round';
+    const paths = [
+      function (p) { return [p * width, 7 + Math.abs(Math.sin(p * 31 + time * 7)) * height * .055]; },
+      function (p) { return [p * width, height - 7 - Math.abs(Math.sin(p * 29 - time * 6)) * height * .055]; },
+      function (p) { return [7 + Math.abs(Math.sin(p * 27 + time * 8)) * width * .07, p * height]; },
+      function (p) { return [width - 7 - Math.abs(Math.sin(p * 33 - time * 7)) * width * .07, p * height]; }
+    ];
+    paths.forEach(function (pointAt, side) { for (let layer = 0; layer < 3; layer += 1) { context.beginPath(); for (let step = 0; step <= 24; step += 1) { const p = step / 24; const point = pointAt(p); const jitter = Math.sin(step * 8.3 + side * 4.7 + layer + time * 14) * (3 + layer * 2); if (side < 2) point[1] += jitter; else point[0] += jitter; if (!step) context.moveTo(point[0], point[1]); else context.lineTo(point[0], point[1]); } context.globalAlpha = envelope * (.95 - layer * .2); context.strokeStyle = layer === 0 ? '#ff1000' : (layer === 1 ? '#ff542e' : '#ffd1bd'); context.lineWidth = Math.max(2, width * (.014 - layer * .003)); context.shadowColor = '#ff1000'; context.shadowBlur = width * .035; context.stroke(); } });
+    if (phase < .18) { const flash = 1 - phase / .18; const gradient = context.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, Math.max(width, height) * .7); gradient.addColorStop(0, 'rgba(255,255,255,' + (.52 * flash) + ')'); gradient.addColorStop(.25, 'rgba(255,55,28,' + (.42 * flash) + ')'); gradient.addColorStop(1, 'rgba(255,0,0,0)'); context.fillStyle = gradient; context.fillRect(0, 0, width, height); }
+    context.restore();
+  }
+  function drawFancyOverlay(context, width, height, effectId, time, state) {
     const t = Math.max(0, Number(time) || 0);
     if (effectId === 'disco-count') {
       const count = 10 - (Math.floor((t % 5) * 2) % 10);
@@ -211,14 +252,15 @@
       const phase = (t * 1.45) % 1;
       context.save(); context.globalAlpha = Math.min(1, phase * 7, (1 - phase) * 7); context.translate(0, Math.sin(phase * Math.PI) * -height * .012);
       drawCenteredWords(context, width, height * .53, phrases[index], Math.max(18, height * .047)); context.restore();
-    } else if (effectId === 'moon-off') {
-      const phase = (t * .29) % 1; const x = width * .13; const top = height * .43; const bottom = height * .61; const radius = Math.max(5, width * .018);
-      context.save(); context.strokeStyle = 'rgba(255,255,255,.78)'; context.lineWidth = Math.max(1.5, width * .004); context.beginPath(); context.moveTo(x, top + radius * 1.8); context.lineTo(x, bottom - radius * 1.8); context.stroke();
-      context.fillStyle = '#ffd740'; context.beginPath(); context.arc(x, top, radius, 0, Math.PI * 2); context.fill();
-      for (let index = 0; index < 8; index += 1) { const a = index * Math.PI / 4; context.beginPath(); context.moveTo(x + Math.cos(a) * radius * 1.35, top + Math.sin(a) * radius * 1.35); context.lineTo(x + Math.cos(a) * radius * 1.8, top + Math.sin(a) * radius * 1.8); context.stroke(); }
-      context.fillStyle = '#eee'; context.beginPath(); context.arc(x, bottom, radius, 0, Math.PI * 2); context.fill(); context.fillStyle = 'rgba(25,25,35,.9)'; context.beginPath(); context.arc(x + radius * .42, bottom - radius * .18, radius * .86, 0, Math.PI * 2); context.fill();
-      const thumbY = top + (bottom - top) * phase; context.fillStyle = '#fff'; context.shadowColor = '#fff'; context.shadowBlur = radius; context.beginPath(); context.arc(x, thumbY, radius * .72, 0, Math.PI * 2); context.fill(); context.restore();
-    }
+    } else if (effectId === 'quick-speed') drawQuickSpeed(context, width, height, t, state);
+    else if (effectId === 'energy') drawEnergyLines(context, width, height, t);
+    else if (effectId === 'moon-off') {
+      const phase = Math.min(1, (t % 3.5) / 3.25); const x = width * .16; const top = height * .42; const bottom = height * .61; const boxWidth = width * .12; const radius = Math.max(7, width * .035); const y = top + (bottom - top) * phase;
+      context.save(); context.strokeStyle = '#f8d338'; context.lineWidth = Math.max(2, width * .004); context.strokeRect(x - boxWidth / 2, top - radius * 1.55, boxWidth, bottom - top + radius * 3.1); context.beginPath(); context.moveTo(x - boxWidth / 2, bottom + radius * 2.1); context.lineTo(x - boxWidth / 2, top - radius * 1.55); context.stroke();
+      if (phase < .48) { context.fillStyle = '#ffcf24'; context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.fill(); for (let index = 0; index < 8; index += 1) { const a = index * Math.PI / 4; context.beginPath(); context.moveTo(x + Math.cos(a) * radius * 1.3, y + Math.sin(a) * radius * 1.3); context.lineTo(x + Math.cos(a) * radius * 1.7, y + Math.sin(a) * radius * 1.7); context.stroke(); } }
+      else { context.fillStyle = '#f4f3e9'; context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.fill(); context.fillStyle = 'rgba(42,42,46,.9)'; context.beginPath(); context.arc(x + radius * .4, y - radius * .2, radius * .84, 0, Math.PI * 2); context.fill(); }
+      const sx = x - boxWidth / 2, sy = bottom + radius * 2.1; context.fillStyle = '#f8d338'; context.beginPath(); context.arc(sx, sy, radius * .27, 0, Math.PI * 2); context.fill(); for (let index = 0; index < 8; index += 1) { const a = index * Math.PI / 4; context.beginPath(); context.moveTo(sx + Math.cos(a) * radius * .42, sy + Math.sin(a) * radius * .42); context.lineTo(sx + Math.cos(a) * radius * .72, sy + Math.sin(a) * radius * .72); context.stroke(); } context.restore();
+    } else if (effectId === 'shockwave') drawShockwave(context, width, height, t);
   }
   function createRenderer(canvas, options) {
     options = options || {};
@@ -246,6 +288,8 @@
     let face = [.5, .58, .38, .48];
     let eyes = [.43, .62, .57, .62];
     let faceDetector = null, faceMesh = null, faceMeshFailed = false, faceDetectionBusy = false, lastFaceDetection = 0;
+    const fancyState = { frame: document.createElement('canvas'), person: document.createElement('canvas'), mask: document.createElement('canvas') };
+    let segmenter = null, segmentationFailed = false, segmentationBusy = false, lastSegmentation = 0, segmentationWidth = 0, segmentationHeight = 0;
     try { if ('FaceDetector' in window) faceDetector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 1 }); } catch (_error) { faceDetector = null; }
     function smoothValues(current, next) { return current.map(function (value, index) { return value * .58 + next[index] * .42; }); }
     function ensureFaceMesh() {
@@ -286,6 +330,25 @@
         eyes = smoothValues(eyes, [next[0] - next[2] * .18, next[1] + next[3] * .08, next[0] + next[2] * .18, next[1] + next[3] * .08]);
       }).catch(function () {}).finally(function () { faceDetectionBusy = false; });
     }
+    function ensureSegmenter() {
+      if (segmenter || segmentationFailed || !window.SelfieSegmentation) return segmenter;
+      try {
+        segmenter = new window.SelfieSegmentation({ locateFile: function (file) { return '/segmentation/' + file; } });
+        segmenter.setOptions({ modelSelection: 1, selfieMode: false });
+        segmenter.onResults(function (results) {
+          if (!results || !results.segmentationMask || !segmentationWidth || !segmentationHeight) return;
+          if (fancyState.mask.width !== segmentationWidth || fancyState.mask.height !== segmentationHeight) { fancyState.mask.width = segmentationWidth; fancyState.mask.height = segmentationHeight; }
+          const maskContext = fancyState.mask.getContext('2d'); maskContext.clearRect(0, 0, segmentationWidth, segmentationHeight); maskContext.drawImage(results.segmentationMask, 0, 0, segmentationWidth, segmentationHeight);
+        });
+      } catch (_error) { segmentationFailed = true; segmenter = null; }
+      return segmenter;
+    }
+    function updateSegmentation(source, width, height, mode) {
+      if (options.trackFace === false || mode !== 59 || segmentationBusy || performance.now() - lastSegmentation < 90) return;
+      const activeSegmenter = ensureSegmenter(); if (!activeSegmenter) return;
+      segmentationBusy = true; lastSegmentation = performance.now(); segmentationWidth = width; segmentationHeight = height;
+      activeSegmenter.send({ image: source }).catch(function () { segmentationFailed = true; segmenter = null; }).finally(function () { segmentationBusy = false; });
+    }
     return {
       render: function (source, effectId, time) {
         if (!source || !source.width && !source.videoWidth) return false;
@@ -298,12 +361,13 @@
         try { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source); } catch (_error) { return false; }
         const mode = modes[effectId] || 0;
         updateTrackedFace(source, width, height, mode);
+        updateSegmentation(source, width, height, mode);
         gl.uniform1f(timeLocation, Number(time) || 0); gl.uniform1i(modeLocation, mode); gl.uniform2f(resolutionLocation, renderCanvas.width, renderCanvas.height);
         gl.uniform4f(faceLocation, face[0], face[1], face[2], face[3]);
         gl.uniform4f(eyesLocation, eyes[0], eyes[1], eyes[2], eyes[3]);
         gl.drawArrays(gl.TRIANGLES, 0, 6);
         outputContext.setTransform(1, 0, 0, 1, 0, 0); outputContext.globalAlpha = 1; outputContext.filter = 'none'; outputContext.clearRect(0, 0, width, height); outputContext.drawImage(renderCanvas, 0, 0, width, height);
-        drawFancyOverlay(outputContext, width, height, effectId, time); return true;
+        drawFancyOverlay(outputContext, width, height, effectId, time, fancyState); return true;
       }
     };
   }

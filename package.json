@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@mediapipe/face_mesh": "^0.4.1633559619",
+    "@mediapipe/selfie_segmentation": "^0.1.1675465747",
     "express": "^5.1.0",
     "pg": "^8.16.3"
   }

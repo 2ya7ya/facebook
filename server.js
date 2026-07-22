@@ -775,6 +775,7 @@ app.get('/reel-effects.js', requireAuth, (_request, response) => {
 });
 
 app.use('/mediapipe', requireAuth, express.static(path.join(__dirname, 'node_modules', '@mediapipe', 'face_mesh')));
+app.use('/segmentation', requireAuth, express.static(path.join(__dirname, 'node_modules', '@mediapipe', 'selfie_segmentation')));
 
 app.get('/reel-ui/:asset', requireAuth, (request, response) => {
   const allowed = new Set(['reel-undo.png', 'reel-redo.png', 'reel-fullscreen.png', 'reel-minimize.png']);
