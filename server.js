@@ -234,7 +234,11 @@ function normalizeReelEdits(value) {
     'none','rgb-split','glitch','vhs','old-tv','scanlines','pixelate','posterize','edge-glow','thermal','mirror',
     'split-screen','kaleidoscope','fisheye','ripple','wave','zoom-pulse','shake','strobe','ghost','tunnel',
     'bloom','grain','vignette','bokeh-blur','lens-flare','motion-blur','bling','dynamic-distort','prism','light-leak',
-    'datamosh','block-glitch','digital-rain','color-trails','echo-zoom','radial-blur','swirl','stretch','liquid-glass','flash-zoom','dream-glow'
+    'datamosh','block-glitch','digital-rain','color-trails','echo-zoom','radial-blur','swirl','stretch','liquid-glass','flash-zoom','dream-glow',
+    'mini-zoom','zoom-lens','blur','shaky-camera-move','delay','shake-2','astral','shake-1','neon-dynamic','bounce-camera',
+    'trembling','black-flash','shake-dynamic','soul','disco-count','2026-loading','lyric-cut','quick-speed','particles',
+    'question-mark','energy','moon-off','shockwave','somethings-wrong','small-body-big-head','goat-eyes','halo',
+    'facial-fisheye','half-face-whirl','laser-eyes','shy','feeling-hurt','face-mosaic','laser'
   ]);
   const normalizeClip = (clip, index) => {
     clip = clip && typeof clip === 'object' ? clip : {};
@@ -769,6 +773,8 @@ app.get('/app-data.js', requireAuth, (_request, response) => {
 app.get('/reel-effects.js', requireAuth, (_request, response) => {
   response.type('application/javascript').sendFile(path.join(publicDirectory, 'reel-effects.js'));
 });
+
+app.use('/mediapipe', requireAuth, express.static(path.join(__dirname, 'node_modules', '@mediapipe', 'face_mesh')));
 
 app.get('/reel-ui/:asset', requireAuth, (request, response) => {
   const allowed = new Set(['reel-undo.png', 'reel-redo.png', 'reel-fullscreen.png', 'reel-minimize.png']);

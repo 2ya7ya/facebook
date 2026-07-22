@@ -1032,7 +1032,7 @@
       previewSource.width = 160; previewSource.height = 160;
       const effectPreviewCanvas = document.createElement('canvas');
       effectPreviewCanvas.width = 160; effectPreviewCanvas.height = 160;
-      const effectThumbnailRenderer = window.ReelEffects && window.ReelEffects.createRenderer ? window.ReelEffects.createRenderer(effectPreviewCanvas) : null;
+      const effectThumbnailRenderer = window.ReelEffects && window.ReelEffects.createRenderer ? window.ReelEffects.createRenderer(effectPreviewCanvas, { trackFace: false }) : null;
       const effectPreviewUrls = {};
       let effectPreviewReady = false;
       if (previewImage) {
