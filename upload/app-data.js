@@ -3044,15 +3044,11 @@
             event.stopPropagation();
             const before = captureEditorSnapshot();
             const startX = event.clientX;
-            const initialRange = effectGroupRange();
-            const initialGlobalStart = Math.max(0, initialRange.start);
-            const effectDuration = Math.max(.18, Math.min(timelineDuration, initialRange.end) - initialGlobalStart);
+            const initialGlobalStart = item.start + item.duration * item.clip.visualEffectStart;
+            const effectDuration = Math.max(.18, item.duration * (item.clip.visualEffectEnd - item.clip.visualEffectStart));
             const dragBounds = timeline.getBoundingClientRect();
-            const initialSequenceTimeForDrag = currentSequenceTime;
-            // Keep the effect's absolute timeline offset while dragging. The previous
-            // center/playhead-based math recalculated the position from the clip under
-            // the finger, which made an effect extended into the next clip snap back to
-            // that clip's beginning as soon as it was dragged.
+            const dragCenterX = dragBounds.left + dragBounds.width / 2;
+            const grabOffset = currentSequenceTime + (startX - dragCenterX) / pixelsPerSecond - initialGlobalStart;
             let movedStart = initialGlobalStart;
             let dragging = false;
             let cancelled = false;
@@ -3065,36 +3061,27 @@
               else if (allowPan && clientX > dragBounds.right - edgeZone) panTo += .14 + (clientX - (dragBounds.right - edgeZone)) / pixelsPerSecond * .08;
               panTo = Math.max(0, Math.min(timelineDuration, panTo));
               if (Math.abs(panTo - currentSequenceTime) > .001) { seekSequenceTime(panTo, true); renderTimelineAt(panTo); }
-              const panDelta = currentSequenceTime - initialSequenceTimeForDrag;
-              movedStart = Math.max(0, Math.min(Math.max(0, timelineDuration - effectDuration), initialGlobalStart + (clientX - startX) / Math.max(1, pixelsPerSecond) + panDelta));
-              effectTrack.style.left = (movedStart * pixelsPerSecond + 5) + 'px';
+              movedStart = Math.max(0, Math.min(Math.max(0, timelineDuration - effectDuration), currentSequenceTime + (clientX - dragCenterX) / pixelsPerSecond - grabOffset));
+              effectTrack.style.left = (movedStart * pixelsPerSecond) + 'px';
             }
-            // Begin moving as soon as the finger clearly drags. Waiting for a
-            // long-press allowed the parent timeline scroller to take over, which
-            // visually snapped a cross-clip effect back to the clip boundary.
-            try { effectTrack.setPointerCapture(event.pointerId); } catch (_) {}
-            function beginEffectMove() {
-              if (dragging || cancelled) return;
-              dragging = true;
-              suppressEffectTrackClick = true;
-              selectEffectTrack(item.clip.id);
-              effectTrack.classList.add('is-moving');
-              autoPanTimer = window.setInterval(function () {
-                if (dragging) updateGlobalEffectDrag(lastDragX, true);
-              }, 65);
-            }
+            const timer = window.setTimeout(function () {
+              if (cancelled) return;
+              dragging = true; suppressEffectTrackClick = true;
+              selectEffectTrack(item.clip.id); effectTrack.classList.add('is-moving');
+              autoPanTimer = window.setInterval(function () { if (dragging) updateGlobalEffectDrag(lastDragX, true); }, 65);
+              if (navigator.vibrate) navigator.vibrate(18);
+            }, 360);
             function move(moveEvent) {
               const dx = moveEvent.clientX - startX;
               lastDragX = moveEvent.clientX;
-              if (!dragging && Math.abs(dx) >= 4) beginEffectMove();
+              if (!dragging && Math.abs(dx) > 9) { cancelled = true; window.clearTimeout(timer); return; }
               if (!dragging) return;
               moveEvent.preventDefault();
-              moveEvent.stopPropagation();
               updateGlobalEffectDrag(lastDragX, false);
             }
             function finish() {
+              window.clearTimeout(timer);
               window.clearInterval(autoPanTimer);
-              try { effectTrack.releasePointerCapture(event.pointerId); } catch (_) {}
               window.removeEventListener('pointermove', move);
               window.removeEventListener('pointerup', finish);
               window.removeEventListener('pointercancel', finish);
@@ -3104,37 +3091,14 @@
               const destination = currentLayout.find(function (entry) { return movedStart >= entry.start && movedStart < entry.end; }) || currentLayout[currentLayout.length - 1];
               if (destination) {
                 const sourceEffect = item.clip.visualEffect;
-                const oldGroupId = item.clip.visualEffectGroupId || item.clip.id;
-                const movedEnd = Math.min(timelineDuration, movedStart + effectDuration);
-                const currentLayoutForMove = sequenceLayout();
-                const overlappedEntries = currentLayoutForMove.filter(function (entry) {
-                  return Math.min(entry.end, movedEnd) > Math.max(entry.start, movedStart) + .025;
-                });
-                if (overlappedEntries.length) {
-                  const masterEntry = overlappedEntries[0];
-                  const newGroupId = masterEntry.clip.id;
-                  currentLayoutForMove.forEach(function (entry) {
-                    if ((entry.clip.visualEffectGroupId || entry.clip.id) === oldGroupId || entry.clip.visualEffect === sourceEffect) {
-                      entry.clip.visualEffect = 'none';
-                      entry.clip.visualEffectStart = 0;
-                      entry.clip.visualEffectEnd = 1;
-                      entry.clip.visualEffectGroupId = '';
-                      entry.clip.visualEffectGlobalStart = 0;
-                      entry.clip.visualEffectGlobalEnd = 0;
-                    }
-                  });
-                  overlappedEntries.forEach(function (entry) {
-                    const overlapStart = Math.max(entry.start, movedStart);
-                    const overlapEnd = Math.min(entry.end, movedEnd);
-                    entry.clip.visualEffect = sourceEffect;
-                    entry.clip.visualEffectGroupId = newGroupId;
-                    entry.clip.visualEffectGlobalStart = entry.clip.id === newGroupId ? movedStart : 0;
-                    entry.clip.visualEffectGlobalEnd = entry.clip.id === newGroupId ? movedEnd : 0;
-                    entry.clip.visualEffectStart = Math.max(0, Math.min(.99, (overlapStart - entry.start) / entry.duration));
-                    entry.clip.visualEffectEnd = Math.max(entry.clip.visualEffectStart + Math.min(1, .18 / entry.duration), Math.min(1, (overlapEnd - entry.start) / entry.duration));
-                  });
-                  selectedEffectTrackClipId = newGroupId;
-                }
+                const localDuration = Math.min(effectDuration, destination.duration);
+                const localStart = Math.max(destination.start, Math.min(destination.end - localDuration, movedStart));
+                if (destination.clip !== item.clip) { item.clip.visualEffect = 'none'; item.clip.visualEffectStart = 0; item.clip.visualEffectEnd = 1; item.clip.visualEffectGroupId = ''; }
+                destination.clip.visualEffect = sourceEffect;
+                destination.clip.visualEffectGroupId = destination.clip.id;
+                destination.clip.visualEffectStart = Math.max(0, Math.min(1, (localStart - destination.start) / destination.duration));
+                destination.clip.visualEffectEnd = Math.max(destination.clip.visualEffectStart, Math.min(1, (localStart + localDuration - destination.start) / destination.duration));
+                selectedEffectTrackClipId = destination.clip.id;
               }
               applyPreviewEdits(); renderClipTimeline(); recordEditorChange(before); syncEffectSelectionToolbar();
               reelMessage(root, 'Effect moved');
@@ -3189,12 +3153,42 @@
                   entry.clip.visualEffectEnd = Math.max(entry.clip.visualEffectStart + Math.min(1, minimumSeconds / entry.duration), Math.min(1, (overlapEnd - entry.start) / entry.duration));
                 });
               }
+              function applyExpandedEffectStart(globalStart) {
+                const layoutNow = sequenceLayout();
+                const boundedStart = Math.max(0, Math.min(initialGlobalEnd - minimumSeconds, globalStart));
+                item.clip.visualEffectGlobalStart = boundedStart;
+                item.clip.visualEffectGlobalEnd = initialGlobalEnd;
+                layoutNow.forEach(function (entry) {
+                  const overlapStart = Math.max(entry.start, boundedStart);
+                  const overlapEnd = Math.min(entry.end, initialGlobalEnd);
+                  const hasOverlap = overlapEnd > overlapStart + .025;
+                  if (!hasOverlap) {
+                    if (entry.clip.visualEffectGroupId === effectGroupId && entry.clip.id !== item.clip.id) {
+                      entry.clip.visualEffect = 'none';
+                      entry.clip.visualEffectStart = 0;
+                      entry.clip.visualEffectEnd = 1;
+                      entry.clip.visualEffectGroupId = '';
+                      entry.clip.visualEffectGlobalStart = 0;
+                      entry.clip.visualEffectGlobalEnd = 0;
+                    }
+                    return;
+                  }
+                  entry.clip.visualEffect = effectId;
+                  entry.clip.visualEffectGroupId = effectGroupId;
+                  entry.clip.visualEffectGlobalStart = entry.clip.id === item.clip.id ? boundedStart : 0;
+                  entry.clip.visualEffectGlobalEnd = entry.clip.id === item.clip.id ? initialGlobalEnd : 0;
+                  entry.clip.visualEffectStart = Math.max(0, Math.min(.99, (overlapStart - entry.start) / entry.duration));
+                  entry.clip.visualEffectEnd = Math.max(entry.clip.visualEffectStart + Math.min(1, minimumSeconds / entry.duration), Math.min(1, (overlapEnd - entry.start) / entry.duration));
+                });
+              }
               function move(moveEvent) {
                 moveEvent.preventDefault();
                 if (edge === 'start') {
-                  const delta = (moveEvent.clientX - startX) / Math.max(1, item.duration * pixelsPerSecond);
-                  item.clip.visualEffectStart = Math.max(0, Math.min(initialEnd - minimum, initialStart + delta));
-                  updateTrackPosition();
+                  const deltaSeconds = (moveEvent.clientX - startX) / Math.max(1, pixelsPerSecond);
+                  applyExpandedEffectStart(initialGlobalStart + deltaSeconds);
+                  const expandedStart = Math.max(0, Math.min(initialGlobalEnd - minimumSeconds, initialGlobalStart + deltaSeconds));
+                  effectTrack.style.left = (expandedStart * pixelsPerSecond + 5) + 'px';
+                  effectTrack.style.width = Math.max(24, (initialGlobalEnd - expandedStart) * pixelsPerSecond - 10) + 'px';
                 } else {
                   const deltaSeconds = (moveEvent.clientX - startX) / Math.max(1, pixelsPerSecond);
                   applyExpandedEffectEnd(initialGlobalEnd + deltaSeconds);
@@ -3496,8 +3490,6 @@
 
     function beginTimelineDrag(event) {
       if (event.target.closest('.reel-trim-handle')) return;
-      if (event.target.closest('.reel-effect-track,.reel-effect-trim,.reel-effect-selection-toolbar')) return;
-      if (event.target.closest('.reel-music-track,.reel-music-selection-toolbar')) return;
       if (event.target.closest('.reel-timeline-add')) return;
       if (event.target.closest('.reel-timeline-mute')) return;
       timelinePointerOnSound = Boolean(event.target.closest('.reel-timeline-audio,.reel-timeline-sound-label'));
@@ -3527,7 +3519,7 @@
       try { captureTarget.setPointerCapture(event.pointerId); } catch (error) {}
     }
     function moveTimelineDrag(event) {
-      if (!timelinePointerDown || event.target.closest('.reel-trim-handle,.reel-effect-track,.reel-effect-trim,.reel-music-track')) return;
+      if (!timelinePointerDown || event.target.closest('.reel-trim-handle')) return;
       event.preventDefault();
       const now = performance.now();
       if (Math.abs(event.clientX - timelineDragStartX) >= 5 && !timelinePointerMoved) {
