@@ -1599,6 +1599,17 @@
       const old = editStage && editStage.querySelector('.reel-music-adjust-sheet');
       if (old) old.remove();
     }
+    function resumeMusicAdjustmentPlayback() {
+      let playPromise = null;
+      if (editVideo && editVideo.paused) {
+        try { playPromise = editVideo.play(); } catch (error) { playPromise = null; }
+      }
+      if (playPromise && typeof playPromise.then === 'function') {
+        playPromise.then(function () { syncDeviceMusicPlayback(); }).catch(function () { syncDeviceMusicPlayback(); });
+      } else {
+        syncDeviceMusicPlayback();
+      }
+    }
     function openMusicAdjustSheet(mode, track) {
       closeMusicAdjustSheet(); normalizeMusicMix(track);
       const sheet = document.createElement('div');
@@ -1612,7 +1623,7 @@
         const icon = document.createElement('img'); icon.src = '/reel-ui/sound-volume.png'; icon.alt = '';
         const wrap = document.createElement('div'); wrap.className = 'reel-music-volume-row'; wrap.append(icon, slider); body.appendChild(wrap);
         const before = captureEditorSnapshot(); let changed = false;
-        slider.addEventListener('input', function () { track.volume = Number(slider.value) / 100; changed = true; syncDeviceMusicPlayback(); });
+        slider.addEventListener('input', function () { track.volume = Number(slider.value) / 100; changed = true; resumeMusicAdjustmentPlayback(); });
         slider.addEventListener('change', function () { if (changed) recordEditorChange(before); changed = false; });
       } else {
         [['Fade in','fadeIn'],['Fade out','fadeOut']].forEach(function (item) {
@@ -1623,21 +1634,53 @@
           const value = document.createElement('output'); value.textContent = Number(track[item[1]] || 0).toFixed(1) + 's'; header.append(name, value);
           const slider = document.createElement('input'); slider.type = 'range'; slider.min = '0'; slider.max = String(maxFade); slider.step = '0.1'; slider.value = String(track[item[1]] || 0);
           const before = captureEditorSnapshot(); let changed = false;
-          slider.addEventListener('input', function () { track[item[1]] = Number(slider.value); value.textContent = Number(slider.value).toFixed(1) + 's'; changed = true; syncDeviceMusicPlayback(); });
+          slider.addEventListener('input', function () { track[item[1]] = Number(slider.value); value.textContent = Number(slider.value).toFixed(1) + 's'; changed = true; resumeMusicAdjustmentPlayback(); });
           slider.addEventListener('change', function () { if (changed) recordEditorChange(before); changed = false; });
           row.append(header, slider); body.appendChild(row);
         });
       }
       editStage.appendChild(sheet);
     }
+    function musicOverlapsClip(track, item) {
+      if (!track || !item) return false;
+      const start = Number(track.start) || 0;
+      const end = Number(track.end) || 0;
+      return start < item.end - .025 && end > item.start + .025;
+    }
+    function clipHasMusicTrack(item, ignoredTrackId) {
+      return ensureMusicTracks().some(function (track) {
+        return track.trackId !== ignoredTrackId && musicOverlapsClip(track, item);
+      });
+    }
+    function clipIndexForMusicTrack(track) {
+      const layout = sequenceLayout();
+      if (!layout.length || !track) return -1;
+      const midpoint = ((Number(track.start) || 0) + (Number(track.end) || 0)) / 2;
+      let index = layout.findIndex(function (item) { return midpoint >= item.start - .025 && midpoint < item.end + .025; });
+      if (index < 0) index = layout.findIndex(function (item) { return musicOverlapsClip(track, item); });
+      return index;
+    }
+    function nextEmptyClipForMusicCopy(track) {
+      const layout = sequenceLayout();
+      if (!layout.length || !track) return null;
+      const sourceIndex = Math.max(0, clipIndexForMusicTrack(track));
+      const ordered = layout.slice(sourceIndex + 1).concat(layout.slice(0, sourceIndex));
+      return ordered.find(function (item) { return !clipHasMusicTrack(item, track.trackId); }) || null;
+    }
+    function allClipsHaveMusic() {
+      const layout = sequenceLayout();
+      return layout.length > 0 && layout.every(function (item) { return clipHasMusicTrack(item, ''); });
+    }
     function syncMusicSelectionToolbar() {
-      const visible = Boolean(selectedMusicTrackData());
+      const music = selectedMusicTrackData();
+      const visible = Boolean(music);
       const copyButton = musicSelectionToolbar.querySelector('[data-music-track-action="copy"]');
-      const allClipsHaveSound = ensureClipState().length > 0 && ensureMusicTracks().length >= ensureClipState().length;
+      const copyTarget = music ? nextEmptyClipForMusicCopy(music) : null;
+      const disableCopy = !copyTarget || allClipsHaveMusic();
       if (copyButton) {
-        copyButton.disabled = allClipsHaveSound;
-        copyButton.setAttribute('aria-disabled', allClipsHaveSound ? 'true' : 'false');
-        copyButton.title = allClipsHaveSound ? 'All clips already have sound' : 'Copy sound';
+        copyButton.disabled = disableCopy;
+        copyButton.setAttribute('aria-disabled', disableCopy ? 'true' : 'false');
+        copyButton.title = disableCopy ? 'All clips already have sound' : 'Copy sound to next clip';
       }
       musicSelectionToolbar.classList.toggle('is-visible', visible);
       musicSelectionToolbar.setAttribute('aria-hidden', visible ? 'false' : 'true');
@@ -1668,16 +1711,21 @@
         clearMusicTrackSelection(); renderMusicTrack(); recordEditorChange(before); reelMessage(root, 'Sound deleted'); return;
       }
       if (action === 'copy') {
-        const tracks = ensureMusicTracks();
-        if (tracks.length >= ensureClipState().length) {
+        const targetClip = nextEmptyClipForMusicCopy(music);
+        if (!targetClip) {
           syncMusicSelectionToolbar();
           return;
         }
-        const nextLane = tracks.reduce(function (highest, track) { return Math.max(highest, Number(track.lane) || 0); }, -1) + 1;
         const before = captureEditorSnapshot();
-        const copy = Object.assign({}, music, { trackId: 'music-' + Date.now(), lane: nextLane });
+        const copy = Object.assign({}, music, {
+          trackId: 'music-' + Date.now(),
+          start: targetClip.start,
+          end: targetClip.end,
+          lane: 0
+        });
+        normalizeMusicMix(copy);
         ensureMusicTracks().push(copy); selectedMusicTrackId = copy.trackId; renderMusicTrack(); recordEditorChange(before); syncMusicSelectionToolbar();
-        reelMessage(root, 'Sound copied');
+        reelMessage(root, 'Sound copied to next clip');
       }
     });
 
