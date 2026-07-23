@@ -1008,14 +1008,16 @@
     function openBuiltInEffectsEditor() {
       const wrap = document.createElement('div');
       wrap.className = 'reel-native-effects';
-      wrap.innerHTML = '<div class="reel-effect-drag-zone" aria-hidden="true"><i></i></div><div class="reel-effect-sheet-head"><label><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="14" cy="14" r="9"></circle><path d="M21 21l7 7"></path></svg><input class="reel-effect-search" type="search" placeholder="Search for effects" aria-label="Search for effects"></label><button type="button" class="reel-effect-done" aria-label="Apply effect"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M8 25.5l10.3 10L40 9.5"></path></svg></button></div><div class="reel-effect-categories" role="tablist"></div><div class="reel-effect-status"></div><div class="reel-effect-grid"></div>';
+      wrap.innerHTML = '<div class="reel-effect-drag-zone" aria-hidden="true"><i></i></div><div class="reel-effect-sheet-head"><label><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="14" cy="14" r="9"></circle><path d="M21 21l7 7"></path></svg><input class="reel-effect-search" type="search" placeholder="Search for effects" aria-label="Search for effects"></label><button type="button" class="reel-effect-done" aria-label="Apply effect"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M8 25.5l10.3 10L40 9.5"></path></svg></button></div><div class="reel-effect-categories" role="tablist"></div><div class="reel-effect-status"></div><div class="reel-effect-pages"><div class="reel-effect-grid"></div><div class="reel-effect-grid reel-effect-grid-adjacent" aria-hidden="true"></div></div>';
       const search = wrap.querySelector('.reel-effect-search');
       const dragZone = wrap.querySelector('.reel-effect-drag-zone');
       const sheetHead = wrap.querySelector('.reel-effect-sheet-head');
       const done = wrap.querySelector('.reel-effect-done');
       const categories = wrap.querySelector('.reel-effect-categories');
       const status = wrap.querySelector('.reel-effect-status');
-      const grid = wrap.querySelector('.reel-effect-grid');
+      const pages = wrap.querySelector('.reel-effect-pages');
+      const grid = wrap.querySelector('.reel-effect-grid:not(.reel-effect-grid-adjacent)');
+      const adjacentGrid = wrap.querySelector('.reel-effect-grid-adjacent');
       const thumbnailSource = document.createElement('canvas'); thumbnailSource.width = thumbnailSource.height = 96;
       const thumbnailSourceContext = thumbnailSource.getContext('2d', { alpha: false });
       const thumbnailStage = document.createElement('canvas'); thumbnailStage.width = thumbnailStage.height = 96;
@@ -1091,8 +1093,7 @@
             window.clearTimeout(editVideo.__reelEffectPreviewTimer);
             if (editVideo.__reelEffectPreviewStop) editVideo.__reelEffectPreviewStop();
             const previewEnd = currentSequenceTime;
-            const previewItem = currentClipItem() || sequenceLayout()[0];
-            const previewStart = Math.max(previewItem ? previewItem.start : 0, previewEnd - 7);
+            const previewStart = Math.max(0, previewEnd - 7);
             if (previewEnd - previewStart < .04) { editVideo.pause(); return; }
             seekSequenceTime(previewStart, true);
             let previewStopped = false;
@@ -1112,6 +1113,28 @@
           grid.appendChild(button);
         });
         status.textContent = visible.length ? '' : 'No effects match this search';
+      }
+      function renderAdjacentCategory(categoryName) {
+        const normalized = String(search.value || '').trim().toLowerCase();
+        const visible = reelVisualEffectCatalog.filter(function (effect) {
+          return (categoryName === 'All' || effect.category === categoryName)
+            && (!normalized || effect.name.toLowerCase().includes(normalized) || effect.category.toLowerCase().includes(normalized));
+        });
+        adjacentGrid.replaceChildren();
+        visible.forEach(function (effect) {
+          const button = document.createElement('button');
+          button.type = 'button'; button.tabIndex = -1;
+          button.className = 'reel-effect-option' + (effect.id === activeEffectId() ? ' is-active' : '');
+          const thumb = document.createElement('span');
+          thumb.className = 'reel-effect-thumb' + (effect.id === 'none' ? ' reel-effect-none' : '');
+          if (effect.id !== 'none') {
+            const preview = document.createElement('canvas'); preview.width = preview.height = 72;
+            thumb.appendChild(preview);
+            thumbnailRecords.push({ effect: effect, canvas: preview, context: preview.getContext('2d', { alpha: false }) });
+          }
+          const label = document.createElement('strong'); label.textContent = effect.name;
+          button.append(thumb, label); adjacentGrid.appendChild(button);
+        });
       }
       function updateCategoryTabs() {
         categories.querySelectorAll('button').forEach(function (item) {
@@ -1156,8 +1179,13 @@
       function finishPull() { if (pullStartY == null) return; const elapsed = Math.max(1, performance.now() - pullStartedAt); const hide = pullActive && (pullDistance > 46 || pullDistance / elapsed > .65); pullStartY = null; pullDistance = 0; pullActive = false; window.cancelAnimationFrame(pullFrame); pullFrame = 0; toolPanel.style.transition = 'transform 180ms cubic-bezier(.2,.75,.25,1)'; if (hide) { toolPanel.style.transform = 'translate3d(0,105%,0)'; window.setTimeout(closeToolPanel, 175); } else { toolPanel.style.transform = 'translate3d(0,0,0)'; window.setTimeout(function () { toolPanel.style.transition = ''; }, 185); } }
       dragZone.addEventListener('pointerdown', beginPull, { signal: effectMenuController.signal }); sheetHead.addEventListener('pointerdown', beginPull, { signal: effectMenuController.signal });
       window.addEventListener('pointermove', movePull, { passive: false, signal: effectMenuController.signal }); window.addEventListener('pointerup', finishPull, { signal: effectMenuController.signal }); window.addEventListener('pointercancel', finishPull, { signal: effectMenuController.signal });
-      let categoryStartX = null; let categoryStartY = null; let categoryDragX = 0; let categoryDragging = false; let categoryDragFrame = 0;
-      function resetCategoryDragStyles() { grid.style.removeProperty('transition'); grid.style.removeProperty('transform'); grid.style.removeProperty('opacity'); }
+      let categoryStartX = null; let categoryStartY = null; let categoryDragX = 0; let categoryDragging = false; let categoryDragFrame = 0; let adjacentCategory = '';
+      function resetCategoryDragStyles() {
+        [grid, adjacentGrid].forEach(function (page) {
+          page.style.removeProperty('transition'); page.style.removeProperty('transform'); page.style.removeProperty('opacity');
+        });
+        adjacentGrid.replaceChildren(); adjacentGrid.hidden = true; adjacentCategory = '';
+      }
       grid.addEventListener('pointerdown', function (event) {
         if (categoryAnimating) return;
         categoryStartX = event.clientX; categoryStartY = event.clientY; categoryDragX = 0; categoryDragging = false;
@@ -1168,14 +1196,26 @@
         if (!categoryDragging && (Math.abs(dx) < 7 || Math.abs(dx) < Math.abs(dy) * 1.15)) return;
         categoryDragging = true; wrap.__categorySwipe = true; event.preventDefault();
         const index = categoryNames.indexOf(activeCategory);
-        const blocked = (dx > 0 && index === 0) || (dx < 0 && index === categoryNames.length - 1);
+        const adjacentIndex = index + (dx < 0 ? 1 : -1);
+        const blocked = adjacentIndex < 0 || adjacentIndex >= categoryNames.length;
         categoryDragX = blocked ? dx * .28 : dx;
+        const nextCategory = blocked ? '' : categoryNames[adjacentIndex];
+        if (nextCategory && adjacentCategory !== nextCategory) {
+          adjacentCategory = nextCategory; renderAdjacentCategory(nextCategory); adjacentGrid.hidden = false;
+        } else if (!nextCategory) {
+          adjacentGrid.hidden = true; adjacentCategory = '';
+        }
         if (categoryDragFrame) return;
         categoryDragFrame = window.requestAnimationFrame(function () {
           categoryDragFrame = 0;
           grid.style.setProperty('transition', 'none', 'important');
           grid.style.setProperty('transform', 'translate3d(' + categoryDragX + 'px,0,0)', 'important');
-          grid.style.setProperty('opacity', String(1 - Math.min(.32, Math.abs(categoryDragX) / Math.max(1, grid.clientWidth) * .38)), 'important');
+          grid.style.setProperty('opacity', '1', 'important');
+          if (!adjacentGrid.hidden) {
+            adjacentGrid.style.setProperty('transition', 'none', 'important');
+            adjacentGrid.style.setProperty('transform', 'translate3d(calc(' + (categoryDragX < 0 ? '100%' : '-100%') + ' + ' + categoryDragX + 'px),0,0)', 'important');
+            adjacentGrid.style.setProperty('opacity', '1', 'important');
+          }
         });
       }, { passive: false });
       grid.addEventListener('pointerup', function (event) {
@@ -1187,20 +1227,18 @@
         const next = Math.max(0, Math.min(categoryNames.length - 1, index + (dx < 0 ? 1 : -1)));
         const change = next !== index && Math.abs(dx) >= Math.min(56, grid.clientWidth * .18);
         categoryAnimating = true;
-        grid.style.setProperty('transition', 'transform 150ms ease-out, opacity 150ms ease-out', 'important');
+        grid.style.setProperty('transition', 'transform 150ms ease-out', 'important');
         grid.style.setProperty('transform', change ? 'translate3d(' + (dx < 0 ? '-105%' : '105%') + ',0,0)' : 'translate3d(0,0,0)', 'important');
-        grid.style.setProperty('opacity', change ? '.25' : '1', 'important');
+        grid.style.setProperty('opacity', '1', 'important');
+        if (!adjacentGrid.hidden) {
+          adjacentGrid.style.setProperty('transition', 'transform 150ms ease-out', 'important');
+          adjacentGrid.style.setProperty('transform', change ? 'translate3d(0,0,0)' : 'translate3d(' + (dx < 0 ? '100%' : '-100%') + ',0,0)', 'important');
+          adjacentGrid.style.setProperty('opacity', '1', 'important');
+        }
         window.setTimeout(function () {
           if (!change) { resetCategoryDragStyles(); categoryAnimating = false; wrap.__categorySwipe = false; return; }
           activeCategory = categoryNames[next]; updateCategoryTabs(); renderEffects();
-          grid.style.setProperty('transition', 'none', 'important');
-          grid.style.setProperty('transform', 'translate3d(' + (dx < 0 ? '105%' : '-105%') + ',0,0)', 'important');
-          grid.style.setProperty('opacity', '.25', 'important');
-          window.requestAnimationFrame(function () { window.requestAnimationFrame(function () {
-            grid.style.setProperty('transition', 'transform 170ms ease-out, opacity 170ms ease-out', 'important');
-            grid.style.setProperty('transform', 'translate3d(0,0,0)', 'important'); grid.style.setProperty('opacity', '1', 'important');
-            window.setTimeout(function () { resetCategoryDragStyles(); categoryAnimating = false; wrap.__categorySwipe = false; }, 175);
-          }); });
+          resetCategoryDragStyles(); categoryAnimating = false; wrap.__categorySwipe = false;
         }, 155);
       });
       grid.addEventListener('pointercancel', function () { categoryStartX = categoryStartY = null; categoryDragging = false; window.cancelAnimationFrame(categoryDragFrame); resetCategoryDragStyles(); wrap.__categorySwipe = false; });
@@ -3177,7 +3215,25 @@
     flow.addEventListener('pointerdown', function (event) {
       if (!selectedMusicTrackId) return;
       if (event.target.closest('.reel-music-track,.reel-music-selection-toolbar')) return;
-      clearMusicTrackSelection();
+      const originX = event.clientX, originY = event.clientY;
+      let moved = false;
+      function watchOutsideMusicMove(moveEvent) {
+        if (Math.hypot(moveEvent.clientX - originX, moveEvent.clientY - originY) > 8) moved = true;
+      }
+      function finishOutsideMusicSelection() {
+        window.removeEventListener('pointermove', watchOutsideMusicMove);
+        window.removeEventListener('pointerup', finishOutsideMusicSelection);
+        window.removeEventListener('pointercancel', cancelOutsideMusicSelection);
+        if (!moved) clearMusicTrackSelection();
+      }
+      function cancelOutsideMusicSelection() {
+        window.removeEventListener('pointermove', watchOutsideMusicMove);
+        window.removeEventListener('pointerup', finishOutsideMusicSelection);
+        window.removeEventListener('pointercancel', cancelOutsideMusicSelection);
+      }
+      window.addEventListener('pointermove', watchOutsideMusicMove, { passive: true });
+      window.addEventListener('pointerup', finishOutsideMusicSelection, { once: true });
+      window.addEventListener('pointercancel', cancelOutsideMusicSelection, { once: true });
     }, true);
     window.addEventListener('pointerup', function () { endTimelineDrag(false); }, { passive: true });
     window.addEventListener('pointercancel', function () { endTimelineDrag(true); }, { passive: true });
