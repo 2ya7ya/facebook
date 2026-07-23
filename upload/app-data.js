@@ -1054,7 +1054,8 @@
       flow.classList.add('is-effects-editing');
 
       function activeEffectId() {
-        const target = selectedClip() || editState;
+        const playbackItem = clipAtSequenceTime(currentSequenceTime);
+        const target = playbackItem ? playbackItem.clip : (selectedClip() || editState);
         return target && reelVisualEffectIds.has(target.visualEffect) ? target.visualEffect : 'none';
       }
       function renderEffects() {
@@ -1081,7 +1082,9 @@
           button.addEventListener('click', function (event) {
             if (wrap.__categorySwipe) { event.preventDefault(); wrap.__categorySwipe = false; return; }
             const before = captureEditorSnapshot();
-            const target = selectedClip() || editState;
+            const playbackItem = clipAtSequenceTime(currentSequenceTime);
+            const target = playbackItem ? playbackItem.clip : (selectedClip() || editState);
+            if (target.id) selectedClipId = target.id;
             target.visualEffect = effect.id;
             target.visualEffectStart = 0;
             target.visualEffectEnd = 1;
@@ -1092,8 +1095,9 @@
             reelMessage(root, effect.id === 'none' ? 'Effect removed' : effect.name + ' applied');
             window.clearTimeout(editVideo.__reelEffectPreviewTimer);
             if (editVideo.__reelEffectPreviewStop) editVideo.__reelEffectPreviewStop();
-            const previewEnd = currentSequenceTime;
-            const previewStart = Math.max(0, previewEnd - 7);
+            const selectionTime = currentSequenceTime;
+            const previewStart = Math.max(0, selectionTime - 7);
+            const previewEnd = Math.min(timelineDuration, previewStart + 7);
             if (previewEnd - previewStart < .04) { editVideo.pause(); return; }
             seekSequenceTime(previewStart, true);
             let previewStopped = false;
@@ -1101,14 +1105,20 @@
               if (previewStopped) return; previewStopped = true;
               window.clearTimeout(editVideo.__reelEffectPreviewTimer);
               editVideo.removeEventListener('timeupdate', watchEffectPreview);
+              editVideo.removeEventListener('canplay', startEffectPreview);
               editVideo.pause(); seekSequenceTime(previewEnd, true);
               editVideo.__reelEffectPreviewTimer = 0; editVideo.__reelEffectPreviewStop = null;
             }
             function watchEffectPreview() { if (currentSequenceTime >= previewEnd - .035) stopEffectPreview(); }
+            function startEffectPreview() {
+              if (previewStopped) return;
+              editVideo.play().catch(function () {});
+            }
             editVideo.__reelEffectPreviewStop = stopEffectPreview;
             editVideo.addEventListener('timeupdate', watchEffectPreview);
-            editVideo.play().catch(function () {});
-            editVideo.__reelEffectPreviewTimer = window.setTimeout(stopEffectPreview, Math.max(500, (previewEnd - previewStart) * 1000 + 700));
+            editVideo.addEventListener('canplay', startEffectPreview, { once: true });
+            startEffectPreview();
+            editVideo.__reelEffectPreviewTimer = window.setTimeout(stopEffectPreview, Math.max(9000, (previewEnd - previewStart) * 1000 + 2000));
           });
           grid.appendChild(button);
         });
@@ -1237,8 +1247,15 @@
         }
         window.setTimeout(function () {
           if (!change) { resetCategoryDragStyles(); categoryAnimating = false; wrap.__categorySwipe = false; return; }
-          activeCategory = categoryNames[next]; updateCategoryTabs(); renderEffects();
-          resetCategoryDragStyles(); categoryAnimating = false; wrap.__categorySwipe = false;
+          activeCategory = categoryNames[next];
+          grid.style.setProperty('transition', 'none', 'important');
+          grid.style.setProperty('transform', 'translate3d(0,0,0)', 'important');
+          grid.style.setProperty('opacity', '1', 'important');
+          updateCategoryTabs(); renderEffects();
+          adjacentGrid.hidden = true; adjacentGrid.replaceChildren();
+          window.requestAnimationFrame(function () {
+            resetCategoryDragStyles(); categoryAnimating = false; wrap.__categorySwipe = false;
+          });
         }, 155);
       });
       grid.addEventListener('pointercancel', function () { categoryStartX = categoryStartY = null; categoryDragging = false; window.cancelAnimationFrame(categoryDragFrame); resetCategoryDragStyles(); wrap.__categorySwipe = false; });
@@ -1560,6 +1577,13 @@
     function selectedMusicTrackData() { return ensureMusicTracks().find(function (track) { return track.trackId === selectedMusicTrackId; }) || null; }
     function syncMusicSelectionToolbar() {
       const visible = Boolean(selectedMusicTrackData());
+      const copyButton = musicSelectionToolbar.querySelector('[data-music-track-action="copy"]');
+      const allClipsHaveSound = ensureClipState().length > 0 && ensureMusicTracks().length >= ensureClipState().length;
+      if (copyButton) {
+        copyButton.disabled = allClipsHaveSound;
+        copyButton.setAttribute('aria-disabled', allClipsHaveSound ? 'true' : 'false');
+        copyButton.title = allClipsHaveSound ? 'All clips already have sound' : 'Copy sound';
+      }
       musicSelectionToolbar.classList.toggle('is-visible', visible);
       musicSelectionToolbar.setAttribute('aria-hidden', visible ? 'false' : 'true');
       if (editStage) editStage.classList.toggle('is-music-track-selected', visible);
@@ -1587,12 +1611,14 @@
         clearMusicTrackSelection(); renderMusicTrack(); recordEditorChange(before); reelMessage(root, 'Sound deleted'); return;
       }
       if (action === 'copy') {
-        const layout = sequenceLayout();
-        const sourceIndex = layout.findIndex(function (item) { return music.start >= item.start && music.start < item.end; });
-        const target = layout[sourceIndex + 1] || layout[sourceIndex - 1];
-        if (!target || sourceIndex < 0) return;
-        const before = captureEditorSnapshot(); const duration = Math.min(target.duration, music.end - music.start);
-        const copy = Object.assign({}, music, { trackId: 'music-' + Date.now(), start: target.start, end: target.start + duration });
+        const tracks = ensureMusicTracks();
+        if (tracks.length >= ensureClipState().length) {
+          syncMusicSelectionToolbar();
+          return;
+        }
+        const nextLane = tracks.reduce(function (highest, track) { return Math.max(highest, Number(track.lane) || 0); }, -1) + 1;
+        const before = captureEditorSnapshot();
+        const copy = Object.assign({}, music, { trackId: 'music-' + Date.now(), lane: nextLane });
         ensureMusicTracks().push(copy); selectedMusicTrackId = copy.trackId; renderMusicTrack(); recordEditorChange(before); syncMusicSelectionToolbar();
         reelMessage(root, 'Sound copied');
       }
@@ -2245,7 +2271,7 @@
         } else {
           const item = currentClipItem() || sequenceLayout()[0];
           const start = item ? item.start : 0; const end = item ? item.end : Math.max(.5, timelineDuration || 1);
-          const music = { trackId: 'music-' + Date.now(), name: file.name.replace(/\.[^.]+$/, ''), fileName: file.name, sourceUrl: sourceUrl, start: start, end: end };
+          const music = { trackId: 'music-' + Date.now(), name: file.name.replace(/\.[^.]+$/, ''), fileName: file.name, sourceUrl: sourceUrl, start: start, end: end, lane: 0 };
           ensureMusicTracks().push(music); selectedMusicTrackId = music.trackId;
         }
         renderMusicTrack(); recordEditorChange(before); syncMusicSelectionToolbar();
@@ -2279,13 +2305,26 @@
       timelineAudio.classList.toggle('has-selected-song', Boolean(tracks.length));
       timelineAudio.replaceChildren();
       timelineSoundLabel.style.display = tracks.length ? 'none' : '';
-      if (!tracks.length) { selectedMusicTrackId = ''; syncMusicSelectionToolbar(); return; }
+      if (!tracks.length) {
+        timelineAudio.style.removeProperty('--music-track-stack-height');
+        selectedMusicTrackId = ''; syncMusicSelectionToolbar(); return;
+      }
+      const laneIntervals = [];
+      tracks.forEach(function (music) {
+        let lane = Math.max(0, Math.floor(Number(music.lane) || 0));
+        while ((laneIntervals[lane] || []).some(function (range) { return music.start < range.end && music.end > range.start; })) lane += 1;
+        music.lane = lane;
+        if (!laneIntervals[lane]) laneIntervals[lane] = [];
+        laneIntervals[lane].push({ start: music.start, end: music.end });
+      });
+      const maximumLane = tracks.reduce(function (highest, music) { return Math.max(highest, music.lane); }, 0);
+      timelineAudio.style.setProperty('--music-track-stack-height', ((maximumLane + 1) * 42 - 4) + 'px');
       tracks.forEach(function (music) {
         music.start = Math.max(0, Math.min(timelineDuration, Number(music.start) || 0));
         music.end = Math.max(music.start + .18, Math.min(timelineDuration || music.end, Number(music.end) || timelineDuration));
         const track = document.createElement('div'); track.dataset.musicTrackId = music.trackId;
         track.className = 'reel-music-track' + (selectedMusicTrackId === music.trackId ? ' is-selected' : '');
-        track.style.left = (music.start * pixelsPerSecond) + 'px'; track.style.width = Math.max(32, (music.end - music.start) * pixelsPerSecond) + 'px';
+        track.style.left = (music.start * pixelsPerSecond) + 'px'; track.style.width = Math.max(32, (music.end - music.start) * pixelsPerSecond) + 'px'; track.style.top = (music.lane * 42) + 'px';
         track.innerHTML = '<button type="button" class="reel-music-trim reel-music-trim-start" aria-label="Trim song start">‹</button><span class="reel-music-note" aria-hidden="true">♪</span><strong></strong><button type="button" class="reel-music-trim reel-music-trim-end" aria-label="Trim song end">›</button>';
         track.querySelector('strong').textContent = music.name;
         track.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); selectMusicTrack(music.trackId); });
@@ -2646,6 +2685,7 @@
     function renderClipTimeline() {
       if (!clipLayer) return;
       const layout = refreshSequenceDuration();
+      syncMusicSelectionToolbar();
       clipLayer.replaceChildren();
       timelineEffectLayer.replaceChildren();
       const hasEffects = layout.some(function (item) { return item.clip.visualEffect && item.clip.visualEffect !== 'none'; });
@@ -2767,7 +2807,13 @@
           const endRatio = Math.min(1, Math.max(startRatio + Math.min(1, .1 / item.duration), Number(item.clip.visualEffectEnd) || 1));
           item.clip.visualEffectStart = startRatio; item.clip.visualEffectEnd = endRatio;
           const effectTrack = document.createElement('div'); effectTrack.className = 'reel-effect-track' + (selectedEffectTrackClipId === item.clip.id ? ' is-selected' : ''); effectTrack.dataset.clipId = item.clip.id;
-          const updateTrackPosition = function () { const start = item.start + item.duration * item.clip.visualEffectStart; const end = item.start + item.duration * item.clip.visualEffectEnd; effectTrack.style.left = (start * pixelsPerSecond) + 'px'; effectTrack.style.width = Math.max(24, (end - start) * pixelsPerSecond) + 'px'; };
+          const updateTrackPosition = function () {
+            const start = item.start + item.duration * item.clip.visualEffectStart;
+            const end = item.start + item.duration * item.clip.visualEffectEnd;
+            const gap = 10;
+            effectTrack.style.left = (start * pixelsPerSecond + gap / 2) + 'px';
+            effectTrack.style.width = Math.max(24, (end - start) * pixelsPerSecond - gap) + 'px';
+          };
           updateTrackPosition(); effectTrack.innerHTML = '<button type="button" class="reel-effect-trim reel-effect-trim-start" aria-label="Trim effect start">‹</button><span class="reel-effect-track-icon" aria-hidden="true"></span><strong></strong><button type="button" class="reel-effect-trim reel-effect-trim-end" aria-label="Trim effect end">›</button>';
           effectTrack.querySelector('strong').textContent = definition ? definition.name : 'Effect';
           effectTrack.addEventListener('click', function (event) {
