@@ -1480,6 +1480,53 @@
     toolPanel.className = 'reel-tool-panel';
     toolPanel.setAttribute('aria-hidden', 'true');
     flow.appendChild(toolPanel);
+    const cutoutCanvas = document.createElement('canvas');
+    cutoutCanvas.className = 'reel-cutout-canvas';
+    cutoutCanvas.hidden = true;
+    if (editStage) editStage.appendChild(cutoutCanvas);
+    const cutoutMaskCanvas = document.createElement('canvas');
+    const cutoutFrameCanvas = document.createElement('canvas');
+    let cutoutSegmenter = null, cutoutBusy = false, cutoutFailed = false, cutoutLastRun = 0;
+    let customCutoutMask = null, customCutoutEditing = false, customCutoutErase = true, customCutoutBrush = 34;
+    function ensureCutoutSegmenter() {
+      if (cutoutSegmenter || cutoutFailed || !window.SelfieSegmentation) return cutoutSegmenter;
+      try {
+        cutoutSegmenter = new window.SelfieSegmentation({ locateFile: function (file) { return '/segmentation/' + file; } });
+        cutoutSegmenter.setOptions({ modelSelection: 1, selfieMode: false });
+        cutoutSegmenter.onResults(function (results) {
+          cutoutBusy = false;
+          if (!results || !results.segmentationMask || !editVideo.videoWidth) return;
+          const w = editVideo.videoWidth, h = editVideo.videoHeight;
+          [cutoutCanvas, cutoutMaskCanvas, cutoutFrameCanvas].forEach(function (c) { if (c.width !== w || c.height !== h) { c.width = w; c.height = h; } });
+          const m = cutoutMaskCanvas.getContext('2d'); m.clearRect(0,0,w,h); m.drawImage(results.segmentationMask,0,0,w,h);
+          if (customCutoutMask) m.drawImage(customCutoutMask,0,0,w,h);
+          const f = cutoutFrameCanvas.getContext('2d'); f.clearRect(0,0,w,h); f.drawImage(editVideo,0,0,w,h); f.globalCompositeOperation='destination-in'; f.drawImage(cutoutMaskCanvas,0,0,w,h); f.globalCompositeOperation='source-over';
+          const c = cutoutCanvas.getContext('2d'); c.clearRect(0,0,w,h); c.drawImage(cutoutFrameCanvas,0,0,w,h);
+        });
+      } catch (_e) { cutoutFailed = true; cutoutSegmenter = null; }
+      return cutoutSegmenter;
+    }
+    function updateCutoutPreview(force) {
+      const clip = selectedClip();
+      const active = clip && clip.cutoutMode && clip.cutoutMode !== 'none';
+      cutoutCanvas.hidden = !active;
+      previewVideos.forEach(function(v){ v.style.visibility = active ? 'hidden' : ''; });
+      if (!active || !editVideo || editVideo.readyState < 2) return;
+      const now = performance.now();
+      if (!force && (cutoutBusy || now - cutoutLastRun < 95)) return;
+      const seg = ensureCutoutSegmenter(); if (!seg) return;
+      cutoutBusy = true; cutoutLastRun = now;
+      seg.send({ image: editVideo }).catch(function(){ cutoutBusy=false; cutoutFailed=true; cutoutSegmenter=null; });
+    }
+    function cutoutLoop(){ updateCutoutPreview(false); requestAnimationFrame(cutoutLoop); }
+    requestAnimationFrame(cutoutLoop);
+    cutoutCanvas.addEventListener('pointerdown', function(event){
+      const clip=selectedClip(); if(!customCutoutEditing || !clip || clip.cutoutMode!=='custom') return;
+      event.preventDefault(); cutoutCanvas.setPointerCapture(event.pointerId);
+      if(!customCutoutMask){ customCutoutMask=document.createElement('canvas'); customCutoutMask.width=cutoutCanvas.width; customCutoutMask.height=cutoutCanvas.height; const x=customCutoutMask.getContext('2d'); x.fillStyle='#fff'; x.fillRect(0,0,customCutoutMask.width,customCutoutMask.height); }
+      const paint=function(e){ const r=cutoutCanvas.getBoundingClientRect(); const x=(e.clientX-r.left)/r.width*customCutoutMask.width, y=(e.clientY-r.top)/r.height*customCutoutMask.height; const ctx=customCutoutMask.getContext('2d'); ctx.globalCompositeOperation=customCutoutErase?'destination-out':'source-over'; ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(x,y,customCutoutBrush*(customCutoutMask.width/Math.max(1,r.width)),0,Math.PI*2); ctx.fill(); ctx.globalCompositeOperation='source-over'; updateCutoutPreview(true); };
+      paint(event); const move=function(e){paint(e)}; const up=function(){cutoutCanvas.removeEventListener('pointermove',move);cutoutCanvas.removeEventListener('pointerup',up);cutoutCanvas.removeEventListener('pointercancel',up)}; cutoutCanvas.addEventListener('pointermove',move);cutoutCanvas.addEventListener('pointerup',up);cutoutCanvas.addEventListener('pointercancel',up);
+    });
     const loadingIndicator = document.createElement('div');
     loadingIndicator.className = 'reel-video-loading';
     loadingIndicator.innerHTML = '<span></span><strong>Loading video…</strong>';
@@ -1787,7 +1834,8 @@
         cropHeight: Math.min(1, Math.max(.01, Number(source.cropHeight) || 1))
         ,animationIn: String(source.animationIn || 'none')
         ,animationOut: String(source.animationOut || 'none')
-        ,animationCombo: String(source.animationCombo || 'none')
+        ,animationCombo: String(source.animationCombo || 'none'),
+        cutoutMode: ['none','background','custom'].includes(source.cutoutMode) ? source.cutoutMode : 'none'
       };
     }
     function normalizeClientClip(clip, fallbackStart, fallbackEnd) {
@@ -2342,6 +2390,7 @@
         applyVideoCrop(video, settings);
         ensureUserOverlay(video);
       });
+      updateCutoutPreview(true);
     }
     function renderVisualEffectPreview() {
       const item = currentClipItem();
@@ -4252,11 +4301,24 @@
       flow.classList.add('is-animation-editing');
     }
 
+    function openCutoutEditor() {
+      const clip = selectedClip(); if (!clip) return;
+      const before = captureEditorSnapshot();
+      const wrap = document.createElement('div'); wrap.className='reel-cutout-options';
+      wrap.innerHTML = '<button type="button" data-cutout-mode="background"><span class="reel-cutout-icon reel-cutout-person">✦</span><strong>Remove background</strong></button><button type="button" data-cutout-mode="custom"><span class="reel-cutout-icon reel-cutout-custom">⌁</span><strong>Remove custom</strong></button><div class="reel-cutout-custom-tools" hidden><button type="button" data-cutout-brush="erase" class="is-active">Erase</button><button type="button" data-cutout-brush="restore">Restore</button><input type="range" min="12" max="70" value="34" aria-label="Brush size"></div><button type="button" class="reel-cutout-done">Done</button>';
+      function sync(){ wrap.querySelectorAll('[data-cutout-mode]').forEach(function(b){b.classList.toggle('is-active',b.dataset.cutoutMode===clip.cutoutMode)}); const tools=wrap.querySelector('.reel-cutout-custom-tools'); tools.hidden=clip.cutoutMode!=='custom'; customCutoutEditing=clip.cutoutMode==='custom'; updateCutoutPreview(true); }
+      wrap.querySelectorAll('[data-cutout-mode]').forEach(function(b){b.addEventListener('click',function(){ clip.cutoutMode = clip.cutoutMode===b.dataset.cutoutMode ? 'none' : b.dataset.cutoutMode; if(clip.cutoutMode!=='custom') customCutoutEditing=false; sync(); applyPreviewEdits(); });});
+      wrap.querySelectorAll('[data-cutout-brush]').forEach(function(b){b.addEventListener('click',function(){ customCutoutErase=b.dataset.cutoutBrush==='erase'; wrap.querySelectorAll('[data-cutout-brush]').forEach(function(x){x.classList.toggle('is-active',x===b)}); });});
+      wrap.querySelector('input').addEventListener('input',function(){customCutoutBrush=Number(this.value)||34;});
+      wrap.querySelector('.reel-cutout-done').addEventListener('click',function(){customCutoutEditing=false;recordEditorChange(before);closeToolPanel();renderClipTimeline();});
+      openToolPanel('Cutout',wrap); toolPanel.classList.add('is-cutout-panel'); sync();
+    }
+
     document.addEventListener('click', function (event) {
       const button = event.target.closest('[data-selection-tool]');
       if (!button) return;
       const toolName = button.dataset.selectionTool;
-      if (!['split','replace','delete','speed','crop','animation','filters','effects','magic','adjust'].includes(toolName)) return;
+      if (!['split','replace','delete','speed','crop','animation','filters','effects','cutout','magic','adjust'].includes(toolName)) return;
       if (toolName !== 'animation' && !flow.contains(button)) return;
       event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation();
       if (toolName === 'split') splitAtPlayhead();
@@ -4266,6 +4328,7 @@
       else if (toolName === 'crop') openCropEditor();
       else if (toolName === 'animation') openAnimationEditor();
       else if (toolName === 'effects') openBuiltInEffectsEditor();
+      else if (toolName === 'cutout') openCutoutEditor();
       else if (toolName === 'filters' || toolName === 'magic') {
         const clip = selectedClip(); if (!clip) return;
         const before = captureEditorSnapshot();
