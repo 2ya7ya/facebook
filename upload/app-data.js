@@ -3496,6 +3496,8 @@
 
     function beginTimelineDrag(event) {
       if (event.target.closest('.reel-trim-handle')) return;
+      if (event.target.closest('.reel-effect-track,.reel-effect-trim,.reel-effect-selection-toolbar')) return;
+      if (event.target.closest('.reel-music-track,.reel-music-selection-toolbar')) return;
       if (event.target.closest('.reel-timeline-add')) return;
       if (event.target.closest('.reel-timeline-mute')) return;
       timelinePointerOnSound = Boolean(event.target.closest('.reel-timeline-audio,.reel-timeline-sound-label'));
@@ -3525,7 +3527,7 @@
       try { captureTarget.setPointerCapture(event.pointerId); } catch (error) {}
     }
     function moveTimelineDrag(event) {
-      if (!timelinePointerDown || event.target.closest('.reel-trim-handle')) return;
+      if (!timelinePointerDown || event.target.closest('.reel-trim-handle,.reel-effect-track,.reel-effect-trim,.reel-music-track')) return;
       event.preventDefault();
       const now = performance.now();
       if (Math.abs(event.clientX - timelineDragStartX) >= 5 && !timelinePointerMoved) {
