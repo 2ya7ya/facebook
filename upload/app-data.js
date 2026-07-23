@@ -1742,6 +1742,8 @@
     if (editStage) editStage.appendChild(transitionPreviewHost);
     const transitionOutgoingFrame = document.createElement('canvas');
     const transitionIncomingFrame = document.createElement('canvas');
+    const transitionEffectCanvas = document.createElement('canvas');
+    const transitionEffectRenderer = window.ReelEffects && window.ReelEffects.createRenderer ? window.ReelEffects.createRenderer(transitionEffectCanvas) : null;
 
     const clipLayer = document.createElement('div');
     clipLayer.className = 'reel-clip-layer';
@@ -2031,18 +2033,49 @@
       const drawHeight = editVideo.videoHeight * fit;
       const drawX = (width - drawWidth) / 2;
       const drawY = (height - drawHeight) / 2;
+      const animationElapsed = Math.max(0, Math.min(duration || 0, Number(elapsed) || 0));
+      const effectStart = (duration || 0) * Math.min(1, Math.max(0, Number(clip && clip.visualEffectStart) || 0));
+      const effectEnd = (duration || 0) * Math.min(1, Math.max(0, Number(clip && clip.visualEffectEnd) || 1));
+      const transitionEffectId = clip && animationElapsed >= effectStart && animationElapsed <= effectEnd && reelVisualEffectIds.has(clip.visualEffect) ? clip.visualEffect : 'none';
+      function drawSourceFrame(drawContext) {
+        try { drawContext.drawImage(editVideo, drawX, drawY, drawWidth, drawHeight); return true; }
+        catch (error) { return false; }
+      }
+      let sourceCanvas = null;
+      if (transitionEffectRenderer && transitionEffectId !== 'none') {
+        if (transitionEffectCanvas.width !== width || transitionEffectCanvas.height !== height) {
+          transitionEffectCanvas.width = width; transitionEffectCanvas.height = height;
+        }
+        const effectContext = transitionEffectCanvas.getContext('2d', { alpha: false });
+        if (effectContext) {
+          effectContext.save();
+          effectContext.setTransform(1, 0, 0, 1, 0, 0);
+          effectContext.fillStyle = '#000';
+          effectContext.fillRect(0, 0, width, height);
+          drawSourceFrame(effectContext);
+          effectContext.restore();
+          if (transitionEffectRenderer.render(transitionEffectCanvas, transitionEffectId, Math.max(0, animationElapsed - effectStart))) {
+            sourceCanvas = transitionEffectCanvas;
+          }
+        }
+      }
       const hasAnimation = clip && ((clip.animationIn && clip.animationIn !== 'none') || (clip.animationOut && clip.animationOut !== 'none') || (clip.animationCombo && clip.animationCombo !== 'none'));
       if (hasAnimation && duration > 0) {
-        const animationElapsed = Math.max(0, Math.min(duration, Number(elapsed) || 0));
         const animation = clipAnimationState(clip, animationElapsed, duration);
         context.translate(width / 2 + animation.x * width, height / 2 + animation.y * height);
         context.rotate(animation.rotate * Math.PI / 180);
         context.scale(animation.scaleX, animation.scaleY);
         context.globalAlpha = animation.opacity;
         if (animation.blur) context.filter = 'blur(' + animation.blur + 'px)';
-        try { context.drawImage(editVideo, drawX - width / 2, drawY - height / 2, drawWidth, drawHeight); } catch (error) { context.restore(); return false; }
+        try {
+          if (sourceCanvas) context.drawImage(sourceCanvas, -width / 2, -height / 2, width, height);
+          else context.drawImage(editVideo, drawX - width / 2, drawY - height / 2, drawWidth, drawHeight);
+        } catch (error) { context.restore(); return false; }
       } else {
-        try { context.drawImage(editVideo, drawX, drawY, drawWidth, drawHeight); } catch (error) { context.restore(); return false; }
+        try {
+          if (sourceCanvas) context.drawImage(sourceCanvas, 0, 0, width, height);
+          else if (!drawSourceFrame(context)) { context.restore(); return false; }
+        } catch (error) { context.restore(); return false; }
       }
       context.restore();
       return true;
