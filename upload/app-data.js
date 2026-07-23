@@ -1095,9 +1095,11 @@
             reelMessage(root, effect.id === 'none' ? 'Effect removed' : effect.name + ' applied');
             window.clearTimeout(editVideo.__reelEffectPreviewTimer);
             if (editVideo.__reelEffectPreviewStop) editVideo.__reelEffectPreviewStop();
-            const selectionTime = currentSequenceTime;
-            const previewStart = Math.max(0, selectionTime - 7);
-            const previewEnd = Math.min(timelineDuration, previewStart + 7);
+            const selectionTime = Math.max(0, Math.min(timelineDuration || 0, currentSequenceTime || 0));
+            const previewLead = 2.5;
+            const previewLength = 4;
+            const previewStart = Math.max(0, selectionTime - previewLead);
+            const previewEnd = Math.min(timelineDuration || selectionTime + previewLength, Math.max(selectionTime + 1.25, previewStart + previewLength));
             if (previewEnd - previewStart < .04) { editVideo.pause(); return; }
             seekSequenceTime(previewStart, true);
             let previewStopped = false;
@@ -1106,7 +1108,8 @@
               window.clearTimeout(editVideo.__reelEffectPreviewTimer);
               editVideo.removeEventListener('timeupdate', watchEffectPreview);
               editVideo.removeEventListener('canplay', startEffectPreview);
-              editVideo.pause(); seekSequenceTime(previewEnd, true);
+              editVideo.pause();
+              seekSequenceTime(Math.min(previewEnd, timelineDuration || previewEnd), true);
               editVideo.__reelEffectPreviewTimer = 0; editVideo.__reelEffectPreviewStop = null;
             }
             function watchEffectPreview() { if (currentSequenceTime >= previewEnd - .035) stopEffectPreview(); }
@@ -1118,7 +1121,7 @@
             editVideo.addEventListener('timeupdate', watchEffectPreview);
             editVideo.addEventListener('canplay', startEffectPreview, { once: true });
             startEffectPreview();
-            editVideo.__reelEffectPreviewTimer = window.setTimeout(stopEffectPreview, Math.max(9000, (previewEnd - previewStart) * 1000 + 2000));
+            editVideo.__reelEffectPreviewTimer = window.setTimeout(stopEffectPreview, Math.max(5200, (previewEnd - previewStart) * 1000 + 900));
           });
           grid.appendChild(button);
         });
