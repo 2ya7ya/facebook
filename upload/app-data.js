@@ -1499,10 +1499,25 @@
       const context = cutoutCanvas.getContext('2d');
       if (context) context.clearRect(0, 0, cutoutCanvas.width, cutoutCanvas.height);
     }
+    let cutoutLibraryLoading = null;
+    function loadCutoutLibrary() {
+      if (window.SelfieSegmentation) return Promise.resolve(true);
+      if (cutoutLibraryLoading) return cutoutLibraryLoading;
+      cutoutLibraryLoading = new Promise(function(resolve) {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js';
+        script.async = true;
+        script.onload = function(){ resolve(!!window.SelfieSegmentation); };
+        script.onerror = function(){ resolve(false); };
+        document.head.appendChild(script);
+      });
+      return cutoutLibraryLoading;
+    }
     function ensureCutoutSegmenter() {
-      if (cutoutSegmenter || cutoutFailed || !window.SelfieSegmentation) return cutoutSegmenter;
+      if (cutoutSegmenter) return cutoutSegmenter;
+      if (cutoutFailed || !window.SelfieSegmentation) return null;
       try {
-        cutoutSegmenter = new window.SelfieSegmentation({ locateFile: function (file) { return '/segmentation/' + file; } });
+        cutoutSegmenter = new window.SelfieSegmentation({ locateFile: function (file) { return 'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/' + file; } });
         cutoutSegmenter.setOptions({ modelSelection: 1, selfieMode: false });
         cutoutSegmenter.onResults(function (results) {
           cutoutBusy = false;
@@ -1580,7 +1595,14 @@
       const now = performance.now();
       if (!force && (cutoutBusy || now - cutoutLastRun < 95)) return;
       const seg = ensureCutoutSegmenter();
-      if (!seg) { clearCutoutPreview(); return; }
+      if (!seg) {
+        loadCutoutLibrary().then(function(ok){
+          if (!ok) { cutoutFailed = true; clearCutoutPreview(); return; }
+          cutoutFailed = false;
+          updateCutoutPreview(true);
+        });
+        return;
+      }
       cutoutBusy = true; cutoutLastRun = now;
       seg.send({ image: editVideo }).catch(function(){
         cutoutBusy=false; cutoutFailed=true; cutoutSegmenter=null; clearCutoutPreview();
@@ -1588,6 +1610,12 @@
     }
     function cutoutLoop(){ updateCutoutPreview(false); requestAnimationFrame(cutoutLoop); }
     requestAnimationFrame(cutoutLoop);
+    ['loadeddata','seeked','timeupdate','play'].forEach(function(name){
+      editVideo.addEventListener(name,function(){
+        const clip=selectedClip();
+        if(clip && clip.cutoutMode && clip.cutoutMode!=='none') updateCutoutPreview(true);
+      });
+    });
     cutoutCanvas.addEventListener('pointerdown', function(event){
       const clip=selectedClip(); if(!customCutoutEditing || !clip || clip.cutoutMode!=='custom') return;
       event.preventDefault(); cutoutCanvas.setPointerCapture(event.pointerId);
@@ -4379,6 +4407,9 @@
         const nextMode = clip.cutoutMode===b.dataset.cutoutMode ? 'none' : b.dataset.cutoutMode;
         if (nextMode !== clip.cutoutMode) { cutoutFrameReady=false; customCutoutMask=null; }
         clip.cutoutMode = nextMode;
+        cutoutFailed = false;
+        cutoutBusy = false;
+        cutoutLastRun = 0;
         if(clip.cutoutMode!=='custom') customCutoutEditing=false;
         sync(); applyPreviewEdits();
       });});
