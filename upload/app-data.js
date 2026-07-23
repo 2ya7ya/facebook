@@ -3069,24 +3069,32 @@
               movedStart = Math.max(0, Math.min(Math.max(0, timelineDuration - effectDuration), initialGlobalStart + (clientX - startX) / Math.max(1, pixelsPerSecond) + panDelta));
               effectTrack.style.left = (movedStart * pixelsPerSecond + 5) + 'px';
             }
-            const timer = window.setTimeout(function () {
-              if (cancelled) return;
-              dragging = true; suppressEffectTrackClick = true;
-              selectEffectTrack(item.clip.id); effectTrack.classList.add('is-moving');
-              autoPanTimer = window.setInterval(function () { if (dragging) updateGlobalEffectDrag(lastDragX, true); }, 65);
-              if (navigator.vibrate) navigator.vibrate(18);
-            }, 360);
+            // Begin moving as soon as the finger clearly drags. Waiting for a
+            // long-press allowed the parent timeline scroller to take over, which
+            // visually snapped a cross-clip effect back to the clip boundary.
+            try { effectTrack.setPointerCapture(event.pointerId); } catch (_) {}
+            function beginEffectMove() {
+              if (dragging || cancelled) return;
+              dragging = true;
+              suppressEffectTrackClick = true;
+              selectEffectTrack(item.clip.id);
+              effectTrack.classList.add('is-moving');
+              autoPanTimer = window.setInterval(function () {
+                if (dragging) updateGlobalEffectDrag(lastDragX, true);
+              }, 65);
+            }
             function move(moveEvent) {
               const dx = moveEvent.clientX - startX;
               lastDragX = moveEvent.clientX;
-              if (!dragging && Math.abs(dx) > 9) { cancelled = true; window.clearTimeout(timer); return; }
+              if (!dragging && Math.abs(dx) >= 4) beginEffectMove();
               if (!dragging) return;
               moveEvent.preventDefault();
+              moveEvent.stopPropagation();
               updateGlobalEffectDrag(lastDragX, false);
             }
             function finish() {
-              window.clearTimeout(timer);
               window.clearInterval(autoPanTimer);
+              try { effectTrack.releasePointerCapture(event.pointerId); } catch (_) {}
               window.removeEventListener('pointermove', move);
               window.removeEventListener('pointerup', finish);
               window.removeEventListener('pointercancel', finish);
