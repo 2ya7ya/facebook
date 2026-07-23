@@ -1564,7 +1564,7 @@
     const musicSelectionToolbar = document.createElement('div');
     musicSelectionToolbar.className = 'reel-effect-selection-toolbar reel-music-selection-toolbar';
     musicSelectionToolbar.setAttribute('aria-hidden', 'true');
-    musicSelectionToolbar.innerHTML = '<button type="button" data-music-track-action="close" aria-label="Close sound controls"><svg viewBox="0 0 32 32"><path d="M7 11l9 9 9-9"/></svg></button><button type="button" data-music-track-action="volume"><img src="/upload/sound-volume.png" alt=""><span>Volume</span></button><button type="button" data-music-track-action="fade"><img src="/upload/sound-fade.png" alt=""><span>Fade</span></button><button type="button" data-music-track-action="replace"><img src="/upload/sound-replace.png" alt=""><span>Replace</span></button><button type="button" data-music-track-action="copy"><svg viewBox="0 0 32 32"><rect x="10" y="7" width="14" height="14" rx="2"/><rect x="6" y="11" width="14" height="14" rx="2"/></svg><span>Copy</span></button><button type="button" data-music-track-action="delete"><img src="/upload/sound-delete.png" alt=""><span>Delete</span></button>';
+    musicSelectionToolbar.innerHTML = '<button type="button" data-music-track-action="close" aria-label="Close sound controls"><svg viewBox="0 0 32 32"><path d="M7 11l9 9 9-9"/></svg></button><button type="button" data-music-track-action="volume"><img src="/sound-volume.png" alt=""><span>Volume</span></button><button type="button" data-music-track-action="fade"><img src="/sound-fade.png" alt=""><span>Fade</span></button><button type="button" data-music-track-action="replace"><img src="/sound-replace.png" alt=""><span>Replace</span></button><button type="button" data-music-track-action="copy"><svg viewBox="0 0 32 32"><rect x="10" y="7" width="14" height="14" rx="2"/><rect x="6" y="11" width="14" height="14" rx="2"/></svg><span>Copy</span></button><button type="button" data-music-track-action="delete"><img src="/sound-delete.png" alt=""><span>Delete</span></button>';
     if (editStage) editStage.appendChild(musicSelectionToolbar);
     function ensureMusicTracks() {
       if (!Array.isArray(editState.musicTracks)) editState.musicTracks = [];
@@ -1603,13 +1603,13 @@
       closeMusicAdjustSheet(); normalizeMusicMix(track);
       const sheet = document.createElement('div');
       sheet.className = 'reel-music-adjust-sheet is-' + mode;
-      const done = document.createElement('button'); done.type = 'button'; done.className = 'reel-music-adjust-done'; done.innerHTML = '<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M8 25.5l10.3 10L40 9.5"/></svg>';
+      const done = document.createElement('button'); done.type = 'button'; done.className = 'reel-music-adjust-done'; done.setAttribute('aria-label','Done'); done.innerHTML = '<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M8 25.5l10.3 10L40 9.5"/></svg>';
       done.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); closeMusicAdjustSheet(); syncMusicSelectionToolbar(); });
       sheet.appendChild(done);
       const body = document.createElement('div'); body.className = 'reel-music-adjust-body'; sheet.appendChild(body);
       if (mode === 'volume') {
         const slider = document.createElement('input'); slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.step = '1'; slider.value = String(Math.round(track.volume * 100)); slider.className = 'reel-music-volume-slider';
-        const icon = document.createElement('img'); icon.src = '/upload/sound-volume.png'; icon.alt = '';
+        const icon = document.createElement('img'); icon.src = '/sound-volume.png'; icon.alt = '';
         const wrap = document.createElement('div'); wrap.className = 'reel-music-volume-row'; wrap.append(icon, slider); body.appendChild(wrap);
         const before = captureEditorSnapshot(); let changed = false;
         slider.addEventListener('input', function () { track.volume = Number(slider.value) / 100; changed = true; syncDeviceMusicPlayback(); });
