@@ -2324,7 +2324,17 @@
         const before = captureEditorSnapshot(); const sourceUrl = URL.createObjectURL(file);
         const existing = replaceTrackId ? ensureMusicTracks().find(function (track) { return track.trackId === replaceTrackId; }) : null;
         if (existing) {
+          if (existing.sourceUrl && existing.sourceUrl.indexOf('blob:') === 0) {
+            try { URL.revokeObjectURL(existing.sourceUrl); } catch (error) {}
+          }
           existing.name = file.name.replace(/\.[^.]+$/, ''); existing.fileName = file.name; existing.sourceUrl = sourceUrl; selectedMusicTrackId = existing.trackId;
+          if (musicPreviewAudio && musicPreviewAudio.dataset && musicPreviewAudio.dataset.trackId === existing.trackId) {
+            musicPreviewAudio.pause();
+            musicPreviewAudio.removeAttribute('src');
+            musicPreviewAudio.dataset.trackId = '';
+            musicPreviewAudio.dataset.sourceUrl = '';
+            try { musicPreviewAudio.load(); } catch (error) {}
+          }
         } else {
           const item = currentClipItem() || sequenceLayout()[0];
           const start = item ? item.start : 0; const end = item ? item.end : Math.max(.5, timelineDuration || 1);
@@ -2341,22 +2351,42 @@
     const musicPreviewAudio = document.createElement('audio');
     musicPreviewAudio.className = 'reel-device-music-preview'; musicPreviewAudio.preload = 'metadata'; musicPreviewAudio.hidden = true;
     flow.appendChild(musicPreviewAudio);
-    function syncDeviceMusicPlayback() {
+    function syncDeviceMusicPlayback(forceSeek) {
       const music = ensureMusicTracks().find(function (track) { return track.sourceUrl && currentSequenceTime >= track.start && currentSequenceTime < track.end; });
-      if (!music) { musicPreviewAudio.pause(); return; }
-      if (musicPreviewAudio.dataset.trackId !== music.trackId) {
-        musicPreviewAudio.pause(); musicPreviewAudio.src = music.sourceUrl; musicPreviewAudio.dataset.trackId = music.trackId;
+      if (!music) {
+        musicPreviewAudio.pause();
+        musicPreviewAudio.dataset.trackId = '';
+        musicPreviewAudio.dataset.sourceUrl = '';
+        return;
+      }
+      const sourceUrl = music.sourceUrl || '';
+      const sourceChanged = musicPreviewAudio.dataset.trackId !== music.trackId || musicPreviewAudio.dataset.sourceUrl !== sourceUrl;
+      if (sourceChanged) {
+        musicPreviewAudio.pause();
+        musicPreviewAudio.src = sourceUrl;
+        musicPreviewAudio.dataset.trackId = music.trackId;
+        musicPreviewAudio.dataset.sourceUrl = sourceUrl;
+        try { musicPreviewAudio.load(); } catch (error) {}
+        forceSeek = true;
       }
       const offset = Math.max(0, currentSequenceTime - music.start);
       if (Number.isFinite(musicPreviewAudio.duration) && musicPreviewAudio.duration > 0 && offset >= musicPreviewAudio.duration) { musicPreviewAudio.pause(); return; }
-      if (Math.abs((musicPreviewAudio.currentTime || 0) - offset) > .22) { try { musicPreviewAudio.currentTime = offset; } catch (error) {} }
+      const current = Number(musicPreviewAudio.currentTime) || 0;
+      const drift = Math.abs(current - offset);
+      if (forceSeek || drift > .75) {
+        try { musicPreviewAudio.currentTime = offset; } catch (error) {}
+      }
       musicPreviewAudio.volume = musicMixGain(music, currentSequenceTime);
-      if (editVideo.paused) musicPreviewAudio.pause(); else musicPreviewAudio.play().catch(function () {});
+      if (editVideo.paused) {
+        musicPreviewAudio.pause();
+      } else if (musicPreviewAudio.paused || sourceChanged) {
+        musicPreviewAudio.play().catch(function () {});
+      }
     }
-    editVideo.addEventListener('timeupdate', function () { window.requestAnimationFrame(syncDeviceMusicPlayback); });
-    editVideo.addEventListener('play', function () { window.requestAnimationFrame(syncDeviceMusicPlayback); });
+    editVideo.addEventListener('timeupdate', function () { window.requestAnimationFrame(function () { syncDeviceMusicPlayback(false); }); });
+    editVideo.addEventListener('play', function () { window.requestAnimationFrame(function () { syncDeviceMusicPlayback(true); }); });
     editVideo.addEventListener('pause', function () { musicPreviewAudio.pause(); });
-    editVideo.addEventListener('seeked', function () { window.requestAnimationFrame(syncDeviceMusicPlayback); });
+    editVideo.addEventListener('seeked', function () { window.requestAnimationFrame(function () { syncDeviceMusicPlayback(true); }); });
     function renderMusicTrack() {
       const tracks = ensureMusicTracks();
       timeline.classList.toggle('has-music-track', Boolean(tracks.length));
