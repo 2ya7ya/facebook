@@ -1489,8 +1489,30 @@
     let cutoutSegmenter = null, cutoutBusy = false, cutoutFailed = false, cutoutLastRun = 0;
     let cutoutFrameReady = false;
     let customCutoutMask = null, customCutoutEditing = false, customCutoutErase = true, customCutoutBrush = 34;
+    function syncCutoutCanvasGeometry() {
+      if (!editStage || !editVideo || !editVideo.videoWidth || !editVideo.videoHeight) return;
+      const stageRect = editStage.getBoundingClientRect();
+      const videoRect = editVideo.getBoundingClientRect();
+      const boxWidth = Math.max(1, videoRect.width);
+      const boxHeight = Math.max(1, videoRect.height);
+      const sourceRatio = editVideo.videoWidth / editVideo.videoHeight;
+      const boxRatio = boxWidth / boxHeight;
+      let width = boxWidth, height = boxHeight, offsetX = 0, offsetY = 0;
+      if (sourceRatio > boxRatio) {
+        height = width / sourceRatio;
+        offsetY = (boxHeight - height) / 2;
+      } else {
+        width = height * sourceRatio;
+        offsetX = (boxWidth - width) / 2;
+      }
+      cutoutCanvas.style.left = (videoRect.left - stageRect.left + offsetX) + 'px';
+      cutoutCanvas.style.top = (videoRect.top - stageRect.top + offsetY) + 'px';
+      cutoutCanvas.style.width = width + 'px';
+      cutoutCanvas.style.height = height + 'px';
+    }
     function setCutoutVideoVisibility(active) {
       previewVideos.forEach(function (video) { video.style.visibility = active ? 'hidden' : ''; });
+      if (active) syncCutoutCanvasGeometry();
     }
     function clearCutoutPreview() {
       cutoutFrameReady = false;
@@ -1562,7 +1584,7 @@
           frameContext.setTransform(1,0,0,1,0,0);
           frameContext.globalCompositeOperation='source-over';
           frameContext.clearRect(0,0,w,h);
-          frameContext.drawImage(results.image || editVideo,0,0,w,h);
+          frameContext.drawImage(editVideo,0,0,w,h);
           frameContext.globalCompositeOperation='destination-in';
           frameContext.drawImage(cutoutMaskCanvas,0,0,w,h);
           frameContext.globalCompositeOperation='source-over';
@@ -1572,6 +1594,7 @@
           outputContext.clearRect(0,0,w,h);
           outputContext.drawImage(cutoutFrameCanvas,0,0,w,h);
           cutoutFrameReady = true;
+          syncCutoutCanvasGeometry();
           cutoutCanvas.hidden = false;
           setCutoutVideoVisibility(true);
         });
@@ -1610,6 +1633,7 @@
     }
     function cutoutLoop(){ updateCutoutPreview(false); requestAnimationFrame(cutoutLoop); }
     requestAnimationFrame(cutoutLoop);
+    window.addEventListener('resize', syncCutoutCanvasGeometry);
     ['loadeddata','seeked','timeupdate','play'].forEach(function(name){
       editVideo.addEventListener(name,function(){
         const clip=selectedClip();
