@@ -3048,8 +3048,11 @@
             const initialGlobalStart = Math.max(0, initialRange.start);
             const effectDuration = Math.max(.18, Math.min(timelineDuration, initialRange.end) - initialGlobalStart);
             const dragBounds = timeline.getBoundingClientRect();
-            const dragCenterX = dragBounds.left + dragBounds.width / 2;
-            const grabOffset = currentSequenceTime + (startX - dragCenterX) / pixelsPerSecond - initialGlobalStart;
+            const initialSequenceTimeForDrag = currentSequenceTime;
+            // Keep the effect's absolute timeline offset while dragging. The previous
+            // center/playhead-based math recalculated the position from the clip under
+            // the finger, which made an effect extended into the next clip snap back to
+            // that clip's beginning as soon as it was dragged.
             let movedStart = initialGlobalStart;
             let dragging = false;
             let cancelled = false;
@@ -3062,8 +3065,9 @@
               else if (allowPan && clientX > dragBounds.right - edgeZone) panTo += .14 + (clientX - (dragBounds.right - edgeZone)) / pixelsPerSecond * .08;
               panTo = Math.max(0, Math.min(timelineDuration, panTo));
               if (Math.abs(panTo - currentSequenceTime) > .001) { seekSequenceTime(panTo, true); renderTimelineAt(panTo); }
-              movedStart = Math.max(0, Math.min(Math.max(0, timelineDuration - effectDuration), currentSequenceTime + (clientX - dragCenterX) / pixelsPerSecond - grabOffset));
-              effectTrack.style.left = (movedStart * pixelsPerSecond) + 'px';
+              const panDelta = currentSequenceTime - initialSequenceTimeForDrag;
+              movedStart = Math.max(0, Math.min(Math.max(0, timelineDuration - effectDuration), initialGlobalStart + (clientX - startX) / Math.max(1, pixelsPerSecond) + panDelta));
+              effectTrack.style.left = (movedStart * pixelsPerSecond + 5) + 'px';
             }
             const timer = window.setTimeout(function () {
               if (cancelled) return;
