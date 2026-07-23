@@ -1564,7 +1564,7 @@
     const musicSelectionToolbar = document.createElement('div');
     musicSelectionToolbar.className = 'reel-effect-selection-toolbar reel-music-selection-toolbar';
     musicSelectionToolbar.setAttribute('aria-hidden', 'true');
-    musicSelectionToolbar.innerHTML = '<button type="button" data-music-track-action="close" aria-label="Close sound controls"><svg viewBox="0 0 32 32"><path d="M7 11l9 9 9-9"/></svg></button><button type="button" data-music-track-action="replace"><svg viewBox="0 0 32 32"><path d="M7 10h16l-4-4M25 22H9l4 4M23 10l3 3-3 3M9 22l-3-3 3-3"/></svg><span>Replace sound</span></button><button type="button" data-music-track-action="copy"><svg viewBox="0 0 32 32"><rect x="10" y="7" width="14" height="14" rx="2"/><rect x="6" y="11" width="14" height="14" rx="2"/></svg><span>Copy</span></button><button type="button" data-music-track-action="delete"><svg viewBox="0 0 32 32"><path d="M8 10h16M13 6h6l1 4M11 10l1 16h8l1-16M15 14v8M18 14v8"/></svg><span>Delete</span></button>';
+    musicSelectionToolbar.innerHTML = '<button type="button" data-music-track-action="close" aria-label="Close sound controls"><svg viewBox="0 0 32 32"><path d="M7 11l9 9 9-9"/></svg></button><button type="button" data-music-track-action="volume"><img src="sound-volume.png" alt=""><span>Volume</span></button><button type="button" data-music-track-action="fade"><img src="sound-fade.png" alt=""><span>Fade</span></button><button type="button" data-music-track-action="replace"><img src="sound-replace.png" alt=""><span>Replace</span></button><button type="button" data-music-track-action="copy"><svg viewBox="0 0 32 32"><rect x="10" y="7" width="14" height="14" rx="2"/><rect x="6" y="11" width="14" height="14" rx="2"/></svg><span>Copy</span></button><button type="button" data-music-track-action="delete"><img src="sound-delete.png" alt=""><span>Delete</span></button>';
     if (editStage) editStage.appendChild(musicSelectionToolbar);
     function ensureMusicTracks() {
       if (!Array.isArray(editState.musicTracks)) editState.musicTracks = [];
@@ -1575,6 +1575,61 @@
       return editState.musicTracks;
     }
     function selectedMusicTrackData() { return ensureMusicTracks().find(function (track) { return track.trackId === selectedMusicTrackId; }) || null; }
+    function normalizeMusicMix(track) {
+      if (!track) return;
+      if (!Number.isFinite(Number(track.volume))) track.volume = 1;
+      if (!Number.isFinite(Number(track.fadeIn))) track.fadeIn = 0;
+      if (!Number.isFinite(Number(track.fadeOut))) track.fadeOut = 0;
+      track.volume = Math.max(0, Math.min(1, Number(track.volume)));
+      const duration = Math.max(.18, Number(track.end) - Number(track.start));
+      const maxFade = duration / 2;
+      track.fadeIn = Math.max(0, Math.min(maxFade, Number(track.fadeIn)));
+      track.fadeOut = Math.max(0, Math.min(maxFade, Number(track.fadeOut)));
+    }
+    function musicMixGain(track, sequenceTime) {
+      normalizeMusicMix(track);
+      let gain = track.volume;
+      const local = Math.max(0, sequenceTime - track.start);
+      const remaining = Math.max(0, track.end - sequenceTime);
+      if (track.fadeIn > 0) gain *= Math.min(1, local / track.fadeIn);
+      if (track.fadeOut > 0) gain *= Math.min(1, remaining / track.fadeOut);
+      return Math.max(0, Math.min(1, gain));
+    }
+    function closeMusicAdjustSheet() {
+      const old = editStage && editStage.querySelector('.reel-music-adjust-sheet');
+      if (old) old.remove();
+    }
+    function openMusicAdjustSheet(mode, track) {
+      closeMusicAdjustSheet(); normalizeMusicMix(track);
+      const sheet = document.createElement('div');
+      sheet.className = 'reel-music-adjust-sheet is-' + mode;
+      const done = document.createElement('button'); done.type = 'button'; done.className = 'reel-music-adjust-done'; done.textContent = '✓';
+      done.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); closeMusicAdjustSheet(); syncMusicSelectionToolbar(); });
+      sheet.appendChild(done);
+      const body = document.createElement('div'); body.className = 'reel-music-adjust-body'; sheet.appendChild(body);
+      if (mode === 'volume') {
+        const slider = document.createElement('input'); slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.step = '1'; slider.value = String(Math.round(track.volume * 100)); slider.className = 'reel-music-volume-slider';
+        const icon = document.createElement('img'); icon.src = 'sound-volume.png'; icon.alt = '';
+        const wrap = document.createElement('div'); wrap.className = 'reel-music-volume-row'; wrap.append(icon, slider); body.appendChild(wrap);
+        const before = captureEditorSnapshot(); let changed = false;
+        slider.addEventListener('input', function () { track.volume = Number(slider.value) / 100; changed = true; syncDeviceMusicPlayback(); });
+        slider.addEventListener('change', function () { if (changed) recordEditorChange(before); changed = false; });
+      } else {
+        [['Fade in','fadeIn'],['Fade out','fadeOut']].forEach(function (item) {
+          const duration = Math.max(.18, track.end - track.start); const maxFade = Math.min(10, duration / 2);
+          const row = document.createElement('label'); row.className = 'reel-music-fade-row';
+          const header = document.createElement('span'); header.className = 'reel-music-fade-header';
+          const name = document.createElement('span'); name.textContent = item[0];
+          const value = document.createElement('output'); value.textContent = Number(track[item[1]] || 0).toFixed(1) + 's'; header.append(name, value);
+          const slider = document.createElement('input'); slider.type = 'range'; slider.min = '0'; slider.max = String(maxFade); slider.step = '0.1'; slider.value = String(track[item[1]] || 0);
+          const before = captureEditorSnapshot(); let changed = false;
+          slider.addEventListener('input', function () { track[item[1]] = Number(slider.value); value.textContent = Number(slider.value).toFixed(1) + 's'; changed = true; syncDeviceMusicPlayback(); });
+          slider.addEventListener('change', function () { if (changed) recordEditorChange(before); changed = false; });
+          row.append(header, slider); body.appendChild(row);
+        });
+      }
+      editStage.appendChild(sheet);
+    }
     function syncMusicSelectionToolbar() {
       const visible = Boolean(selectedMusicTrackData());
       const copyButton = musicSelectionToolbar.querySelector('[data-music-track-action="copy"]');
@@ -1605,6 +1660,8 @@
       const action = button.dataset.musicTrackAction; const music = selectedMusicTrackData();
       if (action === 'close') { clearMusicTrackSelection(); return; }
       if (!music) return;
+      if (action === 'volume') { openMusicAdjustSheet('volume', music); return; }
+      if (action === 'fade') { openMusicAdjustSheet('fade', music); return; }
       if (action === 'replace') { openDeviceMusicPicker(music.trackId); return; }
       if (action === 'delete') {
         const before = captureEditorSnapshot(); editState.musicTracks = ensureMusicTracks().filter(function (track) { return track.trackId !== music.trackId; });
@@ -2271,7 +2328,7 @@
         } else {
           const item = currentClipItem() || sequenceLayout()[0];
           const start = item ? item.start : 0; const end = item ? item.end : Math.max(.5, timelineDuration || 1);
-          const music = { trackId: 'music-' + Date.now(), name: file.name.replace(/\.[^.]+$/, ''), fileName: file.name, sourceUrl: sourceUrl, start: start, end: end, lane: 0 };
+          const music = { trackId: 'music-' + Date.now(), name: file.name.replace(/\.[^.]+$/, ''), fileName: file.name, sourceUrl: sourceUrl, start: start, end: end, lane: 0, volume: 1, fadeIn: 0, fadeOut: 0 };
           ensureMusicTracks().push(music); selectedMusicTrackId = music.trackId;
         }
         renderMusicTrack(); recordEditorChange(before); syncMusicSelectionToolbar();
@@ -2293,6 +2350,7 @@
       const offset = Math.max(0, currentSequenceTime - music.start);
       if (Number.isFinite(musicPreviewAudio.duration) && musicPreviewAudio.duration > 0 && offset >= musicPreviewAudio.duration) { musicPreviewAudio.pause(); return; }
       if (Math.abs((musicPreviewAudio.currentTime || 0) - offset) > .22) { try { musicPreviewAudio.currentTime = offset; } catch (error) {} }
+      musicPreviewAudio.volume = musicMixGain(music, currentSequenceTime);
       if (editVideo.paused) musicPreviewAudio.pause(); else musicPreviewAudio.play().catch(function () {});
     }
     editVideo.addEventListener('timeupdate', function () { window.requestAnimationFrame(syncDeviceMusicPlayback); });
