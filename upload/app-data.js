@@ -2015,7 +2015,7 @@
       const visibleContext = transitionPreviewLayer.getContext('2d', { alpha: false });
       if (visibleContext) visibleContext.drawImage(transitionOutgoingFrame, 0, 0);
     }
-    function paintTransitionVideoFrame(targetCanvas, clip) {
+    function paintTransitionVideoFrame(targetCanvas, clip, elapsed, duration) {
       const context = targetCanvas.getContext('2d', { alpha: false });
       if (!context || !editVideo.videoWidth || !editVideo.videoHeight) return false;
       const width = targetCanvas.width;
@@ -2029,14 +2029,28 @@
       const fit = fitMode === 'cover' ? Math.max(width / editVideo.videoWidth, height / editVideo.videoHeight) : Math.min(width / editVideo.videoWidth, height / editVideo.videoHeight);
       const drawWidth = editVideo.videoWidth * fit;
       const drawHeight = editVideo.videoHeight * fit;
-      try { context.drawImage(editVideo, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight); } catch (error) { context.restore(); return false; }
+      const drawX = (width - drawWidth) / 2;
+      const drawY = (height - drawHeight) / 2;
+      const hasAnimation = clip && ((clip.animationIn && clip.animationIn !== 'none') || (clip.animationOut && clip.animationOut !== 'none') || (clip.animationCombo && clip.animationCombo !== 'none'));
+      if (hasAnimation && duration > 0) {
+        const animationElapsed = Math.max(0, Math.min(duration, Number(elapsed) || 0));
+        const animation = clipAnimationState(clip, animationElapsed, duration);
+        context.translate(width / 2 + animation.x * width, height / 2 + animation.y * height);
+        context.rotate(animation.rotate * Math.PI / 180);
+        context.scale(animation.scaleX, animation.scaleY);
+        context.globalAlpha = animation.opacity;
+        if (animation.blur) context.filter = 'blur(' + animation.blur + 'px)';
+        try { context.drawImage(editVideo, drawX - width / 2, drawY - height / 2, drawWidth, drawHeight); } catch (error) { context.restore(); return false; }
+      } else {
+        try { context.drawImage(editVideo, drawX, drawY, drawWidth, drawHeight); } catch (error) { context.restore(); return false; }
+      }
       context.restore();
       return true;
     }
-    function drawTransitionComposite(type, progress, clip) {
+    function drawTransitionComposite(type, progress, clip, elapsed, duration) {
       const context = transitionPreviewLayer.getContext('2d', { alpha: false });
       if (!context || !transitionOutgoingFrame.width) return;
-      paintTransitionVideoFrame(transitionIncomingFrame, clip);
+      paintTransitionVideoFrame(transitionIncomingFrame, clip, elapsed, duration);
       const width = transitionPreviewLayer.width;
       const height = transitionPreviewLayer.height;
       context.save();
@@ -2127,7 +2141,7 @@
       transitionPreviewLayer.style.setProperty('transform', 'none', 'important');
       transitionPreviewLayer.style.setProperty('filter', 'none', 'important');
       transitionPreviewLayer.style.setProperty('--transition-progress', String(progress));
-      drawTransitionComposite(transition.type, progress, item.clip);
+      drawTransitionComposite(transition.type, progress, item.clip, local, item.duration);
     }
 
     function syncSequenceTimeFromVideo() {
