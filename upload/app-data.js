@@ -4447,9 +4447,9 @@
         return '<button type="button" data-cutout-stroke="'+item[0]+'" aria-label="'+item[1]+' stroke">'+inner+'</button>';
       }).join('');
       wrap.innerHTML = '<div class="reel-cutout-main-row">'
-        + '<button type="button" data-cutout-mode="background"><span class="reel-cutout-icon"><svg viewBox="0 0 48 48" aria-hidden="true"><rect x="6" y="6" width="36" height="36" rx="5"/><path d="M6 18h36M18 6v36M30 6v36M6 30h36" opacity=".45"/><circle cx="24" cy="20" r="5.5"/><path d="M14 39c1.4-8.2 5-12 10-12s8.6 3.8 10 12"/></svg></span><strong>Auto<br>cutout</strong></button>'
-        + '<button type="button" data-cutout-mode="custom"><span class="reel-cutout-icon"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 5v22M24 15c-4-5-9-3-9 2v10M15 22c-5-3-9 0-9 5v4c0 9 7 15 17 15h3c10 0 16-7 16-16v-8c0-5-7-6-9 0v5"/><circle cx="24" cy="8" r="2.5"/></svg></span><strong>Custom<br>cutout</strong></button>'
-        + '<button type="button" data-cutout-view="stroke"><span class="reel-cutout-icon"><svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="18" r="7"/><path d="M12 40c1-9 6-14 12-14s11 5 12 14"/><path d="M24 3v5M10 8l4 4M38 8l-4 4M4 22h6M38 22h6M8 37l5-3M40 37l-5-3"/></svg></span><strong>Stroke</strong></button>'
+        + '<button type="button" data-cutout-mode="background"><span class="reel-cutout-icon reel-cutout-icon-auto"><i class="cutout-checker"></i><i class="cutout-head"></i><i class="cutout-body"></i></span><strong>Auto<br>cutout</strong></button>'
+        + '<button type="button" data-cutout-mode="custom"><span class="reel-cutout-icon reel-cutout-icon-custom"><i></i></span><strong>Custom<br>cutout</strong></button>'
+        + '<button type="button" data-cutout-view="stroke"><span class="reel-cutout-icon reel-cutout-icon-stroke"><i class="stroke-head"></i><i class="stroke-body"></i><i class="stroke-rays"></i></span><strong>Stroke</strong></button>'
         + '</div>'
         + '<div class="reel-cutout-subpanel-host">'
         + '<div class="reel-cutout-custom-tools" hidden><div class="reel-cutout-brush-row"><button type="button" data-cutout-brush="erase" class="is-active">Erase</button><button type="button" data-cutout-brush="restore">Restore</button></div><label>Brush size<input type="range" min="12" max="70" value="34" aria-label="Brush size"></label></div>'
