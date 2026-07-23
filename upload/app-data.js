@@ -1088,6 +1088,7 @@
             target.visualEffect = effect.id;
             target.visualEffectStart = 0;
             target.visualEffectEnd = 1;
+            target.visualEffectGroupId = effect.id === 'none' ? '' : (target.id || 'main-effect');
             applyPreviewEdits();
             renderClipTimeline();
             recordEditorChange(before);
@@ -1551,6 +1552,7 @@
         target.visualEffect = clip.visualEffect;
         target.visualEffectStart = clip.visualEffectStart;
         target.visualEffectEnd = clip.visualEffectEnd;
+        target.visualEffectGroupId = target.id;
         selectedEffectTrackClipId = target.id;
         applyPreviewEdits(); renderClipTimeline(); recordEditorChange(before); syncEffectSelectionToolbar();
         reelMessage(root, 'Effect copied to ' + (sourceIndex + 1 < clips.length ? 'next' : 'previous') + ' clip');
@@ -1558,7 +1560,12 @@
       }
       if (action === 'delete') {
         const before = captureEditorSnapshot();
-        clip.visualEffect = 'none'; clip.visualEffectStart = 0; clip.visualEffectEnd = 1;
+        const groupId = clip.visualEffectGroupId || clip.id;
+        ensureClipState().forEach(function (entry) {
+          if (entry.id === clip.id || entry.visualEffectGroupId === groupId) {
+            entry.visualEffect = 'none'; entry.visualEffectStart = 0; entry.visualEffectEnd = 1; entry.visualEffectGroupId = '';
+          }
+        });
         clearEffectTrackSelection(); applyPreviewEdits(); renderClipTimeline(); recordEditorChange(before);
         reelMessage(root, 'Effect deleted'); return;
       }
@@ -2989,13 +2996,33 @@
         }
         if (item.clip.visualEffect && item.clip.visualEffect !== 'none') {
           const definition = reelVisualEffectCatalog.find(function (effect) { return effect.id === item.clip.visualEffect; });
+          const effectGroupId = item.clip.visualEffectGroupId || item.clip.id;
+          const groupMasterExists = layout.some(function (entry) { return entry.clip.id === effectGroupId; });
+          if (groupMasterExists && effectGroupId !== item.clip.id) return;
+          item.clip.visualEffectGroupId = effectGroupId;
           const startRatio = Math.min(.99, Math.max(0, Number(item.clip.visualEffectStart) || 0));
           const endRatio = Math.min(1, Math.max(startRatio + Math.min(1, .1 / item.duration), Number(item.clip.visualEffectEnd) || 1));
           item.clip.visualEffectStart = startRatio; item.clip.visualEffectEnd = endRatio;
+          function effectGroupEntries() {
+            return layout.filter(function (entry) {
+              return entry.clip.visualEffect === item.clip.visualEffect && ((entry.clip.visualEffectGroupId || entry.clip.id) === effectGroupId);
+            }).sort(function (a, b) { return a.index - b.index; });
+          }
+          function effectGroupRange() {
+            const entries = effectGroupEntries();
+            if (!entries.length) return { start: item.start + item.duration * item.clip.visualEffectStart, end: item.start + item.duration * item.clip.visualEffectEnd };
+            let start = Infinity, end = -Infinity;
+            entries.forEach(function (entry) {
+              start = Math.min(start, entry.start + entry.duration * (Number(entry.clip.visualEffectStart) || 0));
+              end = Math.max(end, entry.start + entry.duration * (Number(entry.clip.visualEffectEnd) || 1));
+            });
+            return { start: Number.isFinite(start) ? start : item.start, end: Number.isFinite(end) ? end : item.end };
+          }
           const effectTrack = document.createElement('div'); effectTrack.className = 'reel-effect-track' + (selectedEffectTrackClipId === item.clip.id ? ' is-selected' : ''); effectTrack.dataset.clipId = item.clip.id;
           const updateTrackPosition = function () {
-            const start = item.start + item.duration * item.clip.visualEffectStart;
-            const end = item.start + item.duration * item.clip.visualEffectEnd;
+            const range = effectGroupRange();
+            const start = range.start;
+            const end = Math.max(start + .05, range.end);
             const gap = 10;
             effectTrack.style.left = (start * pixelsPerSecond + gap / 2) + 'px';
             effectTrack.style.width = Math.max(24, (end - start) * pixelsPerSecond - gap) + 'px';
@@ -3061,8 +3088,9 @@
                 const sourceEffect = item.clip.visualEffect;
                 const localDuration = Math.min(effectDuration, destination.duration);
                 const localStart = Math.max(destination.start, Math.min(destination.end - localDuration, movedStart));
-                if (destination.clip !== item.clip) { item.clip.visualEffect = 'none'; item.clip.visualEffectStart = 0; item.clip.visualEffectEnd = 1; }
+                if (destination.clip !== item.clip) { item.clip.visualEffect = 'none'; item.clip.visualEffectStart = 0; item.clip.visualEffectEnd = 1; item.clip.visualEffectGroupId = ''; }
                 destination.clip.visualEffect = sourceEffect;
+                destination.clip.visualEffectGroupId = destination.clip.id;
                 destination.clip.visualEffectStart = Math.max(0, Math.min(1, (localStart - destination.start) / destination.duration));
                 destination.clip.visualEffectEnd = Math.max(destination.clip.visualEffectStart, Math.min(1, (localStart + localDuration - destination.start) / destination.duration));
                 selectedEffectTrackClipId = destination.clip.id;
@@ -3086,6 +3114,8 @@
               const initialGlobalStart = item.start + item.duration * initialStart;
               const initialGlobalEnd = item.start + item.duration * initialEnd;
               const effectId = item.clip.visualEffect;
+              const effectGroupId = item.clip.visualEffectGroupId || item.clip.id;
+              item.clip.visualEffectGroupId = effectGroupId;
               const sourceIndex = item.index;
               const minimumSeconds = .18;
               const minimum = Math.min(1, minimumSeconds / item.duration);
@@ -3098,14 +3128,16 @@
                   const overlapEnd = Math.min(entry.end, boundedEnd);
                   const hasOverlap = overlapEnd > overlapStart + .025;
                   if (!hasOverlap) {
-                    if (entry.index > sourceIndex && entry.clip.visualEffect === effectId) {
+                    if (entry.index > sourceIndex && entry.clip.visualEffectGroupId === effectGroupId) {
                       entry.clip.visualEffect = 'none';
                       entry.clip.visualEffectStart = 0;
                       entry.clip.visualEffectEnd = 1;
+                      entry.clip.visualEffectGroupId = '';
                     }
                     return;
                   }
                   entry.clip.visualEffect = effectId;
+                  entry.clip.visualEffectGroupId = effectGroupId;
                   entry.clip.visualEffectStart = Math.max(0, Math.min(.99, (overlapStart - entry.start) / entry.duration));
                   entry.clip.visualEffectEnd = Math.max(entry.clip.visualEffectStart + Math.min(1, minimumSeconds / entry.duration), Math.min(1, (overlapEnd - entry.start) / entry.duration));
                 });
@@ -3119,9 +3151,9 @@
                 } else {
                   const deltaSeconds = (moveEvent.clientX - startX) / Math.max(1, pixelsPerSecond);
                   applyExpandedEffectEnd(initialGlobalEnd + deltaSeconds);
-                  const localEnd = Math.min(item.end, Math.max(item.start + minimumSeconds, initialGlobalEnd + deltaSeconds));
+                  const expandedEnd = Math.max(initialGlobalStart + minimumSeconds, Math.min(timelineDuration, initialGlobalEnd + deltaSeconds));
                   effectTrack.style.left = (initialGlobalStart * pixelsPerSecond + 5) + 'px';
-                  effectTrack.style.width = Math.max(24, (localEnd - initialGlobalStart) * pixelsPerSecond - 10) + 'px';
+                  effectTrack.style.width = Math.max(24, (expandedEnd - initialGlobalStart) * pixelsPerSecond - 10) + 'px';
                 }
                 applyPreviewEdits();
               }
