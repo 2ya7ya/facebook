@@ -3044,8 +3044,9 @@
             event.stopPropagation();
             const before = captureEditorSnapshot();
             const startX = event.clientX;
-            const initialGlobalStart = item.start + item.duration * item.clip.visualEffectStart;
-            const effectDuration = Math.max(.18, item.duration * (item.clip.visualEffectEnd - item.clip.visualEffectStart));
+            const initialRange = effectGroupRange();
+            const initialGlobalStart = Math.max(0, initialRange.start);
+            const effectDuration = Math.max(.18, Math.min(timelineDuration, initialRange.end) - initialGlobalStart);
             const dragBounds = timeline.getBoundingClientRect();
             const dragCenterX = dragBounds.left + dragBounds.width / 2;
             const grabOffset = currentSequenceTime + (startX - dragCenterX) / pixelsPerSecond - initialGlobalStart;
@@ -3091,14 +3092,37 @@
               const destination = currentLayout.find(function (entry) { return movedStart >= entry.start && movedStart < entry.end; }) || currentLayout[currentLayout.length - 1];
               if (destination) {
                 const sourceEffect = item.clip.visualEffect;
-                const localDuration = Math.min(effectDuration, destination.duration);
-                const localStart = Math.max(destination.start, Math.min(destination.end - localDuration, movedStart));
-                if (destination.clip !== item.clip) { item.clip.visualEffect = 'none'; item.clip.visualEffectStart = 0; item.clip.visualEffectEnd = 1; item.clip.visualEffectGroupId = ''; }
-                destination.clip.visualEffect = sourceEffect;
-                destination.clip.visualEffectGroupId = destination.clip.id;
-                destination.clip.visualEffectStart = Math.max(0, Math.min(1, (localStart - destination.start) / destination.duration));
-                destination.clip.visualEffectEnd = Math.max(destination.clip.visualEffectStart, Math.min(1, (localStart + localDuration - destination.start) / destination.duration));
-                selectedEffectTrackClipId = destination.clip.id;
+                const oldGroupId = item.clip.visualEffectGroupId || item.clip.id;
+                const movedEnd = Math.min(timelineDuration, movedStart + effectDuration);
+                const currentLayoutForMove = sequenceLayout();
+                const overlappedEntries = currentLayoutForMove.filter(function (entry) {
+                  return Math.min(entry.end, movedEnd) > Math.max(entry.start, movedStart) + .025;
+                });
+                if (overlappedEntries.length) {
+                  const masterEntry = overlappedEntries[0];
+                  const newGroupId = masterEntry.clip.id;
+                  currentLayoutForMove.forEach(function (entry) {
+                    if ((entry.clip.visualEffectGroupId || entry.clip.id) === oldGroupId || entry.clip.visualEffect === sourceEffect) {
+                      entry.clip.visualEffect = 'none';
+                      entry.clip.visualEffectStart = 0;
+                      entry.clip.visualEffectEnd = 1;
+                      entry.clip.visualEffectGroupId = '';
+                      entry.clip.visualEffectGlobalStart = 0;
+                      entry.clip.visualEffectGlobalEnd = 0;
+                    }
+                  });
+                  overlappedEntries.forEach(function (entry) {
+                    const overlapStart = Math.max(entry.start, movedStart);
+                    const overlapEnd = Math.min(entry.end, movedEnd);
+                    entry.clip.visualEffect = sourceEffect;
+                    entry.clip.visualEffectGroupId = newGroupId;
+                    entry.clip.visualEffectGlobalStart = entry.clip.id === newGroupId ? movedStart : 0;
+                    entry.clip.visualEffectGlobalEnd = entry.clip.id === newGroupId ? movedEnd : 0;
+                    entry.clip.visualEffectStart = Math.max(0, Math.min(.99, (overlapStart - entry.start) / entry.duration));
+                    entry.clip.visualEffectEnd = Math.max(entry.clip.visualEffectStart + Math.min(1, .18 / entry.duration), Math.min(1, (overlapEnd - entry.start) / entry.duration));
+                  });
+                  selectedEffectTrackClipId = newGroupId;
+                }
               }
               applyPreviewEdits(); renderClipTimeline(); recordEditorChange(before); syncEffectSelectionToolbar();
               reelMessage(root, 'Effect moved');
