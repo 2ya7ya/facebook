@@ -780,7 +780,7 @@ app.use('/mediapipe', requireAuth, express.static(path.join(__dirname, 'node_mod
 app.use('/segmentation', requireAuth, express.static(path.join(__dirname, 'node_modules', '@mediapipe', 'selfie_segmentation')));
 
 app.get('/reel-ui/:asset', requireAuth, (request, response) => {
-  const allowed = new Set(['reel-undo.png', 'reel-redo.png', 'reel-fullscreen.png', 'reel-minimize.png']);
+  const allowed = new Set(['reel-undo.png', 'reel-redo.png', 'reel-fullscreen.png', 'reel-minimize.png', 'sound-volume.png', 'sound-fade.png', 'sound-replace.png', 'sound-delete.png']);
   if (!allowed.has(request.params.asset)) return response.sendStatus(404);
   response.sendFile(path.join(publicDirectory, request.params.asset));
 });
