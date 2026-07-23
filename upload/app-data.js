@@ -3009,6 +3009,11 @@
             }).sort(function (a, b) { return a.index - b.index; });
           }
           function effectGroupRange() {
+            const forcedStart = Number(item.clip.visualEffectGlobalStart);
+            const forcedEnd = Number(item.clip.visualEffectGlobalEnd);
+            if (Number.isFinite(forcedStart) && Number.isFinite(forcedEnd) && forcedEnd > forcedStart + .025) {
+              return { start: Math.max(0, forcedStart), end: Math.min(timelineDuration, forcedEnd) };
+            }
             const entries = effectGroupEntries();
             if (!entries.length) return { start: item.start + item.duration * item.clip.visualEffectStart, end: item.start + item.duration * item.clip.visualEffectEnd };
             let start = Infinity, end = -Infinity;
@@ -3122,6 +3127,8 @@
               function applyExpandedEffectEnd(globalEnd) {
                 const layoutNow = sequenceLayout();
                 const boundedEnd = Math.max(initialGlobalStart + minimumSeconds, Math.min(timelineDuration, globalEnd));
+                item.clip.visualEffectGlobalStart = initialGlobalStart;
+                item.clip.visualEffectGlobalEnd = boundedEnd;
                 layoutNow.forEach(function (entry) {
                   if (entry.index < sourceIndex) return;
                   const overlapStart = Math.max(entry.start, initialGlobalStart);
@@ -3133,11 +3140,15 @@
                       entry.clip.visualEffectStart = 0;
                       entry.clip.visualEffectEnd = 1;
                       entry.clip.visualEffectGroupId = '';
+                      entry.clip.visualEffectGlobalStart = 0;
+                      entry.clip.visualEffectGlobalEnd = 0;
                     }
                     return;
                   }
                   entry.clip.visualEffect = effectId;
                   entry.clip.visualEffectGroupId = effectGroupId;
+                  entry.clip.visualEffectGlobalStart = entry.clip.id === item.clip.id ? initialGlobalStart : 0;
+                  entry.clip.visualEffectGlobalEnd = entry.clip.id === item.clip.id ? boundedEnd : 0;
                   entry.clip.visualEffectStart = Math.max(0, Math.min(.99, (overlapStart - entry.start) / entry.duration));
                   entry.clip.visualEffectEnd = Math.max(entry.clip.visualEffectStart + Math.min(1, minimumSeconds / entry.duration), Math.min(1, (overlapEnd - entry.start) / entry.duration));
                 });
