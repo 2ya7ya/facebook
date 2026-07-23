@@ -1603,7 +1603,7 @@
       closeMusicAdjustSheet(); normalizeMusicMix(track);
       const sheet = document.createElement('div');
       sheet.className = 'reel-music-adjust-sheet is-' + mode;
-      const done = document.createElement('button'); done.type = 'button'; done.className = 'reel-music-adjust-done'; done.setAttribute('aria-label','Done'); done.innerHTML = '<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M8 25.5l10.3 10L40 9.5"/></svg>';
+      const done = document.createElement('button'); done.type = 'button'; done.className = 'reel-music-adjust-done'; done.innerHTML = '<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M8 25.5l10.3 10L40 9.5"/></svg>';
       done.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); closeMusicAdjustSheet(); syncMusicSelectionToolbar(); });
       sheet.appendChild(done);
       const body = document.createElement('div'); body.className = 'reel-music-adjust-body'; sheet.appendChild(body);
