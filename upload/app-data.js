@@ -1089,15 +1089,25 @@
             grid.querySelectorAll('.reel-effect-option').forEach(function (item) { item.classList.toggle('is-active', item.dataset.effectId === effect.id); });
             reelMessage(root, effect.id === 'none' ? 'Effect removed' : effect.name + ' applied');
             window.clearTimeout(editVideo.__reelEffectPreviewTimer);
-            if (currentSequenceTime >= timelineDuration - .05) {
-              const previewItem = currentClipItem() || sequenceLayout()[0];
-              if (previewItem) seekSequenceTime(previewItem.start, true);
+            if (editVideo.__reelEffectPreviewStop) editVideo.__reelEffectPreviewStop();
+            const previewEnd = currentSequenceTime;
+            const previewItem = currentClipItem() || sequenceLayout()[0];
+            const previewStart = Math.max(previewItem ? previewItem.start : 0, previewEnd - 7);
+            if (previewEnd - previewStart < .04) { editVideo.pause(); return; }
+            seekSequenceTime(previewStart, true);
+            let previewStopped = false;
+            function stopEffectPreview() {
+              if (previewStopped) return; previewStopped = true;
+              window.clearTimeout(editVideo.__reelEffectPreviewTimer);
+              editVideo.removeEventListener('timeupdate', watchEffectPreview);
+              editVideo.pause(); seekSequenceTime(previewEnd, true);
+              editVideo.__reelEffectPreviewTimer = 0; editVideo.__reelEffectPreviewStop = null;
             }
+            function watchEffectPreview() { if (currentSequenceTime >= previewEnd - .035) stopEffectPreview(); }
+            editVideo.__reelEffectPreviewStop = stopEffectPreview;
+            editVideo.addEventListener('timeupdate', watchEffectPreview);
             editVideo.play().catch(function () {});
-            editVideo.__reelEffectPreviewTimer = window.setTimeout(function () {
-              if (!editVideo.paused) editVideo.pause();
-              editVideo.__reelEffectPreviewTimer = 0;
-            }, 7000);
+            editVideo.__reelEffectPreviewTimer = window.setTimeout(stopEffectPreview, Math.max(500, (previewEnd - previewStart) * 1000 + 700));
           });
           grid.appendChild(button);
         });
@@ -1146,19 +1156,54 @@
       function finishPull() { if (pullStartY == null) return; const elapsed = Math.max(1, performance.now() - pullStartedAt); const hide = pullActive && (pullDistance > 46 || pullDistance / elapsed > .65); pullStartY = null; pullDistance = 0; pullActive = false; window.cancelAnimationFrame(pullFrame); pullFrame = 0; toolPanel.style.transition = 'transform 180ms cubic-bezier(.2,.75,.25,1)'; if (hide) { toolPanel.style.transform = 'translate3d(0,105%,0)'; window.setTimeout(closeToolPanel, 175); } else { toolPanel.style.transform = 'translate3d(0,0,0)'; window.setTimeout(function () { toolPanel.style.transition = ''; }, 185); } }
       dragZone.addEventListener('pointerdown', beginPull, { signal: effectMenuController.signal }); sheetHead.addEventListener('pointerdown', beginPull, { signal: effectMenuController.signal });
       window.addEventListener('pointermove', movePull, { passive: false, signal: effectMenuController.signal }); window.addEventListener('pointerup', finishPull, { signal: effectMenuController.signal }); window.addEventListener('pointercancel', finishPull, { signal: effectMenuController.signal });
-      let categoryStartX = null; let categoryStartY = null;
-      grid.addEventListener('pointerdown', function (event) { categoryStartX = event.clientX; categoryStartY = event.clientY; });
+      let categoryStartX = null; let categoryStartY = null; let categoryDragX = 0; let categoryDragging = false; let categoryDragFrame = 0;
+      function resetCategoryDragStyles() { grid.style.removeProperty('transition'); grid.style.removeProperty('transform'); grid.style.removeProperty('opacity'); }
+      grid.addEventListener('pointerdown', function (event) {
+        if (categoryAnimating) return;
+        categoryStartX = event.clientX; categoryStartY = event.clientY; categoryDragX = 0; categoryDragging = false;
+      });
+      grid.addEventListener('pointermove', function (event) {
+        if (categoryStartX == null || categoryAnimating) return;
+        const dx = event.clientX - categoryStartX, dy = event.clientY - categoryStartY;
+        if (!categoryDragging && (Math.abs(dx) < 7 || Math.abs(dx) < Math.abs(dy) * 1.15)) return;
+        categoryDragging = true; wrap.__categorySwipe = true; event.preventDefault();
+        const index = categoryNames.indexOf(activeCategory);
+        const blocked = (dx > 0 && index === 0) || (dx < 0 && index === categoryNames.length - 1);
+        categoryDragX = blocked ? dx * .28 : dx;
+        if (categoryDragFrame) return;
+        categoryDragFrame = window.requestAnimationFrame(function () {
+          categoryDragFrame = 0;
+          grid.style.setProperty('transition', 'none', 'important');
+          grid.style.setProperty('transform', 'translate3d(' + categoryDragX + 'px,0,0)', 'important');
+          grid.style.setProperty('opacity', String(1 - Math.min(.32, Math.abs(categoryDragX) / Math.max(1, grid.clientWidth) * .38)), 'important');
+        });
+      }, { passive: false });
       grid.addEventListener('pointerup', function (event) {
         if (categoryStartX == null) return;
-        const dx = event.clientX - categoryStartX, dy = event.clientY - categoryStartY; categoryStartX = categoryStartY = null;
-        if (Math.abs(dx) < 45 || Math.abs(dx) < Math.abs(dy) * 1.25) return;
-        const index = categoryNames.indexOf(activeCategory); const next = Math.max(0, Math.min(categoryNames.length - 1, index + (dx < 0 ? 1 : -1)));
-        if (next === index) return;
-        wrap.__categorySwipe = true;
-        slideToCategory(categoryNames[next], dx < 0 ? 1 : -1);
-        window.setTimeout(function () { wrap.__categorySwipe = false; }, 260);
+        const dx = event.clientX - categoryStartX; categoryStartX = categoryStartY = null;
+        window.cancelAnimationFrame(categoryDragFrame); categoryDragFrame = 0;
+        if (!categoryDragging) return;
+        const index = categoryNames.indexOf(activeCategory);
+        const next = Math.max(0, Math.min(categoryNames.length - 1, index + (dx < 0 ? 1 : -1)));
+        const change = next !== index && Math.abs(dx) >= Math.min(56, grid.clientWidth * .18);
+        categoryAnimating = true;
+        grid.style.setProperty('transition', 'transform 150ms ease-out, opacity 150ms ease-out', 'important');
+        grid.style.setProperty('transform', change ? 'translate3d(' + (dx < 0 ? '-105%' : '105%') + ',0,0)' : 'translate3d(0,0,0)', 'important');
+        grid.style.setProperty('opacity', change ? '.25' : '1', 'important');
+        window.setTimeout(function () {
+          if (!change) { resetCategoryDragStyles(); categoryAnimating = false; wrap.__categorySwipe = false; return; }
+          activeCategory = categoryNames[next]; updateCategoryTabs(); renderEffects();
+          grid.style.setProperty('transition', 'none', 'important');
+          grid.style.setProperty('transform', 'translate3d(' + (dx < 0 ? '105%' : '-105%') + ',0,0)', 'important');
+          grid.style.setProperty('opacity', '.25', 'important');
+          window.requestAnimationFrame(function () { window.requestAnimationFrame(function () {
+            grid.style.setProperty('transition', 'transform 170ms ease-out, opacity 170ms ease-out', 'important');
+            grid.style.setProperty('transform', 'translate3d(0,0,0)', 'important'); grid.style.setProperty('opacity', '1', 'important');
+            window.setTimeout(function () { resetCategoryDragStyles(); categoryAnimating = false; wrap.__categorySwipe = false; }, 175);
+          }); });
+        }, 155);
       });
-      grid.addEventListener('pointercancel', function () { categoryStartX = categoryStartY = null; });
+      grid.addEventListener('pointercancel', function () { categoryStartX = categoryStartY = null; categoryDragging = false; window.cancelAnimationFrame(categoryDragFrame); resetCategoryDragStyles(); wrap.__categorySwipe = false; });
       search.addEventListener('input', renderEffects);
       renderEffects();
       window.cancelAnimationFrame(editVideo.__effectThumbRaf || 0);
