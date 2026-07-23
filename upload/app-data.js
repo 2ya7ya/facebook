@@ -2569,9 +2569,11 @@
       toolPanel.classList.remove('is-animation-panel');
       toolPanel.classList.remove('is-effects-panel');
       toolPanel.classList.remove('is-music-panel');
+      toolPanel.classList.remove('is-cutout-panel');
       flow.classList.remove('is-speed-editing');
       flow.classList.remove('is-animation-editing');
       flow.classList.remove('is-effects-editing');
+      flow.classList.remove('is-cutout-editing');
       toolPanel.setAttribute('aria-hidden', 'true');
     }
     function openToolPanel(title, body) {
@@ -2579,9 +2581,11 @@
       toolPanel.classList.remove('is-animation-panel');
       toolPanel.classList.remove('is-effects-panel');
       toolPanel.classList.remove('is-music-panel');
+      toolPanel.classList.remove('is-cutout-panel');
       flow.classList.remove('is-speed-editing');
       flow.classList.remove('is-animation-editing');
       flow.classList.remove('is-effects-editing');
+      flow.classList.remove('is-cutout-editing');
       toolPanel.innerHTML = '<header><strong></strong><button type="button" aria-label="Close">×</button></header><div class="reel-tool-panel-body"></div>';
       toolPanel.querySelector('strong').textContent = title;
       toolPanel.querySelector('.reel-tool-panel-body').appendChild(body);
@@ -4426,44 +4430,65 @@
       const before = captureEditorSnapshot();
       const wrap = document.createElement('div'); wrap.className='reel-cutout-options';
       if (clip.cutoutStroke == null) clip.cutoutStroke = 0;
+      const strokeButtons = [
+        ['0','None','none'],
+        ['1','White','white'],
+        ['2','Duo','duo'],
+        ['3','Glow','glow'],
+        ['4','Cyan','cyan'],
+        ['5','Pink','pink'],
+        ['6','Gold','gold'],
+        ['7','Shadow','shadow']
+      ].map(function(item){
+        const cls = item[2] === 'none' ? ' stroke-style-none' : ' stroke-style-' + item[2];
+        const inner = item[2] === 'none'
+          ? '<span class="stroke-card stroke-card-none"><span class="stroke-none-symbol">⊘</span></span><em>'+item[1]+'</em>'
+          : '<span class="stroke-card'+cls+'"></span><em>'+item[1]+'</em>';
+        return '<button type="button" data-cutout-stroke="'+item[0]+'" aria-label="'+item[1]+' stroke">'+inner+'</button>';
+      }).join('');
       wrap.innerHTML = '<div class="reel-cutout-main-row">'
-        + '<button type="button" data-cutout-mode="background"><span class="reel-cutout-icon reel-cutout-auto"><svg viewBox="0 0 48 48"><rect x="8" y="9" width="28" height="28" rx="3"/><circle cx="24" cy="21" r="6"/><path d="M14 36c2-7 6-10 10-10s8 3 10 10"/><path class="cutout-check" d="m31 33 5 5 8-11"/></svg></span><strong>Auto<br>cutout</strong></button>'
-        + '<button type="button" data-cutout-mode="custom"><span class="reel-cutout-icon reel-cutout-custom"><svg viewBox="0 0 48 48"><path d="M25 9v19"/><path d="M25 17c-4-5-9-3-9 2v8"/><path d="M16 23c-4-3-8-1-8 3v5c0 9 7 14 16 14h2c9 0 15-6 15-14v-9c0-5-7-5-8 0v4"/></svg></span><strong>Custom<br>cutout</strong></button>'
-        + '<button type="button" data-cutout-view="stroke"><span class="reel-cutout-icon reel-cutout-stroke"><svg viewBox="0 0 48 48"><circle cx="24" cy="19" r="7"/><path d="M12 39c2-9 6-13 12-13s10 4 12 13"/><path class="stroke-dash" d="M24 4v4M11 9l3 3M37 9l-3 3M5 22h5M38 22h5M9 35l4-2M39 35l-4-2"/></svg></span><strong>Stroke</strong></button>'
+        + '<button type="button" data-cutout-mode="background"><span class="reel-cutout-icon"><img src="/upload/cutout_auto_icon.png" alt=""></span><strong>Auto<br>cutout</strong></button>'
+        + '<button type="button" data-cutout-mode="custom"><span class="reel-cutout-icon"><img src="/upload/cutout_custom_icon.png" alt=""></span><strong>Custom<br>cutout</strong></button>'
+        + '<button type="button" data-cutout-view="stroke"><span class="reel-cutout-icon"><img src="/upload/cutout_stroke_icon.png" alt=""></span><strong>Stroke</strong></button>'
         + '</div>'
-        + '<div class="reel-cutout-custom-tools" hidden><button type="button" data-cutout-brush="erase" class="is-active">Erase</button><button type="button" data-cutout-brush="restore">Restore</button><label>Brush size<input type="range" min="12" max="70" value="34" aria-label="Brush size"></label></div>'
-        + '<div class="reel-cutout-stroke-options" hidden><button type="button" data-cutout-stroke="0" aria-label="No stroke"><span class="stroke-none">⊘</span></button><button type="button" data-cutout-stroke="1"><span class="stroke-person stroke-white"></span></button><button type="button" data-cutout-stroke="2"><span class="stroke-person stroke-neon"></span></button><button type="button" data-cutout-stroke="3"><span class="stroke-person stroke-glow"></span></button><button type="button" data-cutout-stroke="4"><span class="stroke-person stroke-cyan"></span></button></div>'
-        + '<div class="reel-cutout-footer"><button type="button" class="reel-cutout-reset"><span>↶</span> Reset</button><button type="button" class="reel-cutout-done" aria-label="Done"><svg viewBox="0 0 32 32"><path d="M6 17l7 7L27 8"/></svg></button></div>';
+        + '<div class="reel-cutout-subpanel-host">'
+        + '<div class="reel-cutout-custom-tools" hidden><div class="reel-cutout-brush-row"><button type="button" data-cutout-brush="erase" class="is-active">Erase</button><button type="button" data-cutout-brush="restore">Restore</button></div><label>Brush size<input type="range" min="12" max="70" value="34" aria-label="Brush size"></label></div>'
+        + '<div class="reel-cutout-stroke-options" hidden>'+strokeButtons+'</div>'
+        + '</div>'
+        + '<div class="reel-cutout-footer"><button type="button" class="reel-cutout-reset"><img src="/upload/cutout_reset_icon.png" alt=""><span>Reset</span></button><button type="button" class="reel-cutout-done" aria-label="Done"><svg viewBox="0 0 32 32"><path d="M6 17l7 7L27 8"/></svg></button></div>';
       let cutoutView = 'main';
       function applyStroke(){
-        const filters=['none','drop-shadow(0 0 2px #fff) drop-shadow(0 0 2px #fff)','drop-shadow(-2px 0 #00f2ea) drop-shadow(2px 0 #ff0050)','drop-shadow(0 0 8px #ffe66d) drop-shadow(0 0 14px #ffe66d)','drop-shadow(0 0 3px #9ff) drop-shadow(0 0 6px #9ff)'];
+        const filters=['none','drop-shadow(0 0 1px #fff) drop-shadow(0 0 4px #fff)','drop-shadow(-2px 0 #00f2ea) drop-shadow(2px 0 #ff0050)','drop-shadow(0 0 6px #ffe66d) drop-shadow(0 0 12px #ffe66d)','drop-shadow(0 0 3px #8cf0ff) drop-shadow(0 0 8px #8cf0ff)','drop-shadow(0 0 3px #ff74d4) drop-shadow(0 0 8px #ff74d4)','drop-shadow(0 0 4px #ffd24d) drop-shadow(0 0 10px #ffd24d)','drop-shadow(0 0 2px rgba(0,0,0,.9)) drop-shadow(0 0 10px rgba(0,0,0,.65))'];
         cutoutCanvas.style.filter=filters[Number(clip.cutoutStroke)||0]||'none';
       }
       function sync(){
-        wrap.querySelectorAll('[data-cutout-mode]').forEach(function(b){b.classList.toggle('is-active',b.dataset.cutoutMode===clip.cutoutMode)});
+        wrap.querySelectorAll('[data-cutout-mode]').forEach(function(b){b.classList.toggle('is-active',b.dataset.cutoutMode===clip.cutoutMode && cutoutView!=='stroke')});
         wrap.querySelector('[data-cutout-view="stroke"]').classList.toggle('is-active',cutoutView==='stroke');
-        const tools=wrap.querySelector('.reel-cutout-custom-tools'); tools.hidden=clip.cutoutMode!=='custom'||cutoutView==='stroke';
+        const tools=wrap.querySelector('.reel-cutout-custom-tools'); tools.hidden=!(clip.cutoutMode==='custom'&&cutoutView!=='stroke');
         const strokes=wrap.querySelector('.reel-cutout-stroke-options'); strokes.hidden=cutoutView!=='stroke';
         wrap.querySelectorAll('[data-cutout-stroke]').forEach(function(b){b.classList.toggle('is-active',Number(b.dataset.cutoutStroke)===(Number(clip.cutoutStroke)||0))});
-        customCutoutEditing=clip.cutoutMode==='custom'&&cutoutView!=='stroke'; applyStroke(); updateCutoutPreview(true);
+        customCutoutEditing=clip.cutoutMode==='custom'&&cutoutView!=='stroke';
+        applyStroke(); updateCutoutPreview(true);
       }
       wrap.querySelectorAll('[data-cutout-mode]').forEach(function(b){b.addEventListener('click',function(){
-        const nextMode = clip.cutoutMode===b.dataset.cutoutMode ? 'none' : b.dataset.cutoutMode;
+        const clickedMode = b.dataset.cutoutMode;
+        const nextMode = clip.cutoutMode===clickedMode && cutoutView!=='stroke' ? 'none' : clickedMode;
         if (nextMode !== clip.cutoutMode) { cutoutFrameReady=false; customCutoutMask=null; }
         clip.cutoutMode = nextMode;
+        cutoutView = 'main';
         cutoutFailed = false;
         cutoutBusy = false;
         cutoutLastRun = 0;
         if(clip.cutoutMode!=='custom') customCutoutEditing=false;
         sync(); applyPreviewEdits();
       });});
-      wrap.querySelector('[data-cutout-view="stroke"]').addEventListener('click',function(){cutoutView=cutoutView==='stroke'?'main':'stroke';sync();});
+      wrap.querySelector('[data-cutout-view="stroke"]').addEventListener('click',function(){cutoutView=cutoutView==='stroke'?'main':'stroke'; if(!clip.cutoutMode || clip.cutoutMode==='none') clip.cutoutMode='background'; sync();});
       wrap.querySelectorAll('[data-cutout-stroke]').forEach(function(b){b.addEventListener('click',function(){clip.cutoutStroke=Number(b.dataset.cutoutStroke)||0;applyStroke();sync();});});
       wrap.querySelectorAll('[data-cutout-brush]').forEach(function(b){b.addEventListener('click',function(){ customCutoutErase=b.dataset.cutoutBrush==='erase'; wrap.querySelectorAll('[data-cutout-brush]').forEach(function(x){x.classList.toggle('is-active',x===b)}); });});
       wrap.querySelector('input').addEventListener('input',function(){customCutoutBrush=Number(this.value)||34;});
       wrap.querySelector('.reel-cutout-reset').addEventListener('click',function(){clip.cutoutMode='none';clip.cutoutStroke=0;customCutoutMask=null;cutoutView='main';clearCutoutPreview();sync();applyPreviewEdits();});
       wrap.querySelector('.reel-cutout-done').addEventListener('click',function(){customCutoutEditing=false;recordEditorChange(before);closeToolPanel();renderClipTimeline();});
-      openToolPanel('Cutout',wrap); toolPanel.classList.add('is-cutout-panel'); sync();
+      openToolPanel('Cutout',wrap); toolPanel.classList.add('is-cutout-panel'); flow.classList.add('is-cutout-editing'); sync();
     }
 
     document.addEventListener('click', function (event) {
