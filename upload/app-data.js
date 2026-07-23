@@ -4447,15 +4447,15 @@
         return '<button type="button" data-cutout-stroke="'+item[0]+'" aria-label="'+item[1]+' stroke">'+inner+'</button>';
       }).join('');
       wrap.innerHTML = '<div class="reel-cutout-main-row">'
-        + '<button type="button" data-cutout-mode="background"><span class="reel-cutout-icon"><img src="/upload/cutout_auto_icon.png" alt=""></span><strong>Auto<br>cutout</strong></button>'
-        + '<button type="button" data-cutout-mode="custom"><span class="reel-cutout-icon"><img src="/upload/cutout_custom_icon.png" alt=""></span><strong>Custom<br>cutout</strong></button>'
-        + '<button type="button" data-cutout-view="stroke"><span class="reel-cutout-icon"><img src="/upload/cutout_stroke_icon.png" alt=""></span><strong>Stroke</strong></button>'
+        + '<button type="button" data-cutout-mode="background"><span class="reel-cutout-icon"><img src="/reel-ui/cutout_auto_icon.png" alt=""></span><strong>Auto<br>cutout</strong></button>'
+        + '<button type="button" data-cutout-mode="custom"><span class="reel-cutout-icon"><img src="/reel-ui/cutout_custom_icon.png" alt=""></span><strong>Custom<br>cutout</strong></button>'
+        + '<button type="button" data-cutout-view="stroke"><span class="reel-cutout-icon"><img src="/reel-ui/cutout_stroke_icon.png" alt=""></span><strong>Stroke</strong></button>'
         + '</div>'
         + '<div class="reel-cutout-subpanel-host">'
         + '<div class="reel-cutout-custom-tools" hidden><div class="reel-cutout-brush-row"><button type="button" data-cutout-brush="erase" class="is-active">Erase</button><button type="button" data-cutout-brush="restore">Restore</button></div><label>Brush size<input type="range" min="12" max="70" value="34" aria-label="Brush size"></label></div>'
         + '<div class="reel-cutout-stroke-options" hidden>'+strokeButtons+'</div>'
         + '</div>'
-        + '<div class="reel-cutout-footer"><button type="button" class="reel-cutout-reset"><img src="/upload/cutout_reset_icon.png" alt=""><span>Reset</span></button><button type="button" class="reel-cutout-done" aria-label="Done"><svg viewBox="0 0 32 32"><path d="M6 17l7 7L27 8"/></svg></button></div>';
+        + '<div class="reel-cutout-footer"><button type="button" class="reel-cutout-reset"><img src="/reel-ui/cutout_reset_icon.png" alt=""><span>Reset</span></button><button type="button" class="reel-cutout-done" aria-label="Done"><svg viewBox="0 0 32 32"><path d="M6 17l7 7L27 8"/></svg></button></div>';
       let cutoutView = 'main';
       function applyStroke(){
         const filters=['none','drop-shadow(0 0 1px #fff) drop-shadow(0 0 4px #fff)','drop-shadow(-2px 0 #00f2ea) drop-shadow(2px 0 #ff0050)','drop-shadow(0 0 6px #ffe66d) drop-shadow(0 0 12px #ffe66d)','drop-shadow(0 0 3px #8cf0ff) drop-shadow(0 0 8px #8cf0ff)','drop-shadow(0 0 3px #ff74d4) drop-shadow(0 0 8px #ff74d4)','drop-shadow(0 0 4px #ffd24d) drop-shadow(0 0 10px #ffd24d)','drop-shadow(0 0 2px rgba(0,0,0,.9)) drop-shadow(0 0 10px rgba(0,0,0,.65))'];
