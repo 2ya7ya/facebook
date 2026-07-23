@@ -1487,7 +1487,18 @@
     const cutoutMaskCanvas = document.createElement('canvas');
     const cutoutFrameCanvas = document.createElement('canvas');
     let cutoutSegmenter = null, cutoutBusy = false, cutoutFailed = false, cutoutLastRun = 0;
+    let cutoutFrameReady = false;
     let customCutoutMask = null, customCutoutEditing = false, customCutoutErase = true, customCutoutBrush = 34;
+    function setCutoutVideoVisibility(active) {
+      previewVideos.forEach(function (video) { video.style.visibility = active ? 'hidden' : ''; });
+    }
+    function clearCutoutPreview() {
+      cutoutFrameReady = false;
+      cutoutCanvas.hidden = true;
+      setCutoutVideoVisibility(false);
+      const context = cutoutCanvas.getContext('2d');
+      if (context) context.clearRect(0, 0, cutoutCanvas.width, cutoutCanvas.height);
+    }
     function ensureCutoutSegmenter() {
       if (cutoutSegmenter || cutoutFailed || !window.SelfieSegmentation) return cutoutSegmenter;
       try {
@@ -1495,13 +1506,59 @@
         cutoutSegmenter.setOptions({ modelSelection: 1, selfieMode: false });
         cutoutSegmenter.onResults(function (results) {
           cutoutBusy = false;
-          if (!results || !results.segmentationMask || !editVideo.videoWidth) return;
+          const clip = selectedClip();
+          const active = clip && clip.cutoutMode && clip.cutoutMode !== 'none';
+          if (!active || !results || !results.segmentationMask || !editVideo.videoWidth) {
+            clearCutoutPreview();
+            return;
+          }
           const w = editVideo.videoWidth, h = editVideo.videoHeight;
-          [cutoutCanvas, cutoutMaskCanvas, cutoutFrameCanvas].forEach(function (c) { if (c.width !== w || c.height !== h) { c.width = w; c.height = h; } });
-          const m = cutoutMaskCanvas.getContext('2d'); m.clearRect(0,0,w,h); m.drawImage(results.segmentationMask,0,0,w,h);
-          if (customCutoutMask) m.drawImage(customCutoutMask,0,0,w,h);
-          const f = cutoutFrameCanvas.getContext('2d'); f.clearRect(0,0,w,h); f.drawImage(editVideo,0,0,w,h); f.globalCompositeOperation='destination-in'; f.drawImage(cutoutMaskCanvas,0,0,w,h); f.globalCompositeOperation='source-over';
-          const c = cutoutCanvas.getContext('2d'); c.clearRect(0,0,w,h); c.drawImage(cutoutFrameCanvas,0,0,w,h);
+          [cutoutCanvas, cutoutMaskCanvas, cutoutFrameCanvas].forEach(function (canvas) {
+            if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+          });
+          const maskContext = cutoutMaskCanvas.getContext('2d', { willReadFrequently: true });
+          maskContext.setTransform(1,0,0,1,0,0);
+          maskContext.globalCompositeOperation = 'source-over';
+          maskContext.clearRect(0,0,w,h);
+          maskContext.drawImage(results.segmentationMask,0,0,w,h);
+          if (clip.cutoutMode === 'custom' && customCutoutMask) {
+            maskContext.globalCompositeOperation = 'destination-in';
+            maskContext.drawImage(customCutoutMask,0,0,w,h);
+            maskContext.globalCompositeOperation = 'source-over';
+          }
+
+          // Do not hide the source video when MediaPipe returns an empty/invalid mask.
+          let visibleSamples = 0;
+          try {
+            const sampleWidth = Math.min(48, w), sampleHeight = Math.min(48, h);
+            const sample = document.createElement('canvas');
+            sample.width = sampleWidth; sample.height = sampleHeight;
+            const sampleContext = sample.getContext('2d', { willReadFrequently: true });
+            sampleContext.drawImage(cutoutMaskCanvas, 0, 0, sampleWidth, sampleHeight);
+            const pixels = sampleContext.getImageData(0,0,sampleWidth,sampleHeight).data;
+            for (let index=3; index<pixels.length; index+=4) if (pixels[index] > 18 || pixels[index-3] > 18) visibleSamples += 1;
+          } catch (_sampleError) { visibleSamples = 1; }
+          if (!visibleSamples) {
+            clearCutoutPreview();
+            return;
+          }
+
+          const frameContext = cutoutFrameCanvas.getContext('2d');
+          frameContext.setTransform(1,0,0,1,0,0);
+          frameContext.globalCompositeOperation='source-over';
+          frameContext.clearRect(0,0,w,h);
+          frameContext.drawImage(results.image || editVideo,0,0,w,h);
+          frameContext.globalCompositeOperation='destination-in';
+          frameContext.drawImage(cutoutMaskCanvas,0,0,w,h);
+          frameContext.globalCompositeOperation='source-over';
+
+          const outputContext = cutoutCanvas.getContext('2d');
+          outputContext.setTransform(1,0,0,1,0,0);
+          outputContext.clearRect(0,0,w,h);
+          outputContext.drawImage(cutoutFrameCanvas,0,0,w,h);
+          cutoutFrameReady = true;
+          cutoutCanvas.hidden = false;
+          setCutoutVideoVisibility(true);
         });
       } catch (_e) { cutoutFailed = true; cutoutSegmenter = null; }
       return cutoutSegmenter;
@@ -1509,14 +1566,25 @@
     function updateCutoutPreview(force) {
       const clip = selectedClip();
       const active = clip && clip.cutoutMode && clip.cutoutMode !== 'none';
-      cutoutCanvas.hidden = !active;
-      previewVideos.forEach(function(v){ v.style.visibility = active ? 'hidden' : ''; });
-      if (!active || !editVideo || editVideo.readyState < 2) return;
+      if (!active) { clearCutoutPreview(); return; }
+      if (!editVideo || editVideo.readyState < 2) {
+        cutoutCanvas.hidden = true;
+        setCutoutVideoVisibility(false);
+        return;
+      }
+      // Keep the original video visible until a valid segmented frame is ready.
+      if (!cutoutFrameReady) {
+        cutoutCanvas.hidden = true;
+        setCutoutVideoVisibility(false);
+      }
       const now = performance.now();
       if (!force && (cutoutBusy || now - cutoutLastRun < 95)) return;
-      const seg = ensureCutoutSegmenter(); if (!seg) return;
+      const seg = ensureCutoutSegmenter();
+      if (!seg) { clearCutoutPreview(); return; }
       cutoutBusy = true; cutoutLastRun = now;
-      seg.send({ image: editVideo }).catch(function(){ cutoutBusy=false; cutoutFailed=true; cutoutSegmenter=null; });
+      seg.send({ image: editVideo }).catch(function(){
+        cutoutBusy=false; cutoutFailed=true; cutoutSegmenter=null; clearCutoutPreview();
+      });
     }
     function cutoutLoop(){ updateCutoutPreview(false); requestAnimationFrame(cutoutLoop); }
     requestAnimationFrame(cutoutLoop);
@@ -4307,7 +4375,13 @@
       const wrap = document.createElement('div'); wrap.className='reel-cutout-options';
       wrap.innerHTML = '<button type="button" data-cutout-mode="background"><span class="reel-cutout-icon reel-cutout-person">✦</span><strong>Remove background</strong></button><button type="button" data-cutout-mode="custom"><span class="reel-cutout-icon reel-cutout-custom">⌁</span><strong>Remove custom</strong></button><div class="reel-cutout-custom-tools" hidden><button type="button" data-cutout-brush="erase" class="is-active">Erase</button><button type="button" data-cutout-brush="restore">Restore</button><input type="range" min="12" max="70" value="34" aria-label="Brush size"></div><button type="button" class="reel-cutout-done">Done</button>';
       function sync(){ wrap.querySelectorAll('[data-cutout-mode]').forEach(function(b){b.classList.toggle('is-active',b.dataset.cutoutMode===clip.cutoutMode)}); const tools=wrap.querySelector('.reel-cutout-custom-tools'); tools.hidden=clip.cutoutMode!=='custom'; customCutoutEditing=clip.cutoutMode==='custom'; updateCutoutPreview(true); }
-      wrap.querySelectorAll('[data-cutout-mode]').forEach(function(b){b.addEventListener('click',function(){ clip.cutoutMode = clip.cutoutMode===b.dataset.cutoutMode ? 'none' : b.dataset.cutoutMode; if(clip.cutoutMode!=='custom') customCutoutEditing=false; sync(); applyPreviewEdits(); });});
+      wrap.querySelectorAll('[data-cutout-mode]').forEach(function(b){b.addEventListener('click',function(){
+        const nextMode = clip.cutoutMode===b.dataset.cutoutMode ? 'none' : b.dataset.cutoutMode;
+        if (nextMode !== clip.cutoutMode) { cutoutFrameReady=false; customCutoutMask=null; }
+        clip.cutoutMode = nextMode;
+        if(clip.cutoutMode!=='custom') customCutoutEditing=false;
+        sync(); applyPreviewEdits();
+      });});
       wrap.querySelectorAll('[data-cutout-brush]').forEach(function(b){b.addEventListener('click',function(){ customCutoutErase=b.dataset.cutoutBrush==='erase'; wrap.querySelectorAll('[data-cutout-brush]').forEach(function(x){x.classList.toggle('is-active',x===b)}); });});
       wrap.querySelector('input').addEventListener('input',function(){customCutoutBrush=Number(this.value)||34;});
       wrap.querySelector('.reel-cutout-done').addEventListener('click',function(){customCutoutEditing=false;recordEditorChange(before);closeToolPanel();renderClipTimeline();});
