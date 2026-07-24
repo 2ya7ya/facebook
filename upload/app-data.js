@@ -1593,8 +1593,8 @@
           const sourcePixels = analysisImage.data;
           const softMask = new Uint8Array(aw * ah);
           const hardMask = new Uint8Array(aw * ah);
-          const softThreshold = 148;
-          const hardThreshold = 192;
+          const softThreshold = 118;
+          const hardThreshold = 184;
           for (let pixelIndex = 0, dataIndex = 0; pixelIndex < softMask.length; pixelIndex += 1, dataIndex += 4) {
             const confidence = Math.max(sourcePixels[dataIndex], sourcePixels[dataIndex + 3]);
             softMask[pixelIndex] = confidence >= softThreshold ? 1 : 0;
@@ -1710,30 +1710,33 @@
           dilate3x3(grown, closedA);
           erode3x3(closedA, closedB, 4);
 
-          // Gallery backgrounds make even a soft one-pixel fringe obvious.
-          // Contract the selected mask slightly and reduce feathering only
-          // while a Gallery background is active, preventing source-background
-          // colors from remaining around the cutout subject.
-          let finalMask = closedB;
-          if (clip.cutoutBackgroundImage) {
-            const tightenedMask = new Uint8Array(closedB.length);
-            erode3x3(closedB, tightenedMask, 5);
-            finalMask = tightenedMask;
-          }
-
+          // TikTok-style matte: preserve the complete connected subject and
+          // derive a narrow soft edge from the model confidence. This keeps
+          // hair, hands and held props while avoiding a visible source-background ring.
+          const finalMask = closedB;
           const outputMask = analysisContext.createImageData(aw,ah);
           for (let i = 0; i < finalMask.length; i += 1) {
             if (!finalMask[i]) continue;
             const pixel = i * 4;
+            const confidence = Math.max(sourcePixels[pixel], sourcePixels[pixel + 3]);
+            let alpha;
+            if (confidence >= 212) alpha = 255;
+            else if (confidence <= 142) alpha = 0;
+            else {
+              const t = (confidence - 142) / 70;
+              const smooth = t * t * (3 - 2 * t);
+              alpha = Math.round(255 * smooth);
+            }
+            if (alpha < 18) continue;
             outputMask.data[pixel] = 255;
             outputMask.data[pixel + 1] = 255;
             outputMask.data[pixel + 2] = 255;
-            outputMask.data[pixel + 3] = 255;
+            outputMask.data[pixel + 3] = alpha;
           }
           analysisContext.clearRect(0,0,aw,ah);
           analysisContext.putImageData(outputMask,0,0);
           maskContext.imageSmoothingEnabled = true;
-          maskContext.filter = clip.cutoutBackgroundImage ? 'blur(0.08px)' : 'blur(0.35px)';
+          maskContext.filter = 'blur(0.18px)';
           maskContext.drawImage(analysisCanvas,0,0,w,h);
           maskContext.filter = 'none';
           if (clip.cutoutMode === 'custom' && customCutoutMask) {
