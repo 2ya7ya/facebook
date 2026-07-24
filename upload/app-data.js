@@ -990,8 +990,8 @@
       image.src = imageData;
     });
     const canvas = document.createElement('canvas');
-    canvas.width = 540;
-    canvas.height = 960;
+    canvas.width = 1080;
+    canvas.height = 1920;
     const context = canvas.getContext('2d', { alpha: false });
     if (!context) throw new Error('Picture preview is not supported on this device.');
     context.fillStyle = '#000';
@@ -1002,20 +1002,20 @@
     const targetRatio = canvas.width / canvas.height;
     let drawWidth = canvas.width, drawHeight = canvas.height, drawX = 0, drawY = 0;
     if (sourceRatio > targetRatio) {
-      drawHeight = canvas.height;
-      drawWidth = drawHeight * sourceRatio;
-      drawX = (canvas.width - drawWidth) / 2;
-    } else {
       drawWidth = canvas.width;
       drawHeight = drawWidth / sourceRatio;
       drawY = (canvas.height - drawHeight) / 2;
+    } else {
+      drawHeight = canvas.height;
+      drawWidth = drawHeight * sourceRatio;
+      drawX = (canvas.width - drawWidth) / 2;
     }
     context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
     const stream = canvas.captureStream ? canvas.captureStream(12) : null;
     if (!stream || typeof MediaRecorder === 'undefined') throw new Error('Picture clips are not supported by this browser.');
     const preferredTypes = ['video/webm;codecs=vp8', 'video/webm'];
     const mimeType = preferredTypes.find(function (type) { return !MediaRecorder.isTypeSupported || MediaRecorder.isTypeSupported(type); }) || '';
-    const recorder = new MediaRecorder(stream, mimeType ? { mimeType: mimeType, videoBitsPerSecond: 900000 } : { videoBitsPerSecond: 900000 });
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType: mimeType, videoBitsPerSecond: 5000000 } : { videoBitsPerSecond: 5000000 });
     const chunks = [];
     recorder.addEventListener('dataavailable', function (event) { if (event.data && event.data.size) chunks.push(event.data); });
     const stopped = new Promise(function (resolve, reject) {
@@ -1042,7 +1042,7 @@
     const blob = new Blob(chunks, { type: recorder.mimeType || 'video/webm' });
     if (!blob.size) throw new Error('The picture clip could not be prepared.');
     const videoData = await blobToDataUrl(blob);
-    return { videoData: videoData, imageData: imageData, thumbnail: imageData, duration: 1.8 };
+    return { videoData: videoData, imageData: imageData, thumbnail: imageData, duration: 4, encodedDuration: 1.8 };
   }
 
 
@@ -1818,6 +1818,8 @@
     let sequenceBoundarySeekActive = false;
     let sequenceBoundaryWallStart = 0;
     let sequenceBoundaryTimeStart = 0;
+    let picturePlaybackWallStart = 0;
+    let picturePlaybackSequenceStart = 0;
 
     const effectSelectionToolbar = document.createElement('div');
     effectSelectionToolbar.className = 'reel-effect-selection-toolbar';
@@ -2122,7 +2124,8 @@
       const settings = inheritedClipSettings(clip || editState);
       const availableStart = Math.max(0, Number(clip && clip.availableStart));
       const ownSource = Boolean(clip && clip.sourceData);
-      const sourceLimit = ownSource ? (Number(clip && clip.availableEnd) || fallbackEnd) : (sourceMediaDuration || Number(clip && clip.availableEnd) || fallbackEnd);
+      const pictureSource = clipIsPicture(clip);
+      const sourceLimit = pictureSource ? Math.max(60, Number(clip && clip.availableEnd) || 0) : (ownSource ? (Number(clip && clip.availableEnd) || fallbackEnd) : (sourceMediaDuration || Number(clip && clip.availableEnd) || fallbackEnd));
       const availableEnd = Math.max(availableStart + .1, sourceLimit);
       const sourceStart = Math.min(availableEnd - .05, Math.max(availableStart, Number(clip && clip.sourceStart) || fallbackStart));
       const sourceEnd = Math.min(availableEnd, Math.max(sourceStart + .05, Number(clip && clip.sourceEnd) || fallbackEnd));
@@ -2204,41 +2207,54 @@
       const current = Math.max(0, Number(elapsed) || 0);
       const t = Math.max(0, Math.min(1, current / safeDuration));
       const smooth = t * t * (3 - 2 * t);
-      const loop = (current % 2.4) / 2.4;
-      const wave = Math.sin(loop * Math.PI * 2);
-      const pulse = Math.max(0, Math.sin(loop * Math.PI * 4));
       const state = neutralVisualState();
+      function pulse(center, width) { return Math.max(0, 1 - Math.abs(t - center) / Math.max(.001, width)); }
       switch (preset) {
-        case 'cyber-cam':
-          state.scaleX = state.scaleY = 1.12 + smooth * .12;
-          state.x = -.08 + smooth * .14;
-          state.y = -.035 + Math.sin(t * Math.PI) * .018;
-          state.rotate = -1.2 + smooth * 2.1;
-          state.blur = pulse * .32;
-          state.extraFilter = ' grayscale(1) contrast(1.28) brightness(.94)';
+        case 'cyber-cam': {
+          const stage = Math.min(3, Math.floor(t * 4));
+          const local = (t * 4) - stage;
+          const settle = local * local * (3 - 2 * local);
+          const scales = [1.82, 1.58, 1.34, 1.12];
+          const xs = [-.18, .12, -.06, 0];
+          const ys = [.10, -.08, -.03, 0];
+          state.scaleX = state.scaleY = scales[stage] - settle * (stage < 3 ? .12 : .04);
+          state.x = xs[stage] * (1 - settle * .2);
+          state.y = ys[stage] * (1 - settle * .2);
+          state.blur = pulse(.02 + stage * .25, .035) * .9;
+          state.extraFilter = ' grayscale(1) contrast(1.24) brightness(.92)';
           break;
-        case 'phantom':
-          state.scaleX = state.scaleY = 1.04 + pulse * .08;
-          state.x = wave * .018;
-          state.y = Math.cos(loop * Math.PI * 2) * .008;
-          state.opacity = .96;
-          state.blur = .28 + pulse * .5;
-          state.extraFilter = ' contrast(1.08) saturate(.9) drop-shadow(18px 0 0 rgba(255,255,255,.18)) drop-shadow(-16px 0 0 rgba(255,255,255,.13))';
+        }
+        case 'phantom': {
+          const smear = Math.max(pulse(.14,.12), pulse(.43,.12), pulse(.72,.12));
+          const direction = Math.sin(t * Math.PI * 6) >= 0 ? 1 : -1;
+          state.scaleX = state.scaleY = 1.08 + smear * .08;
+          state.x = direction * smear * .055;
+          state.y = -smear * .008;
+          state.opacity = .97;
+          state.blur = .45 + smear * 1.1;
+          state.extraFilter = ' contrast(1.05) saturate(.92) drop-shadow(' + (direction * 30) + 'px 0 0 rgba(255,255,255,.20)) drop-shadow(' + (direction * 16) + 'px 0 0 rgba(255,255,255,.14))';
           break;
-        case 'dolly-zoom-pro':
-          state.scaleX = 1.02 + smooth * .36;
-          state.scaleY = 1.02 + smooth * .3;
-          state.y = -smooth * .075;
-          state.x = Math.sin(t * Math.PI) * .012;
-          state.blur = Math.max(0, Math.sin(t * Math.PI * 2)) * .18;
-          state.extraFilter = ' contrast(1.08) saturate(1.06)';
+        }
+        case 'dolly-zoom-pro': {
+          const intro = Math.max(0, 1 - t / .24);
+          const zoom = 1.48 - smooth * .38;
+          state.scaleX = zoom;
+          state.scaleY = 1.44 - smooth * .34;
+          state.y = -.07 + smooth * .05;
+          state.x = -.015 + smooth * .015;
+          state.blur = intro * 1.4;
+          state.extraFilter = ' contrast(1.08) saturate(1.04)';
           break;
-        case 'photo-zoom':
-          state.scaleX = state.scaleY = 1.03 + smooth * .28;
-          state.x = -.025 + smooth * .05;
-          state.y = -.02 - smooth * .035;
-          state.extraFilter = ' contrast(1.04) saturate(1.04)';
+        }
+        case 'photo-zoom': {
+          const ease = 1 - Math.pow(1 - t, 3);
+          state.scaleX = state.scaleY = 1.02 + ease * .32;
+          state.x = -.018 + ease * .018;
+          state.y = -.015 - ease * .035;
+          state.blur = pulse(.03,.035) * .25;
+          state.extraFilter = ' contrast(1.035) saturate(1.025)';
           break;
+        }
       }
       return state;
     }
@@ -2551,7 +2567,12 @@
           };
           editVideo.addEventListener('seeked', finishBoundarySeek, { once: true });
           editVideo.addEventListener('canplay', finishBoundarySeek, { once: true });
-          try { editVideo.currentTime = Math.max(item.clip.sourceStart, sourceTime); } catch (error) { finishBoundarySeek(); }
+          try {
+            editVideo.loop = clipIsPicture(item.clip);
+            const mediaDuration = Math.max(.05, Number(editVideo.duration) || 1.8);
+            const desiredTime = clipIsPicture(item.clip) ? (Math.max(0, local) % Math.max(.05, mediaDuration - .02)) : Math.max(item.clip.sourceStart, sourceTime);
+            editVideo.currentTime = desiredTime;
+          } catch (error) { finishBoundarySeek(); }
           window.setTimeout(finishBoundarySeek, 650);
         };
         if (desiredSource && editVideo.__reelSource !== desiredSource) {
@@ -3100,7 +3121,8 @@
     }
     editVideo.addEventListener('timeupdate', function () { window.requestAnimationFrame(function () { syncDeviceMusicPlayback(false); }); });
     editVideo.addEventListener('play', function () { window.requestAnimationFrame(function () { syncDeviceMusicPlayback(true); }); });
-    editVideo.addEventListener('pause', function () { musicPreviewAudio.pause(); });
+    editVideo.addEventListener('pause', function () {
+      picturePlaybackWallStart = 0; musicPreviewAudio.pause(); });
     editVideo.addEventListener('seeked', function () { window.requestAnimationFrame(function () { syncDeviceMusicPlayback(true); }); });
     function renderMusicTrack() {
       const tracks = ensureMusicTracks();
@@ -3899,7 +3921,27 @@
     function syncEditPlayback(forceText) {
       if (!sequenceSeekInProgress) {
         const item = currentClipItem();
-        if (item && editVideo.currentTime >= item.clip.sourceEnd - .10) {
+        if (item && clipIsPicture(item.clip) && !editVideo.paused) {
+          if (!picturePlaybackWallStart) {
+            picturePlaybackWallStart = performance.now();
+            picturePlaybackSequenceStart = currentSequenceTime;
+          }
+          currentSequenceTime = Math.min(item.end, picturePlaybackSequenceStart + (performance.now() - picturePlaybackWallStart) / 1000);
+          if (currentSequenceTime >= item.end - .01) {
+            const layout = sequenceLayout();
+            const next = layout[item.index + 1];
+            if (next) {
+              picturePlaybackWallStart = performance.now();
+              picturePlaybackSequenceStart = next.start;
+              seekSequenceTime(next.start, true);
+              editVideo.play().catch(function () {});
+            } else {
+              currentSequenceTime = timelineDuration;
+              picturePlaybackWallStart = 0;
+              editVideo.pause();
+            }
+          }
+        } else if (item && editVideo.currentTime >= item.clip.sourceEnd - .10) {
           const layout = sequenceLayout();
           const next = layout[item.index + 1];
           if (next) {
@@ -3967,6 +4009,8 @@
     editVideo.addEventListener('timeupdate', function () { syncEditPlayback(editVideo.paused); });
     editVideo.addEventListener('play', function () {
       if (currentSequenceTime >= timelineDuration - .01) seekSequenceTime(0, true);
+      picturePlaybackWallStart = performance.now();
+      picturePlaybackSequenceStart = currentSequenceTime;
       const playingItem = currentClipItem();
       if (playingItem) editVideo.playbackRate = speedAtSourceOffset(playingItem.clip, Math.max(0, Number(editVideo.currentTime) - playingItem.clip.sourceStart));
       syncFullscreenPauseUi();
@@ -3975,6 +4019,7 @@
       scheduleTimelineFollow();
     });
     editVideo.addEventListener('pause', function () {
+      picturePlaybackWallStart = 0;
       // Stop every media element owned by the reel creation flow. Some mobile
       // browsers can leave a hidden preview clone audible after the visible
       // editor video is paused.
@@ -4328,7 +4373,7 @@
         const prepared = await imageFileToPreviewVideo(selected);
         clip = {
           id: nextClipId(), sourceStart: 0, sourceEnd: prepared.duration,
-          availableStart: 0, availableEnd: prepared.duration,
+          availableStart: 0, availableEnd: 60,
           sourceData: prepared.videoData, imageData: prepared.imageData,
           thumbnail: prepared.thumbnail, mediaType: 'image', kind: 'image',
           framePreset: 'none', magicPreset: 'none'
@@ -4423,7 +4468,7 @@
           editState.imageData = prepared.imageData;
           editState.clips = [{
             id: nextClipId(), sourceStart: 0, sourceEnd: prepared.duration,
-            availableStart: 0, availableEnd: prepared.duration,
+            availableStart: 0, availableEnd: 60,
             sourceData: prepared.videoData, imageData: prepared.imageData,
             thumbnail: prepared.thumbnail, mediaType: 'image', kind: 'image',
             framePreset: 'none', magicPreset: 'none'
