@@ -4558,15 +4558,24 @@
       const sourceDuration = Math.max(.05, clip.sourceEnd - clip.sourceStart);
       const editor = document.createElement('div');
       editor.className = 'reel-speed-editor reel-magic-editor';
-      editor.innerHTML = '<div class="reel-speed-tabs-row"><strong style="font-size:16px">Magic</strong><button type="button" class="reel-speed-done" aria-label="Done"><svg class="reel-speed-done-icon" viewBox="0 0 48 48"><path d="M8 25.5l10.3 10L40 9.5"/></svg></button></div>'
+      const currentMagicPreset = clip.magicPreset || (clip.speedCurve === 'magic' ? 'velocity' : 'none');
+      editor.innerHTML = '<div class="reel-magic-head">'
+        + '<button type="button" class="reel-magic-clear' + (currentMagicPreset === 'none' ? ' is-active' : '') + '" data-magic-clear aria-label="None">'
+        + '<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="17"></circle><path d="M15 15l18 18"></path></svg>'
+        + '</button>'
+        + '<div class="reel-magic-tabs" role="tablist" aria-label="Magic mode">'
+        + '<button type="button" class="is-active" data-magic-tab="video" aria-selected="true">Video</button>'
+        + '<button type="button" data-magic-tab="frame" aria-selected="false">Frame</button>'
+        + '</div>'
+        + '<button type="button" class="reel-speed-done" aria-label="Done"><svg class="reel-speed-done-icon" viewBox="0 0 48 48"><path d="M8 25.5l10.3 10L40 9.5"/></svg></button>'
+        + '</div>'
         + '<div class="reel-speed-presets reel-magic-presets">'
-        + magicPresetDefinitions.map(function (preset) {
-          const active = (clip.magicPreset || (clip.speedCurve === 'magic' ? 'velocity' : 'none')) === preset.id ? ' is-active' : '';
-          const thumb = '<canvas class="reel-magic-thumb-canvas" width="152" height="152" data-magic-preview="' + preset.id + '" aria-hidden="true"></canvas>'
-            + (preset.id === 'none' ? '<span class="reel-magic-none-overlay"><svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="17"/><path d="M15 33l18-18"/></svg></span>' : '');
+        + magicPresetDefinitions.filter(function (preset) { return preset.id !== 'none'; }).map(function (preset) {
+          const active = currentMagicPreset === preset.id ? ' is-active' : '';
+          const thumb = '<canvas class="reel-magic-thumb-canvas" width="152" height="152" data-magic-preview="' + preset.id + '" aria-hidden="true"></canvas>';
           return '<button type="button" class="reel-speed-preset reel-magic-preset' + active + '" data-magic-preset="' + preset.id + '"><span class="reel-speed-curve-card">' + thumb + '</span><span>' + preset.label + '</span></button>';
         }).join('')
-        + '</div><p style="margin:8px 14px 0;color:#aaa;font-size:12px">Noticeable full-clip motion and velocity presets.</p>';
+        + '</div>';
       let historyRecorded = false;
       let magicThumbFrame = 0;
       let magicThumbStopped = false;
@@ -4680,6 +4689,8 @@
         editor.querySelectorAll('[data-magic-preset]').forEach(function (button) {
           button.classList.toggle('is-active', button.getAttribute('data-magic-preset') === safePreset);
         });
+        const clearMagicButton = editor.querySelector('[data-magic-clear]');
+        if (clearMagicButton) clearMagicButton.classList.toggle('is-active', safePreset === 'none');
         if (!historyRecorded) {
           recordEditorChange(before);
           historyRecorded = true;
@@ -4689,6 +4700,21 @@
       editor.querySelectorAll('[data-magic-preset]').forEach(function (button) {
         button.addEventListener('click', function () {
           selectPreset(button.getAttribute('data-magic-preset'));
+        });
+      });
+      const clearMagicButton = editor.querySelector('[data-magic-clear]');
+      if (clearMagicButton) {
+        clearMagicButton.addEventListener('click', function () {
+          selectPreset('none');
+        });
+      }
+      editor.querySelectorAll('[data-magic-tab]').forEach(function (button) {
+        button.addEventListener('click', function () {
+          editor.querySelectorAll('[data-magic-tab]').forEach(function (tab) {
+            const active = tab === button;
+            tab.classList.toggle('is-active', active);
+            tab.setAttribute('aria-selected', active ? 'true' : 'false');
+          });
         });
       });
       editor.querySelector('.reel-speed-done').addEventListener('click', function(){ stopMagicThumbs(); closeToolPanel(); });
