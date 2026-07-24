@@ -1,6 +1,6 @@
 cd ~/facebook || exit 1
 
-ZIP="$HOME/storage/downloads/facebook_picture_quality_duration_frame_effects_fixed.zip"
+ZIP="$HOME/storage/downloads/facebook_rotate_button_enabled.zip"
 
 if [ ! -f "$ZIP" ]; then
   echo "File not found: $ZIP"
@@ -14,7 +14,7 @@ git add .
 if git diff --cached --quiet; then
   echo "Nothing new to commit"
 else
-  git commit -m "Fix picture quality duration fullscreen and frame effects"
+  git commit -m "Enable clip rotate button"
   git push origin main
 fi
 

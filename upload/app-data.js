@@ -5493,7 +5493,7 @@
       const button = event.target.closest('[data-selection-tool]');
       if (!button) return;
       const toolName = button.dataset.selectionTool;
-      if (!['split','replace','delete','speed','crop','animation','filters','effects','cutout','background','magic','adjust','volume'].includes(toolName)) return;
+      if (!['split','replace','delete','speed','crop','animation','filters','effects','cutout','background','magic','adjust','volume','rotate'].includes(toolName)) return;
       if (toolName !== 'animation' && !flow.contains(button)) return;
       event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation();
       if (toolName === 'split') splitAtPlayhead();
@@ -5507,6 +5507,19 @@
       else if (toolName === 'background') openBackgroundEditor();
       else if (toolName === 'magic') openMagicEditor();
       else if (toolName === 'volume') openVideoVolumeEditor();
+      else if (toolName === 'rotate') {
+        const clip = selectedClip();
+        if (!clip) return;
+        const before = captureEditorSnapshot();
+        const currentRotate = Number(clip.videoTransformRotate) || 0;
+        clip.videoTransformRotate = ((currentRotate + 90) % 360 + 360) % 360;
+        applyPreviewEdits();
+        syncVideoBackgroundAndTransform();
+        applyClipAnimationPreview(currentClipItem());
+        renderClipTimeline();
+        recordEditorChange(before);
+        reelMessage(root, 'Rotated ' + clip.videoTransformRotate + '°');
+      }
       else if (toolName === 'filters') {
         const clip = selectedClip(); if (!clip) return;
         const before = captureEditorSnapshot();
