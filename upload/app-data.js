@@ -4014,33 +4014,38 @@
     function syncEditPlayback(forceText) {
       if (!sequenceSeekInProgress) {
         const item = currentClipItem();
-        if (item && clipIsPicture(item.clip) && !editVideo.paused) {
-          if (!picturePlaybackWallStart) {
-            picturePlaybackWallStart = performance.now();
-            picturePlaybackSequenceStart = currentSequenceTime;
-          }
-          currentSequenceTime = Math.min(item.end, picturePlaybackSequenceStart + (performance.now() - picturePlaybackWallStart) / 1000);
-          const previewStopActive = picturePreviewStopClipId === item.clip.id && picturePreviewStopAt > item.start;
-          if (previewStopActive && currentSequenceTime >= picturePreviewStopAt - .01) {
-            currentSequenceTime = Math.min(item.end, picturePreviewStopAt);
-            picturePlaybackWallStart = 0;
-            picturePreviewStopAt = 0;
-            picturePreviewStopClipId = '';
-            editVideo.pause();
-          } else if (currentSequenceTime >= item.end - .01) {
-            const layout = sequenceLayout();
-            const next = layout[item.index + 1];
-            if (next) {
+        if (item && clipIsPicture(item.clip)) {
+          // A picture clip uses timeline time, not the generated helper video's
+          // currentTime. While paused or scrubbing, syncing from that short
+          // helper source can wrap to zero and snap the playhead backwards.
+          if (!editVideo.paused) {
+            if (!picturePlaybackWallStart) {
               picturePlaybackWallStart = performance.now();
-              picturePlaybackSequenceStart = next.start;
-              seekSequenceTime(next.start, true);
-              editVideo.play().catch(function () {});
-            } else {
-              currentSequenceTime = timelineDuration;
+              picturePlaybackSequenceStart = currentSequenceTime;
+            }
+            currentSequenceTime = Math.min(item.end, picturePlaybackSequenceStart + (performance.now() - picturePlaybackWallStart) / 1000);
+            const previewStopActive = picturePreviewStopClipId === item.clip.id && picturePreviewStopAt > item.start;
+            if (previewStopActive && currentSequenceTime >= picturePreviewStopAt - .01) {
+              currentSequenceTime = Math.min(item.end, picturePreviewStopAt);
               picturePlaybackWallStart = 0;
               picturePreviewStopAt = 0;
               picturePreviewStopClipId = '';
               editVideo.pause();
+            } else if (currentSequenceTime >= item.end - .01) {
+              const layout = sequenceLayout();
+              const next = layout[item.index + 1];
+              if (next) {
+                picturePlaybackWallStart = performance.now();
+                picturePlaybackSequenceStart = next.start;
+                seekSequenceTime(next.start, true);
+                editVideo.play().catch(function () {});
+              } else {
+                currentSequenceTime = timelineDuration;
+                picturePlaybackWallStart = 0;
+                picturePreviewStopAt = 0;
+                picturePreviewStopClipId = '';
+                editVideo.pause();
+              }
             }
           }
         } else if (item && editVideo.currentTime >= item.clip.sourceEnd - .10) {
