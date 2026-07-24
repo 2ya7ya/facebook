@@ -1,6 +1,6 @@
 cd ~/facebook || exit 1
 
-ZIP="$HOME/storage/downloads/facebook_magic_none_enabled_state.zip"
+ZIP="$HOME/storage/downloads/facebook_magic_frame_picture_effects.zip"
 
 if [ ! -f "$ZIP" ]; then
   echo "File not found: $ZIP"
@@ -14,7 +14,7 @@ git add .
 if git diff --cached --quiet; then
   echo "Nothing new to commit"
 else
-  git commit -m "Fix Magic none control state and underline"
+  git commit -m "Add picture-only effects to Magic Frame tab"
   git push origin main
 fi
 
