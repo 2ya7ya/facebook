@@ -1710,9 +1710,20 @@
           dilate3x3(grown, closedA);
           erode3x3(closedA, closedB, 4);
 
+          // Gallery backgrounds make even a soft one-pixel fringe obvious.
+          // Contract the selected mask slightly and reduce feathering only
+          // while a Gallery background is active, preventing source-background
+          // colors from remaining around the cutout subject.
+          let finalMask = closedB;
+          if (clip.cutoutBackgroundImage) {
+            const tightenedMask = new Uint8Array(closedB.length);
+            erode3x3(closedB, tightenedMask, 5);
+            finalMask = tightenedMask;
+          }
+
           const outputMask = analysisContext.createImageData(aw,ah);
-          for (let i = 0; i < closedB.length; i += 1) {
-            if (!closedB[i]) continue;
+          for (let i = 0; i < finalMask.length; i += 1) {
+            if (!finalMask[i]) continue;
             const pixel = i * 4;
             outputMask.data[pixel] = 255;
             outputMask.data[pixel + 1] = 255;
@@ -1722,7 +1733,7 @@
           analysisContext.clearRect(0,0,aw,ah);
           analysisContext.putImageData(outputMask,0,0);
           maskContext.imageSmoothingEnabled = true;
-          maskContext.filter = 'blur(0.35px)';
+          maskContext.filter = clip.cutoutBackgroundImage ? 'blur(0.08px)' : 'blur(0.35px)';
           maskContext.drawImage(analysisCanvas,0,0,w,h);
           maskContext.filter = 'none';
           if (clip.cutoutMode === 'custom' && customCutoutMask) {
