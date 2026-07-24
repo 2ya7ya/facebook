@@ -4560,7 +4560,7 @@
       editor.className = 'reel-speed-editor reel-magic-editor';
       const currentMagicPreset = clip.magicPreset || (clip.speedCurve === 'magic' ? 'velocity' : 'none');
       editor.innerHTML = '<div class="reel-magic-head">'
-        + '<button type="button" class="reel-magic-clear' + (currentMagicPreset === 'none' ? ' is-active' : '') + '" data-magic-clear aria-label="None">'
+        + '<button type="button" class="reel-magic-clear' + (currentMagicPreset !== 'none' ? ' is-enabled' : '') + '" data-magic-clear aria-label="None"' + (currentMagicPreset === 'none' ? ' disabled' : '') + '>'
         + '<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="17"></circle><path d="M15 15l18 18"></path></svg>'
         + '</button>'
         + '<div class="reel-magic-tabs" role="tablist" aria-label="Magic mode">'
@@ -4706,7 +4706,18 @@
           button.classList.toggle('is-active', button.getAttribute('data-magic-preset') === safePreset);
         });
         const clearMagicButton = editor.querySelector('[data-magic-clear]');
-        if (clearMagicButton) clearMagicButton.classList.toggle('is-active', safePreset === 'none');
+        if (clearMagicButton) {
+          const cleared = safePreset === 'none';
+          clearMagicButton.disabled = false;
+          clearMagicButton.classList.add('is-enabled');
+          clearMagicButton.classList.toggle('is-selected', cleared);
+        }
+        const videoMagicTab = editor.querySelector('[data-magic-tab="video"]');
+        if (videoMagicTab) {
+          const videoSelected = safePreset !== 'none';
+          videoMagicTab.classList.toggle('is-active', videoSelected);
+          videoMagicTab.setAttribute('aria-selected', videoSelected ? 'true' : 'false');
+        }
         if (!historyRecorded) {
           recordEditorChange(before);
           historyRecorded = true;
@@ -4721,6 +4732,7 @@
       const clearMagicButton = editor.querySelector('[data-magic-clear]');
       if (clearMagicButton) {
         clearMagicButton.addEventListener('click', function () {
+          if (clearMagicButton.disabled || !clearMagicButton.classList.contains('is-enabled')) return;
           selectPreset('none');
         });
       }

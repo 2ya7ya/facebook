@@ -1,6 +1,6 @@
 cd ~/facebook || exit 1
 
-ZIP="$HOME/storage/downloads/facebook_magic_header_compact_lag_reduced.zip"
+ZIP="$HOME/storage/downloads/facebook_magic_none_enabled_state.zip"
 
 if [ ! -f "$ZIP" ]; then
   echo "File not found: $ZIP"
@@ -14,7 +14,7 @@ git add .
 if git diff --cached --quiet; then
   echo "Nothing new to commit"
 else
-  git commit -m "Compact Magic header and optimize previews"
+  git commit -m "Fix Magic none control state and underline"
   git push origin main
 fi
 
