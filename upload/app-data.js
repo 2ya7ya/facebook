@@ -971,6 +971,15 @@
     });
   }
 
+  function blobToDataUrl(blob) {
+    return new Promise(function (resolve, reject) {
+      const reader = new FileReader();
+      reader.onload = function () { resolve(reader.result); };
+      reader.onerror = function () { reject(new Error('Could not read the generated media.')); };
+      reader.readAsDataURL(blob);
+    });
+  }
+
   async function imageFileToPreviewVideo(file) {
     const imageData = await fileData(file);
     const image = new Image();
@@ -4311,6 +4320,71 @@
       file.value = '';
       caption.value = '';
     }
+    async function appendMediaClip(selected) {
+      const picture = /^image\//i.test(selected.type || '');
+      const before = captureEditorSnapshot();
+      let clip;
+      if (picture) {
+        const prepared = await imageFileToPreviewVideo(selected);
+        clip = {
+          id: nextClipId(), sourceStart: 0, sourceEnd: prepared.duration,
+          availableStart: 0, availableEnd: prepared.duration,
+          sourceData: prepared.videoData, imageData: prepared.imageData,
+          thumbnail: prepared.thumbnail, mediaType: 'image', kind: 'image',
+          framePreset: 'none', magicPreset: 'none'
+        };
+      } else {
+        const data = await fileData(selected);
+        const probe = document.createElement('video');
+        probe.preload = 'metadata'; probe.muted = true; probe.playsInline = true; probe.src = data;
+        await new Promise(function (resolve, reject) {
+          probe.addEventListener('loadedmetadata', resolve, { once: true });
+          probe.addEventListener('error', function () { reject(new Error('The selected video could not be opened.')); }, { once: true });
+          probe.load();
+        });
+        const duration = Math.max(.1, Number(probe.duration) || .1);
+        let thumbnail = '';
+        try {
+          const canvas = document.createElement('canvas'); canvas.width = 112; canvas.height = 112;
+          const context = canvas.getContext('2d');
+          await new Promise(function (resolve) {
+            const done = function () {
+              try {
+                const side = Math.min(probe.videoWidth || 1, probe.videoHeight || 1);
+                context.drawImage(probe, ((probe.videoWidth || 1) - side) / 2, ((probe.videoHeight || 1) - side) / 2, side, side, 0, 0, 112, 112);
+                thumbnail = canvas.toDataURL('image/jpeg', .72);
+              } catch (error) {}
+              resolve();
+            };
+            probe.addEventListener('seeked', done, { once: true });
+            try { probe.currentTime = Math.min(Math.max(0, duration / 2), Math.max(0, duration - .02)); } catch (error) { done(); }
+            setTimeout(done, 900);
+          });
+        } catch (error) {}
+        clip = {
+          id: nextClipId(), sourceStart: 0, sourceEnd: duration,
+          availableStart: 0, availableEnd: duration,
+          sourceData: data, thumbnail: thumbnail, mediaType: 'video', kind: 'video',
+          framePreset: 'none', magicPreset: 'none'
+        };
+      }
+      ensureClipState().push(clip);
+      selectedClipId = clip.id;
+      activePlaybackClipId = clip.id;
+      if (picture && clip.thumbnail) timelineFrameSources.push({ time: 0, src: clip.thumbnail });
+      removeOrphanTransitions();
+      refreshSequenceDuration();
+      timelineBuildKey = '';
+      renderClipTimeline();
+      const item = layoutForClip(clip.id);
+      seekSequenceTime(item ? item.start : Math.max(0, timelineDuration - clipOutputDuration(clip)), true);
+      updateTrimSelection();
+      applyPreviewEdits();
+      recordEditorChange(before);
+      reelMessage(root, picture ? 'Picture added to timeline' : 'Video added to timeline');
+      showStage('edit');
+    }
+
     file.addEventListener('change', async function () {
       const selected = file.files && file.files[0];
       if (!selected) return;
@@ -4319,6 +4393,18 @@
       if (selected.size > maximumSelectedSize) {
         file.value = '';
         reelMessage(root, picture ? 'Choose a picture smaller than 20 MB.' : 'Choose a video smaller than 7 MB.');
+        return;
+      }
+      const addingInsideEditor = flow.classList.contains('is-open') && ensureClipState().length > 0;
+      if (addingInsideEditor) {
+        try {
+          reelMessage(root, picture ? 'Adding picture…' : 'Adding video…');
+          await appendMediaClip(selected);
+        } catch (error) {
+          reelMessage(root, error && error.message ? error.message : 'Could not add the selected media.');
+        } finally {
+          file.value = '';
+        }
         return;
       }
       selectedVideo = selected;
@@ -4471,13 +4557,39 @@
       const clip = selectedClip();
       if (!clip) return;
       const picker = document.createElement('input');
-      picker.type = 'file'; picker.accept = 'video/*';
+      picker.type = 'file'; picker.accept = 'video/*,image/*';
       picker.addEventListener('change', async function () {
         const replacement = picker.files && picker.files[0];
         if (!replacement) return;
-        if (replacement.size > 7 * 1024 * 1024) { reelMessage(root, 'Choose a replacement video smaller than 7 MB.'); return; }
+        const replacementIsPicture = /^image\//i.test(replacement.type || '');
+        const replacementLimit = replacementIsPicture ? 20 * 1024 * 1024 : 7 * 1024 * 1024;
+        if (replacement.size > replacementLimit) { reelMessage(root, replacementIsPicture ? 'Choose a replacement picture smaller than 20 MB.' : 'Choose a replacement video smaller than 7 MB.'); return; }
         const before = captureEditorSnapshot();
         try {
+          if (replacementIsPicture) {
+            const prepared = await imageFileToPreviewVideo(replacement);
+            clip.sourceData = prepared.videoData;
+            clip.imageData = prepared.imageData;
+            clip.thumbnail = prepared.thumbnail;
+            clip.sourceStart = 0;
+            clip.sourceEnd = prepared.duration;
+            clip.availableStart = 0;
+            clip.availableEnd = prepared.duration;
+            clip.mediaType = 'image';
+            clip.kind = 'image';
+            clip.framePreset = 'none';
+            clip.magicPreset = 'none';
+            refreshSequenceDuration();
+            timelineBuildKey = '';
+            renderClipTimeline();
+            const pictureItem = layoutForClip(clip.id);
+            seekSequenceTime(pictureItem ? pictureItem.start : 0, true);
+            updateTrimSelection();
+            applyPreviewEdits();
+            recordEditorChange(before);
+            reelMessage(root, 'Picture clip replaced');
+            return;
+          }
           const data = await fileData(replacement);
           const probe = document.createElement('video');
           probe.preload = 'metadata'; probe.muted = true; probe.playsInline = true; probe.src = data;
