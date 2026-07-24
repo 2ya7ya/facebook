@@ -971,6 +971,60 @@
     });
   }
 
+  async function imageFileToPreviewVideo(file) {
+    const imageData = await fileData(file);
+    const image = new Image();
+    image.decoding = 'async';
+    await new Promise(function (resolve, reject) {
+      image.onload = resolve;
+      image.onerror = function () { reject(new Error('The selected picture could not be opened.')); };
+      image.src = imageData;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = 540;
+    canvas.height = 960;
+    const context = canvas.getContext('2d', { alpha: false });
+    if (!context) throw new Error('Picture preview is not supported on this device.');
+    context.fillStyle = '#000';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    const sourceWidth = image.naturalWidth || image.width || 1;
+    const sourceHeight = image.naturalHeight || image.height || 1;
+    const sourceRatio = sourceWidth / sourceHeight;
+    const targetRatio = canvas.width / canvas.height;
+    let drawWidth = canvas.width, drawHeight = canvas.height, drawX = 0, drawY = 0;
+    if (sourceRatio > targetRatio) {
+      drawHeight = canvas.height;
+      drawWidth = drawHeight * sourceRatio;
+      drawX = (canvas.width - drawWidth) / 2;
+    } else {
+      drawWidth = canvas.width;
+      drawHeight = drawWidth / sourceRatio;
+      drawY = (canvas.height - drawHeight) / 2;
+    }
+    context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+    const stream = canvas.captureStream ? canvas.captureStream(12) : null;
+    if (!stream || typeof MediaRecorder === 'undefined') throw new Error('Picture clips are not supported by this browser.');
+    const preferredTypes = ['video/webm;codecs=vp8', 'video/webm'];
+    const mimeType = preferredTypes.find(function (type) { return !MediaRecorder.isTypeSupported || MediaRecorder.isTypeSupported(type); }) || '';
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType: mimeType, videoBitsPerSecond: 900000 } : { videoBitsPerSecond: 900000 });
+    const chunks = [];
+    recorder.addEventListener('dataavailable', function (event) { if (event.data && event.data.size) chunks.push(event.data); });
+    const stopped = new Promise(function (resolve, reject) {
+      recorder.addEventListener('stop', resolve, { once: true });
+      recorder.addEventListener('error', function () { reject(new Error('The picture clip could not be prepared.')); }, { once: true });
+    });
+    recorder.start(200);
+    await new Promise(function (resolve) { setTimeout(resolve, 1800); });
+    recorder.stop();
+    await stopped;
+    stream.getTracks().forEach(function (track) { track.stop(); });
+    const blob = new Blob(chunks, { type: recorder.mimeType || 'video/webm' });
+    if (!blob.size) throw new Error('The picture clip could not be prepared.');
+    const videoData = await blobToDataUrl(blob);
+    return { videoData: videoData, imageData: imageData, thumbnail: imageData, duration: 1.8 };
+  }
+
+
   function installReels() {
     const root = document.querySelector('.app-page[data-page-content="reels"] .reels-page');
     if (!root || root.dataset.persistenceReady) return;
@@ -4248,9 +4302,10 @@
     file.addEventListener('change', async function () {
       const selected = file.files && file.files[0];
       if (!selected) return;
+      const picture = /^image\//i.test(selected.type || '');
       if (selected.size > 7 * 1024 * 1024) {
         file.value = '';
-        reelMessage(root, 'Choose a video smaller than 7 MB.');
+        reelMessage(root, picture ? 'Choose a picture smaller than 7 MB.' : 'Choose a video smaller than 7 MB.');
         return;
       }
       selectedVideo = selected;
@@ -4258,13 +4313,30 @@
       videoLoadGeneration += 1;
       editState = freshEditState();
       undoStack.length = 0; redoStack.length = 0; updateHistoryButtons();
-      reelMessage(root, 'Preparing video…');
+      reelMessage(root, picture ? 'Preparing picture…' : 'Preparing video…');
       try {
-        const data = await fileData(selected);
+        if (picture) {
+          const prepared = await imageFileToPreviewVideo(selected);
+          if (selectedVideo !== selected) return;
+          selectedVideoData = prepared.videoData;
+          editState.mediaType = 'image';
+          editState.kind = 'image';
+          editState.imageData = prepared.imageData;
+          editState.clips = [{
+            id: nextClipId(), sourceStart: 0, sourceEnd: prepared.duration,
+            availableStart: 0, availableEnd: prepared.duration,
+            sourceData: prepared.videoData, imageData: prepared.imageData,
+            thumbnail: prepared.thumbnail, mediaType: 'image', kind: 'image',
+            framePreset: 'none', magicPreset: 'none'
+          }];
+          selectedClipId = editState.clips[0].id;
+          activePlaybackClipId = selectedClipId;
+        } else {
+          selectedVideoData = await fileData(selected);
+        }
         if (selectedVideo !== selected) return;
-        selectedVideoData = data;
         previewVideos.forEach(function (video) {
-          video.muted = false;
+          video.muted = picture;
           video.playsInline = true;
           video.preload = 'auto';
           video.removeAttribute('src');
