@@ -1,6 +1,6 @@
 cd ~/facebook || exit 1
 
-ZIP="$HOME/storage/downloads/facebook_magic_selected_video_thumbnails.zip"
+ZIP="$HOME/storage/downloads/facebook_magic_header_compact_lag_reduced.zip"
 
 if [ ! -f "$ZIP" ]; then
   echo "File not found: $ZIP"
@@ -14,7 +14,7 @@ git add .
 if git diff --cached --quiet; then
   echo "Nothing new to commit"
 else
-  git commit -m "Generate Magic thumbnails from selected video"
+  git commit -m "Compact Magic header and optimize previews"
   git push origin main
 fi
 

@@ -4572,16 +4572,19 @@
         + '<div class="reel-speed-presets reel-magic-presets">'
         + magicPresetDefinitions.filter(function (preset) { return preset.id !== 'none'; }).map(function (preset) {
           const active = currentMagicPreset === preset.id ? ' is-active' : '';
-          const thumb = '<canvas class="reel-magic-thumb-canvas" width="152" height="152" data-magic-preview="' + preset.id + '" aria-hidden="true"></canvas>';
+          const thumb = '<canvas class="reel-magic-thumb-canvas" width="96" height="96" data-magic-preview="' + preset.id + '" aria-hidden="true"></canvas>';
           return '<button type="button" class="reel-speed-preset reel-magic-preset' + active + '" data-magic-preset="' + preset.id + '"><span class="reel-speed-curve-card">' + thumb + '</span><span>' + preset.label + '</span></button>';
         }).join('')
         + '</div>';
       let historyRecorded = false;
       let magicThumbFrame = 0;
       let magicThumbStopped = false;
+      let magicThumbLastPaint = 0;
+      const magicThumbInterval = 1000 / 12;
+      const magicThumbCanvases = Array.from(editor.querySelectorAll('.reel-magic-thumb-canvas'));
       const magicThumbSource = document.createElement('canvas');
-      magicThumbSource.width = 304;
-      magicThumbSource.height = 304;
+      magicThumbSource.width = 192;
+      magicThumbSource.height = 192;
       const magicThumbSourceContext = magicThumbSource.getContext('2d');
       let magicThumbHasFrame = false;
 
@@ -4644,10 +4647,23 @@
 
       function renderMagicThumbs(timestamp) {
         if (magicThumbStopped || !editor.isConnected) return;
+        if (document.hidden) {
+          magicThumbFrame = requestAnimationFrame(renderMagicThumbs);
+          return;
+        }
+        const now = Number(timestamp) || performance.now();
+        if (now - magicThumbLastPaint < magicThumbInterval) {
+          magicThumbFrame = requestAnimationFrame(renderMagicThumbs);
+          return;
+        }
+        magicThumbLastPaint = now;
         if (!magicThumbHasFrame) drawSelectedVideoFrameToMagicThumb();
         const loopDuration = 2.2;
-        const elapsed = ((Number(timestamp) || performance.now()) / 1000) % loopDuration;
-        editor.querySelectorAll('.reel-magic-thumb-canvas').forEach(function(canvas) {
+        const elapsed = (now / 1000) % loopDuration;
+        const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+        magicThumbCanvases.forEach(function(canvas) {
+          const rect = canvas.getBoundingClientRect();
+          if (rect.right < -24 || rect.left > viewportWidth + 24 || rect.bottom < 0 || rect.top > (window.innerHeight || 0)) return;
           drawMagicThumb(canvas, canvas.getAttribute('data-magic-preview') || 'none', elapsed, loopDuration);
         });
         magicThumbFrame = requestAnimationFrame(renderMagicThumbs);
