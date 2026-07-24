@@ -2112,23 +2112,23 @@
       }
       switch (presetId) {
         case 'velocity':
-          return points([[0,2.7],[.08,1.8],[.18,.52],[.31,1.08],[.47,.44],[.63,1.18],[.78,.52],[1,.96]]);
+          return points([[0,3.0],[.06,2.0],[.14,.42],[.28,1.05],[.44,.46],[.58,1.12],[.74,.42],[.9,1.0],[1,.92]]);
         case 'velocity-ghost':
-          return points([[0,2.55],[.10,1.6],[.2,.56],[.36,1.0],[.54,.48],[.72,1.1],[.86,.58],[1,.98]]);
+          return points([[0,2.8],[.07,1.85],[.16,.48],[.31,1.02],[.48,.44],[.64,1.14],[.79,.5],[.93,1.0],[1,.94]]);
         case 'velocity-zoom':
-          return points([[0,2.95],[.08,1.95],[.18,.42],[.32,1.2],[.5,.34],[.66,1.42],[.82,.44],[1,.96]]);
+          return points([[0,3.1],[.06,2.05],[.14,.32],[.28,1.12],[.44,.26],[.58,1.28],[.74,.34],[.9,1.0],[1,.94]]);
         case 'velocity-rgb':
-          return points([[0,2.65],[.08,1.7],[.18,.5],[.34,1.02],[.52,.46],[.7,1.15],[.84,.56],[1,.98]]);
+          return points([[0,2.9],[.06,1.92],[.16,.44],[.3,1.04],[.48,.4],[.64,1.1],[.8,.48],[.94,1.0],[1,.95]]);
         case 'velocity-flare':
-          return points([[0,2.45],[.08,1.55],[.2,.62],[.38,1.0],[.56,.55],[.74,1.04],[.88,.64],[1,1.0]]);
+          return points([[0,2.55],[.08,1.62],[.2,.56],[.37,1.0],[.55,.48],[.72,1.02],[.86,.58],[1,.98]]);
         case 'velocity-flash':
-          return points([[0,2.55],[.08,1.7],[.18,.56],[.36,1.04],[.52,.46],[.7,1.2],[.84,.58],[1,.98]]);
+          return points([[0,2.7],[.08,1.8],[.18,.5],[.34,1.04],[.52,.42],[.68,1.16],[.82,.48],[.94,1.0],[1,.95]]);
         case 'camera-motion':
-          return points([[0,1.22],[.18,1.0],[.52,.96],[1,1.0]]);
+          return points([[0,1.28],[.18,1.04],[.5,.98],[.82,.96],[1,1.0]]);
         case 'speed-zoom':
-          return points([[0,2.25],[.12,1.55],[.26,.58],[.44,1.06],[.62,.42],[.8,1.24],[1,.92]]);
+          return points([[0,3.2],[.08,2.0],[.18,.36],[.34,1.12],[.52,.28],[.66,1.26],[.82,.38],[.94,1.02],[1,.94]]);
         case 'slowmo-zoom':
-          return points([[0,1.1],[.16,.72],[.42,.38],[.7,.5],[1,.88]]);
+          return points([[0,1.08],[.12,.84],[.3,.48],[.58,.34],[.82,.52],[1,.92]]);
         default:
           return null;
       }
@@ -2161,123 +2161,117 @@
       }
       const smooth = t * t * (3 - 2 * t);
       const smoother = smooth * smooth * (3 - 2 * smooth);
-      const introWhip = pulse(.035, .06, 1) + pulse(.095, .055, .68);
-      const beatA = pulse(.36, .1, 1);
-      const beatB = pulse(.74, .11, 1);
-      const beatC = pulse(.9, .07, .55);
-      const brightA = pulse(.14, .07, 1);
-      const brightB = pulse(.42, .06, .7);
-      const brightC = pulse(.82, .06, .75);
-      const flareA = pulse(.46, .08, 1);
-      const flareB = pulse(.86, .07, .82);
-      const driftX = lerp(-.065, .04, smoother);
-      const driftY = lerp(-.018, .015, smooth);
-      const sineA = Math.sin(current * 19.3);
-      const sineB = Math.sin(current * 33.7 + .7);
-      const cosineA = Math.cos(current * 27.1 + .35);
-      const shakeX = sineA * .018 + sineB * .008;
-      const shakeY = cosineA * .016 + Math.sin(current * 41.9) * .007;
+      const hit1 = pulse(.10, .055, 1);
+      const hit2 = pulse(.34, .075, 1);
+      const hit3 = pulse(.58, .08, 1);
+      const hit4 = pulse(.82, .065, 1);
+      const introWhip = pulse(.03, .04, 1) + pulse(.08, .05, .9);
+      const flash1 = pulse(.15, .05, 1);
+      const flash2 = pulse(.46, .05, .8);
+      const flash3 = pulse(.8, .05, .95);
+      const flare1 = pulse(.42, .07, 1);
+      const flare2 = pulse(.87, .06, .9);
+      const driftX = lerp(-.07, .03, smoother);
+      const driftY = lerp(-.022, .016, smooth);
+      const shakeX = Math.sin(current * 18.2) * .015 + Math.sin(current * 32.6 + .3) * .007 + Math.sin(current * 56.4) * .0035;
+      const shakeY = Math.cos(current * 23.8 + .45) * .013 + Math.sin(current * 37.4) * .006 + Math.cos(current * 63.1) * .003;
+      const beatZoom = hit1 * .8 + hit2 * 1.0 + hit3 * .9 + hit4 * .78;
       const state = { x: 0, y: 0, scaleX: 1, scaleY: 1, rotate: 0, blur: 0, opacity: 1, extraFilter: '' };
       switch (preset) {
         case 'velocity': {
-          const punch = introWhip * .95 + beatA * .55 + beatB * .45 + beatC * .18;
-          state.scaleX = state.scaleY = 1 + punch * .18;
-          state.x = shakeX * (.28 + introWhip * .55);
-          state.y = -introWhip * .03 - beatA * .03 - beatB * .018;
-          state.rotate = introWhip * 2.2 + sineA * .5 * (beatA + beatB * .8);
-          state.blur = introWhip * .85 + pulse(.48, .05, .22);
-          state.extraFilter = ' contrast(1.08) saturate(1.08)';
+          const punch = introWhip * .95 + beatZoom * .62;
+          state.scaleX = state.scaleY = 1 + punch * .16;
+          state.x = shakeX * (.4 + introWhip * .8);
+          state.y = -introWhip * .04 - hit2 * .02 - hit3 * .018;
+          state.rotate = introWhip * 2.8 + Math.sin(current * 10.8) * (hit2 * .9 + hit3 * .6);
+          state.blur = introWhip * .8 + hit2 * .16;
+          state.extraFilter = ' contrast(1.1) saturate(1.08)';
           break;
         }
         case 'velocity-ghost': {
-          const sweep = introWhip * .85 + beatA * .42 + beatB * .38;
-          state.scaleX = state.scaleY = 1 + sweep * .13;
+          const ghost = introWhip * .85 + hit2 * .62 + hit3 * .54 + hit4 * .26;
+          state.scaleX = state.scaleY = 1 + ghost * .12;
           state.x = shakeX * 1.15;
-          state.y = shakeY * .45;
-          state.rotate = Math.sin(current * 13.4) * 1.4;
+          state.y = shakeY * .55;
+          state.rotate = Math.sin(current * 12.2) * 1.3 + Math.cos(current * 7.4) * .35;
           state.opacity = .97;
-          state.blur = .38 + introWhip * .55 + (beatA + beatB) * .2;
-          state.extraFilter = ' contrast(1.08) saturate(1.03) drop-shadow(12px 0 0 rgba(255,255,255,.24)) drop-shadow(-9px 0 0 rgba(255,255,255,.14))';
+          state.blur = .22 + introWhip * .38 + (hit2 + hit3) * .18;
+          state.extraFilter = ' contrast(1.08) saturate(1.02) drop-shadow(16px 0 0 rgba(255,255,255,.22)) drop-shadow(8px 0 0 rgba(255,255,255,.13)) drop-shadow(-10px 0 0 rgba(255,255,255,.12))';
           break;
         }
         case 'velocity-zoom': {
-          const zoomBeat = introWhip * .7 + beatA * 1.15 + beatB * .82 + beatC * .3;
-          state.scaleX = state.scaleY = 1.02 + zoomBeat * .26 + smoother * .12;
-          state.x = shakeX * .18;
-          state.y = -introWhip * .022 - beatA * .045 - beatB * .032;
-          state.rotate = Math.sin(current * 17.2) * .7;
-          state.blur = introWhip * .32;
-          state.extraFilter = ' contrast(1.1) saturate(1.1)';
+          const zoom = introWhip * .35 + hit1 * .55 + hit2 * 1.25 + hit3 * 1.05 + hit4 * .8;
+          state.scaleX = state.scaleY = 1.02 + zoom * .28 + smoother * .08;
+          state.x = shakeX * .16;
+          state.y = -(hit1 * .02 + hit2 * .05 + hit3 * .04 + hit4 * .028);
+          state.rotate = Math.sin(current * 14.6) * .45;
+          state.blur = introWhip * .14;
+          state.extraFilter = ' contrast(1.1) saturate(1.06)';
           break;
         }
         case 'velocity-rgb': {
-          const rgbBeat = introWhip * .65 + beatA * .65 + beatB * .56;
-          state.scaleX = state.scaleY = 1 + rgbBeat * .12;
-          state.x = shakeX * .24;
-          state.y = -rgbBeat * .01;
-          state.rotate = Math.sin(current * 11.8) * .5;
-          state.blur = introWhip * .2;
-          state.extraFilter = ' contrast(1.12) saturate(1.18) drop-shadow(8px 0 0 rgba(255,40,120,.56)) drop-shadow(-8px 0 0 rgba(0,220,255,.52))';
+          const rgb = introWhip * .55 + hit2 * .8 + hit3 * .72 + hit4 * .4;
+          state.scaleX = state.scaleY = 1 + rgb * .11;
+          state.x = shakeX * .3;
+          state.y = -rgb * .014;
+          state.rotate = Math.sin(current * 11.4) * .55;
+          state.blur = introWhip * .18;
+          state.extraFilter = ' contrast(1.14) saturate(1.22) drop-shadow(10px 0 0 rgba(255,45,125,.58)) drop-shadow(-10px 0 0 rgba(0,220,255,.58))';
           break;
         }
         case 'velocity-flare': {
-          const glow = introWhip * .42 + flareA * .9 + flareB * .76;
-          state.scaleX = state.scaleY = 1 + glow * .09;
-          state.y = -glow * .014;
-          state.blur = .28 + glow * .7;
-          const brightness = (1.03 + flareA * .13 + flareB * .18).toFixed(3);
-          const contrast = (1.07 + flareA * .05 + flareB * .06).toFixed(3);
-          const saturation = (1.08 + flareA * .08 + flareB * .08).toFixed(3);
-          state.extraFilter = ' brightness(' + brightness + ') contrast(' + contrast + ') saturate(' + saturation + ') sepia(.08) drop-shadow(0 0 18px rgba(255,214,140,.36))';
+          const glow = introWhip * .28 + flare1 * .92 + flare2 * .88 + hit3 * .12;
+          state.scaleX = state.scaleY = 1 + glow * .08;
+          state.y = -glow * .018;
+          state.blur = .15 + glow * .36;
+          state.extraFilter = ' brightness(' + (1.04 + flare1 * .14 + flare2 * .18).toFixed(3) + ') contrast(' + (1.08 + flare1 * .07 + flare2 * .08).toFixed(3) + ') saturate(' + (1.1 + flare1 * .1 + flare2 * .1).toFixed(3) + ') sepia(.10) drop-shadow(0 0 16px rgba(255,210,140,.34)) drop-shadow(0 0 30px rgba(255,188,76,.18))';
           break;
         }
         case 'velocity-flash': {
-          const flash = brightA + brightB + brightC;
-          state.scaleX = state.scaleY = 1 + introWhip * .08 + flash * .05;
-          state.y = -introWhip * .012;
-          state.blur = introWhip * .75;
-          const brightness = (1.02 + flash * .92 + pulse(.03, .045, .35)).toFixed(3);
-          const contrast = (1.08 + flash * .16).toFixed(3);
-          const saturation = (1.04 + flash * .18).toFixed(3);
-          state.extraFilter = ' brightness(' + brightness + ') contrast(' + contrast + ') saturate(' + saturation + ') sepia(' + (flash * .05).toFixed(3) + ')';
+          const flash = flash1 + flash2 + flash3 + introWhip * .2;
+          state.scaleX = state.scaleY = 1 + flash * .04 + introWhip * .06;
+          state.y = -introWhip * .01;
+          state.blur = introWhip * .42;
+          state.extraFilter = ' brightness(' + (1.03 + flash * 1.12).toFixed(3) + ') contrast(' + (1.08 + flash * .2).toFixed(3) + ') saturate(' + (1.06 + flash * .12).toFixed(3) + ')';
           break;
         }
         case 'camera-motion': {
-          state.scaleX = state.scaleY = 1.08 + smoother * .12;
-          state.x = driftX;
-          state.y = driftY + Math.sin(current * 5.2) * .008;
-          state.rotate = lerp(-2.4, 1.2, smooth) + Math.sin(current * 4.3) * .2;
-          state.blur = introWhip * .45;
-          state.extraFilter = ' contrast(1.05) saturate(1.04)';
+          const settle = Math.max(0, 1 - t * 1.8);
+          state.scaleX = state.scaleY = 1.08 + smoother * .12 + settle * .1;
+          state.x = driftX + shakeX * .08;
+          state.y = driftY + Math.sin(current * 4.7) * .006;
+          state.rotate = lerp(-4.5, .8, smooth) + settle * 2.1 + Math.sin(current * 3.9) * .18;
+          state.blur = Math.max(0, introWhip * 1.25 + settle * .95 - t * .5);
+          state.extraFilter = ' contrast(1.06) saturate(1.05)';
           break;
         }
         case 'speed-zoom': {
-          const speedBeat = introWhip * .75 + beatA * .65 + beatB * .56 + beatC * .32;
-          state.scaleX = state.scaleY = 1.02 + speedBeat * .2 + smoother * .14;
+          const z = introWhip * .75 + hit1 * 1.1 + hit2 * .85 + hit3 * 1.05 + hit4 * .72;
+          state.scaleX = state.scaleY = 1.03 + z * .24 + smoother * .1;
           state.x = shakeX * .22;
-          state.y = -speedBeat * .024;
-          state.rotate = Math.sin(current * 14.1) * .8;
-          state.blur = introWhip * .25 + beatA * .08 + beatB * .08;
-          state.extraFilter = ' contrast(1.09) saturate(1.08)';
+          state.y = -(hit1 * .032 + hit2 * .026 + hit3 * .03 + hit4 * .018);
+          state.rotate = Math.sin(current * 15.5) * .65;
+          state.blur = introWhip * .28 + hit1 * .1 + hit3 * .08;
+          state.extraFilter = ' contrast(1.1) saturate(1.07)';
           break;
         }
         case 'slowmo-zoom': {
-          state.scaleX = state.scaleY = 1.02 + smoother * .22 + beatB * .04;
+          state.scaleX = state.scaleY = 1.02 + smoother * .28;
           state.x = 0;
-          state.y = -smoother * .035;
+          state.y = -smoother * .042;
           state.rotate = 0;
-          state.blur = .08 + beatC * .08;
-          state.extraFilter = ' brightness(1.03) contrast(1.07) saturate(1.04)';
+          state.blur = .03 + hit4 * .04;
+          state.extraFilter = ' brightness(1.02) contrast(1.05) saturate(1.03)';
           break;
         }
         case 'handshake': {
-          const jolt = pulse(.18, .04, 1) + pulse(.52, .045, 1) + pulse(.86, .04, .9);
-          state.scaleX = state.scaleY = 1.03;
-          state.x = shakeX * 1.18 + Math.sin(current * 78) * .004;
-          state.y = shakeY * 1.12 + Math.cos(current * 63) * .004;
-          state.rotate = Math.sin(current * 49) * 1.25 + Math.cos(current * 37) * .75;
-          state.blur = .2 + jolt * .18;
-          state.extraFilter = ' contrast(1.04)';
+          const jolt = pulse(.16, .035, 1) + pulse(.36, .035, 1) + pulse(.58, .035, 1) + pulse(.8, .035, 1);
+          state.scaleX = state.scaleY = 1.02;
+          state.x = shakeX * 1.55 + Math.sin(current * 84) * .006 + jolt * .004;
+          state.y = shakeY * 1.55 + Math.cos(current * 74) * .006 + jolt * .004;
+          state.rotate = Math.sin(current * 52) * 1.35 + Math.cos(current * 39) * .82;
+          state.blur = .1 + jolt * .1;
+          state.extraFilter = ' contrast(1.03)';
           break;
         }
       }
