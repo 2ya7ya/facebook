@@ -1826,6 +1826,8 @@
     let sequenceBoundaryTimeStart = 0;
     let picturePlaybackWallStart = 0;
     let picturePlaybackSequenceStart = 0;
+    let picturePreviewStopAt = 0;
+    let picturePreviewStopClipId = '';
 
     const effectSelectionToolbar = document.createElement('div');
     effectSelectionToolbar.className = 'reel-effect-selection-toolbar';
@@ -2213,52 +2215,61 @@
       const current = Math.max(0, Number(elapsed) || 0);
       const t = Math.max(0, Math.min(1, current / safeDuration));
       const smooth = t * t * (3 - 2 * t);
+      const easeOut = 1 - Math.pow(1 - t, 3);
       const state = neutralVisualState();
-      function pulse(center, width) { return Math.max(0, 1 - Math.abs(t - center) / Math.max(.001, width)); }
+      function pulse(center, width, amplitude) {
+        const ratio = Math.abs(t - center) / Math.max(.001, width);
+        return Math.max(0, 1 - ratio) * (amplitude == null ? 1 : amplitude);
+      }
       switch (preset) {
         case 'cyber-cam': {
-          const stage = Math.min(3, Math.floor(t * 4));
-          const local = (t * 4) - stage;
-          const settle = local * local * (3 - 2 * local);
-          const scales = [1.82, 1.58, 1.34, 1.12];
-          const xs = [-.18, .12, -.06, 0];
-          const ys = [.10, -.08, -.03, 0];
-          state.scaleX = state.scaleY = scales[stage] - settle * (stage < 3 ? .12 : .04);
-          state.x = xs[stage] * (1 - settle * .2);
-          state.y = ys[stage] * (1 - settle * .2);
-          state.blur = pulse(.02 + stage * .25, .035) * .9;
-          state.extraFilter = ' grayscale(1) contrast(1.24) brightness(.92)';
+          const whip = pulse(.06, .055, 1) + pulse(.18, .05, .8);
+          const invert = pulse(.33, .06, 1.1);
+          const settle = pulse(.78, .11, .55);
+          state.scaleX = state.scaleY = 1.28 - smooth * .18 + whip * .34;
+          state.x = -.12 + smooth * .10 + Math.sin(t * Math.PI * 8) * (whip * .05 + .008);
+          state.y = .06 - smooth * .055;
+          state.rotate = -3.2 * whip + Math.sin(t * Math.PI * 4.2) * .75;
+          state.blur = whip * 1.6 + settle * .55;
+          state.opacity = .98;
+          state.extraFilter = ' grayscale(1) contrast(' + (1.26 + invert * .25).toFixed(3) + ') brightness(' + (0.88 + invert * 1.28).toFixed(3) + ') invert(' + Math.min(.96, invert * .95).toFixed(3) + ')';
           break;
         }
         case 'phantom': {
-          const smear = Math.max(pulse(.14,.12), pulse(.43,.12), pulse(.72,.12));
-          const direction = Math.sin(t * Math.PI * 6) >= 0 ? 1 : -1;
-          state.scaleX = state.scaleY = 1.08 + smear * .08;
-          state.x = direction * smear * .055;
-          state.y = -smear * .008;
-          state.opacity = .97;
-          state.blur = .45 + smear * 1.1;
-          state.extraFilter = ' contrast(1.05) saturate(.92) drop-shadow(' + (direction * 30) + 'px 0 0 rgba(255,255,255,.20)) drop-shadow(' + (direction * 16) + 'px 0 0 rgba(255,255,255,.14))';
+          const ghost1 = pulse(.18,.14,1);
+          const ghost2 = pulse(.52,.16,.95);
+          const ghost3 = pulse(.82,.12,.78);
+          const smear = ghost1 + ghost2 + ghost3;
+          const drift = Math.sin(t * Math.PI * 3.6);
+          state.scaleX = state.scaleY = 1.03 + smear * .09;
+          state.x = drift * .028 + smear * .022;
+          state.y = -smear * .012 + Math.cos(t * Math.PI * 2.4) * .008;
+          state.rotate = Math.sin(t * Math.PI * 5.4) * .65;
+          state.opacity = .965;
+          state.blur = .34 + smear * .95;
+          state.extraFilter = ' contrast(1.06) saturate(.94) brightness(1.02) drop-shadow(28px 0 0 rgba(255,255,255,.18)) drop-shadow(14px 0 0 rgba(255,255,255,.13)) drop-shadow(-18px 0 0 rgba(255,255,255,.10))';
           break;
         }
         case 'dolly-zoom-pro': {
-          const intro = Math.max(0, 1 - t / .24);
-          const zoom = 1.48 - smooth * .38;
-          state.scaleX = zoom;
-          state.scaleY = 1.44 - smooth * .34;
-          state.y = -.07 + smooth * .05;
-          state.x = -.015 + smooth * .015;
-          state.blur = intro * 1.4;
-          state.extraFilter = ' contrast(1.08) saturate(1.04)';
+          const intro = pulse(.08,.08,1);
+          const settle = easeOut;
+          state.scaleX = 1.34 - settle * .24;
+          state.scaleY = 1.30 - settle * .19;
+          state.x = -.055 + settle * .048;
+          state.y = -.045 + settle * .036;
+          state.rotate = Math.sin(t * Math.PI * 2.1) * .18;
+          state.blur = intro * 1.05;
+          state.extraFilter = ' contrast(1.09) saturate(1.05) brightness(1.01)';
           break;
         }
         case 'photo-zoom': {
-          const ease = 1 - Math.pow(1 - t, 3);
-          state.scaleX = state.scaleY = 1.02 + ease * .32;
-          state.x = -.018 + ease * .018;
-          state.y = -.015 - ease * .035;
-          state.blur = pulse(.03,.035) * .25;
-          state.extraFilter = ' contrast(1.035) saturate(1.025)';
+          const gentlePunch = pulse(.05,.05,.35);
+          state.scaleX = state.scaleY = 1.01 + easeOut * .26 + gentlePunch * .06;
+          state.x = -.01 + easeOut * .012;
+          state.y = -.012 - easeOut * .05;
+          state.rotate = Math.sin(t * Math.PI * 1.25) * .08;
+          state.blur = gentlePunch * .22;
+          state.extraFilter = ' contrast(1.04) saturate(1.03) brightness(1.01)';
           break;
         }
       }
@@ -2576,7 +2587,9 @@
           try {
             editVideo.loop = clipIsPicture(item.clip);
             const mediaDuration = Math.max(.05, Number(editVideo.duration) || 1.8);
-            const desiredTime = clipIsPicture(item.clip) ? (Math.max(0, local) % Math.max(.05, mediaDuration - .02)) : Math.max(item.clip.sourceStart, sourceTime);
+            const desiredTime = clipIsPicture(item.clip)
+              ? Math.max(0, Math.min(Math.max(.02, mediaDuration - .02), Math.max(0, local)))
+              : Math.max(item.clip.sourceStart, sourceTime);
             editVideo.currentTime = desiredTime;
           } catch (error) { finishBoundarySeek(); }
           window.setTimeout(finishBoundarySeek, 650);
@@ -3963,7 +3976,14 @@
             picturePlaybackSequenceStart = currentSequenceTime;
           }
           currentSequenceTime = Math.min(item.end, picturePlaybackSequenceStart + (performance.now() - picturePlaybackWallStart) / 1000);
-          if (currentSequenceTime >= item.end - .01) {
+          const previewStopActive = picturePreviewStopClipId === item.clip.id && picturePreviewStopAt > item.start;
+          if (previewStopActive && currentSequenceTime >= picturePreviewStopAt - .01) {
+            currentSequenceTime = Math.min(item.end, picturePreviewStopAt);
+            picturePlaybackWallStart = 0;
+            picturePreviewStopAt = 0;
+            picturePreviewStopClipId = '';
+            editVideo.pause();
+          } else if (currentSequenceTime >= item.end - .01) {
             const layout = sequenceLayout();
             const next = layout[item.index + 1];
             if (next) {
@@ -3974,6 +3994,8 @@
             } else {
               currentSequenceTime = timelineDuration;
               picturePlaybackWallStart = 0;
+              picturePreviewStopAt = 0;
+              picturePreviewStopClipId = '';
               editVideo.pause();
             }
           }
@@ -4965,6 +4987,23 @@
       }
       function stopMagicThumbs(){ magicThumbStopped=true; if(magicThumbFrame)cancelAnimationFrame(magicThumbFrame); magicThumbFrame=0; }
       drawSelectedSourceToThumb(); if(!magicThumbHasFrame)loadThumbFallback(); editVideo.__magicPreviewCleanup=stopMagicThumbs; magicThumbFrame=requestAnimationFrame(renderMagicThumbs);
+      function playSelectedPicturePresetPreview() {
+        const item = layoutForClip(clip.id);
+        if (!item || !clipIsPicture(item.clip)) return;
+        picturePreviewStopClipId = item.clip.id;
+        picturePreviewStopAt = item.end;
+        picturePlaybackWallStart = 0;
+        picturePlaybackSequenceStart = item.start;
+        seekSequenceTime(item.start, true);
+        renderTimelineAt(item.start);
+        updateEditTimeDisplay(item.start);
+        window.setTimeout(function () {
+          if (selectedClipId !== item.clip.id) return;
+          picturePlaybackWallStart = performance.now();
+          picturePlaybackSequenceStart = item.start;
+          editVideo.play().catch(function () {});
+        }, 0);
+      }
       function recordOnce(){ if(!historyRecorded){ recordEditorChange(before); historyRecorded=true; } }
       function syncHeader() {
         const activePreset = activeMagicTab==='frame' ? (clip.framePreset||'none') : (clip.magicPreset||'none');
@@ -4974,7 +5013,7 @@
       }
       function refreshAfterPreset(message){ refreshSequenceDuration(); renderClipTimeline(); const item=layoutForClip(clip.id); seekSequenceTime(item?item.start:0,true); updateTrimSelection(); recordOnce(); if(message)reelMessage(root,message); }
       function selectVideoPreset(id){ if(pictureClip){ reelMessage(root,'Video effects only work on video clips.'); return; } const safe=magicPresetIds.has(id)?id:'none'; applyMagicPresetToClip(clip,safe,sourceDuration); clip.framePreset='none'; editor.querySelectorAll('[data-magic-preset]').forEach(function(button){button.classList.toggle('is-active',button.getAttribute('data-magic-preset')===safe);}); refreshAfterPreset((magicPresetMap[safe]&&magicPresetMap[safe].message)||'Magic updated'); syncHeader(); }
-      function selectFramePreset(id){ if(!pictureClip){ reelMessage(root,'Frame effects only work on picture clips.'); return; } const safe=framePresetIds.has(id)?id:'none'; clip.framePreset=safe; clip.magicPreset='none'; if(clip.speedCurve==='magic'){clip.speedCurve='none';clip.velocityPoints=[];} editor.querySelectorAll('[data-frame-preset]').forEach(function(button){button.classList.toggle('is-active',button.getAttribute('data-frame-preset')===safe);}); refreshAfterPreset(safe==='none'?'Frame effect removed':framePresetMap[safe].message); syncHeader(); }
+      function selectFramePreset(id){ if(!pictureClip){ reelMessage(root,'Frame effects only work on picture clips.'); return; } const safe=framePresetIds.has(id)?id:'none'; clip.framePreset=safe; clip.magicPreset='none'; if(clip.speedCurve==='magic'){clip.speedCurve='none';clip.velocityPoints=[];} picturePreviewStopAt=0; picturePreviewStopClipId=''; editor.querySelectorAll('[data-frame-preset]').forEach(function(button){button.classList.toggle('is-active',button.getAttribute('data-frame-preset')===safe);}); refreshAfterPreset(safe==='none'?'Frame effect removed':framePresetMap[safe].message); syncHeader(); if(safe!=='none') playSelectedPicturePresetPreview(); }
       editor.querySelectorAll('[data-magic-preset]').forEach(function(button){button.addEventListener('click',function(){selectVideoPreset(button.getAttribute('data-magic-preset'));});});
       editor.querySelectorAll('[data-frame-preset]').forEach(function(button){button.addEventListener('click',function(){selectFramePreset(button.getAttribute('data-frame-preset'));});});
       editor.querySelector('[data-magic-clear]').addEventListener('click',function(){ if(this.disabled)return; if(activeMagicTab==='frame')selectFramePreset('none'); else selectVideoPreset('none'); this.classList.add('is-selected'); });
