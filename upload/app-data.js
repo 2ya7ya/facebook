@@ -837,7 +837,7 @@
     const avatar = root.querySelector('.reels-avatar');
     const caption = root.querySelector('#reelsCaptionDisplay');
     video.src = reel.video;
-    const edits = Object.assign({ trimStart: 0, trimEnd: 0, brightness: 1, contrast: 1, saturation: 1, effect: 'none', text: '', sticker: '', captions: false, overlay: false, fit: 'contain' }, reel.editData || {});
+    const edits = Object.assign({ trimStart: 0, trimEnd: 0, brightness: 1, contrast: 1, saturation: 1, volume: 1, effect: 'none', text: '', sticker: '', captions: false, overlay: false, fit: 'contain' }, reel.editData || {});
     const effectFilters = reelEffectFilters;
     const clipAnimationPresets = {
       in: [['none','None'],['slice-in','Slice In'],['folding-fan','Folding Fan'],['paddling','Paddling'],['spin-in','Spin In'],['zoom-in','Zoom In'],['zoom-out-in','Zoom Out'],['fade-in','Fade In'],['slide-left','Slide Left'],['slide-right','Slide Right'],['slide-up','Slide Up'],['slide-down','Slide Down'],['flip-in','Flip In'],['roll-in','Roll In'],['bounce-in','Bounce In'],['blur-in','Blur In']],
@@ -1960,7 +1960,7 @@
         applyRow.type = 'button';
         applyRow.className = 'reel-music-apply-all';
         applyRow.setAttribute('aria-pressed', 'false');
-        applyRow.innerHTML = '<span class="reel-music-apply-all-label"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 10l11-6 11 6-11 6z"/><path d="M5 16l11 6 11-6M5 22l11 6 11-6"/></svg><strong>Apply to all</strong></span><span class="reel-music-apply-all-check" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M8 25.5l10.3 10L40 9.5"/></svg></span>';
+        applyRow.innerHTML = '<span class="reel-music-apply-all-label"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 10l11-6 11 6-11 6z"/><path d="M5 16l11 6 11-6M5 22l11 6 11-6"/></svg><strong>Apply to all</strong></span>';
         body.appendChild(applyRow);
 
         const slider = document.createElement('input');
@@ -2140,6 +2140,7 @@
         brightness: Math.min(1.5, Math.max(.5, Number(source.brightness) || 1)),
         contrast: Math.min(1.5, Math.max(.5, Number(source.contrast) || 1)),
         saturation: Math.min(2, Math.max(0, Number(source.saturation) || 1)),
+        volume: Math.min(1, Math.max(0, Number.isFinite(Number(source.volume)) ? Number(source.volume) : 1)),
         effect: reelEffectIds.has(source.effect) ? source.effect : 'none',
         visualEffect: reelVisualEffectIds.has(source.visualEffect) ? source.visualEffect : 'none',
         visualEffectStart: Math.min(1, Math.max(0, Number(source.visualEffectStart) || 0)),
@@ -3080,8 +3081,10 @@
     function applyPreviewEdits() {
       const settings = currentClipItem() ? currentClipItem().clip : editState;
       const filter = 'brightness(' + settings.brightness + ') contrast(' + settings.contrast + ') saturate(' + settings.saturation + ') ' + (effectFilters[settings.effect] || '');
+      const clipVolume = Math.min(1, Math.max(0, Number.isFinite(Number(settings.volume)) ? Number(settings.volume) : 1));
       previewVideos.forEach(function (video) {
         video.style.filter = filter;
+        video.volume = clipVolume;
         applyVideoCrop(video, settings);
         ensureUserOverlay(video);
       });
@@ -5393,6 +5396,69 @@
       }, { once:true });
       picker.click();
     }
+    function openVideoVolumeEditor() {
+      const clip = selectedClip();
+      if (!clip) return;
+      closeMusicAdjustSheet();
+      const before = captureEditorSnapshot();
+      let changed = false;
+      let applyToAll = false;
+      const sheet = document.createElement('div');
+      sheet.className = 'reel-music-adjust-sheet is-volume is-video-volume';
+      const done = document.createElement('button');
+      done.type = 'button';
+      done.className = 'reel-music-adjust-done';
+      done.setAttribute('aria-label', 'Done');
+      done.innerHTML = '<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M8 25.5l10.3 10L40 9.5"/></svg>';
+      const body = document.createElement('div');
+      body.className = 'reel-music-adjust-body';
+      const applyRow = document.createElement('button');
+      applyRow.type = 'button';
+      applyRow.className = 'reel-music-apply-all';
+      applyRow.setAttribute('aria-pressed', 'false');
+      applyRow.innerHTML = '<span class="reel-music-apply-all-label"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 10l11-6 11 6-11 6z"/><path d="M5 16l11 6 11-6M5 22l11 6 11-6"/></svg><strong>Apply to all</strong></span>';
+      const slider = document.createElement('input');
+      slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.step = '1';
+      slider.value = String(Math.round((Number.isFinite(Number(clip.volume)) ? Number(clip.volume) : 1) * 100));
+      slider.className = 'reel-music-volume-slider';
+      slider.setAttribute('aria-label', 'Video volume');
+      const icon = document.createElement('span');
+      icon.className = 'reel-music-volume-icon';
+      icon.innerHTML = '<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 13h6l7-6v18l-7-6H5z"/><path d="M22 12c2 2 2 6 0 8"/><path d="M25 9c4 4 4 10 0 14"/></svg>';
+      const row = document.createElement('div');
+      row.className = 'reel-music-volume-row';
+      row.append(icon, slider);
+      body.append(applyRow, row);
+      sheet.append(done, body);
+      editStage.appendChild(sheet);
+      function paint() {
+        const value = Math.max(0, Math.min(100, Number(slider.value) || 0));
+        slider.style.setProperty('--reel-volume-fill', value + '%');
+        icon.classList.toggle('is-muted', value <= 0);
+      }
+      function applyValue() {
+        const normalized = Math.max(0, Math.min(1, Number(slider.value) / 100));
+        if (applyToAll) ensureClipState().forEach(function (item) { item.volume = normalized; });
+        else clip.volume = normalized;
+        changed = true;
+        applyPreviewEdits();
+        paint();
+      }
+      applyRow.addEventListener('click', function () {
+        applyToAll = !applyToAll;
+        applyRow.classList.toggle('is-active', applyToAll);
+        applyRow.setAttribute('aria-pressed', applyToAll ? 'true' : 'false');
+        if (applyToAll) applyValue();
+      });
+      slider.addEventListener('input', applyValue);
+      done.addEventListener('click', function (event) {
+        event.preventDefault(); event.stopPropagation();
+        if (changed) recordEditorChange(before);
+        sheet.remove();
+      });
+      paint();
+    }
+
     function openBackgroundEditor() {
       const clip = selectedClip(); if (!clip) return;
       const before = captureEditorSnapshot();
@@ -5427,7 +5493,7 @@
       const button = event.target.closest('[data-selection-tool]');
       if (!button) return;
       const toolName = button.dataset.selectionTool;
-      if (!['split','replace','delete','speed','crop','animation','filters','effects','cutout','background','magic','adjust'].includes(toolName)) return;
+      if (!['split','replace','delete','speed','crop','animation','filters','effects','cutout','background','magic','adjust','volume'].includes(toolName)) return;
       if (toolName !== 'animation' && !flow.contains(button)) return;
       event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation();
       if (toolName === 'split') splitAtPlayhead();
@@ -5440,6 +5506,7 @@
       else if (toolName === 'cutout') openCutoutEditor();
       else if (toolName === 'background') openBackgroundEditor();
       else if (toolName === 'magic') openMagicEditor();
+      else if (toolName === 'volume') openVideoVolumeEditor();
       else if (toolName === 'filters') {
         const clip = selectedClip(); if (!clip) return;
         const before = captureEditorSnapshot();
