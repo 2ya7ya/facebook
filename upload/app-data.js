@@ -1998,7 +1998,8 @@
       source = source || editState;
       return {
         speed: Math.min(10, Math.max(.1, Number(source.speed) || 1)),
-        speedCurve: ['none','custom','montage','highlight','bullet','jump-cut','flash-in','flash-out'].includes(source.speedCurve) ? source.speedCurve : 'none',
+        speedCurve: ['none','custom','montage','highlight','bullet','jump-cut','flash-in','flash-out','magic'].includes(source.speedCurve) ? source.speedCurve : 'none',
+        velocityPoints: Array.isArray(source.velocityPoints) ? source.velocityPoints.map(function(point){ return { time: Math.max(0, Number(point && point.time) || 0), speed: Math.min(10, Math.max(.1, Number(point && point.speed) || 1)) }; }).sort(function(a,b){ return a.time-b.time; }).slice(0,16) : [],
         brightness: Math.min(1.5, Math.max(.5, Number(source.brightness) || 1)),
         contrast: Math.min(1.5, Math.max(.5, Number(source.contrast) || 1)),
         saturation: Math.min(2, Math.max(0, Number(source.saturation) || 1)),
@@ -2083,6 +2084,21 @@
     };
     const speedTimingCache = new WeakMap();
     function speedAtSourceOffset(clip, sourceOffset) {
+      if (clip.speedCurve === 'magic' && Array.isArray(clip.velocityPoints) && clip.velocityPoints.length) {
+        const points = clip.velocityPoints;
+        const time = Math.max(0, Number(sourceOffset) || 0);
+        if (time <= points[0].time) return points[0].speed;
+        const last = points[points.length - 1];
+        if (time >= last.time) return last.speed;
+        for (let i = 0; i < points.length - 1; i += 1) {
+          const current = points[i], next = points[i + 1];
+          if (time < current.time || time > next.time) continue;
+          const span = Math.max(.000001, next.time - current.time);
+          const raw = Math.min(1, Math.max(0, (time - current.time) / span));
+          const eased = raw * raw * (3 - 2 * raw);
+          return current.speed + eased * (next.speed - current.speed);
+        }
+      }
       const profile = speedCurveProfiles[clip.speedCurve];
       if (!profile) return Math.min(10, Math.max(.1, Number(clip.speed) || 1));
       const span = Math.max(.001, clip.sourceEnd - clip.sourceStart);
@@ -2092,7 +2108,7 @@
       return profile[index] + (profile[index + 1] - profile[index]) * mix;
     }
     function speedTimingMap(clip) {
-      const signature = [clip.sourceStart, clip.sourceEnd, clip.speed, clip.speedCurve].join(':');
+      const signature = [clip.sourceStart, clip.sourceEnd, clip.speed, clip.speedCurve, JSON.stringify(clip.velocityPoints || [])].join(':');
       const cached = speedTimingCache.get(clip);
       if (cached && cached.signature === signature) return cached;
       const span = Math.max(.05, clip.sourceEnd - clip.sourceStart);
@@ -4339,6 +4355,62 @@
       cropVideo.load();
     }
 
+    function openMagicEditor() {
+      const clip = selectedClip();
+      if (!clip) return;
+      const before = captureEditorSnapshot();
+      const sourceDuration = Math.max(.05, clip.sourceEnd - clip.sourceStart);
+      const editor = document.createElement('div');
+      editor.className = 'reel-speed-editor reel-magic-editor';
+      editor.innerHTML = '<div class="reel-speed-tabs-row"><strong style="font-size:16px">Velocity Magic</strong><button type="button" class="reel-speed-done" aria-label="Done"><svg class="reel-speed-done-icon" viewBox="0 0 48 48"><path d="M8 25.5l10.3 10L40 9.5"/></svg></button></div>'
+        + '<div class="reel-speed-presets">'
+        + '<button type="button" class="reel-speed-preset reel-magic-apply"><span class="reel-speed-curve-card"><svg viewBox="0 0 72 56"><polyline points="8,10 37,47 64,30"/></svg></span><span>Magic</span></button>'
+        + '<button type="button" class="reel-speed-preset reel-magic-remove"><span class="reel-speed-curve-card"><svg viewBox="0 0 72 56"><path d="M19 13L53 47M53 13L19 47"/></svg></span><span>None</span></button>'
+        + '</div><p style="margin:8px 14px 0;color:#aaa;font-size:12px">3× fast → 0.2× slow motion → 1× normal</p>';
+      function applyMagic() {
+        const endPoint = Math.min(sourceDuration, 4);
+        const slowPoint = Math.min(endPoint, Math.max(.05, Math.min(2.1, sourceDuration * .525)));
+        clip.speedCurve = 'magic';
+        clip.speed = 1;
+        clip.velocityPoints = [
+          { time: 0, speed: 3 },
+          { time: slowPoint, speed: .2 },
+          { time: endPoint, speed: 1 }
+        ];
+        refreshSequenceDuration();
+        renderClipTimeline();
+        const item = layoutForClip(clip.id);
+        seekSequenceTime(item ? item.start : 0, true);
+        updateTrimSelection();
+        editor.querySelector('.reel-magic-apply').classList.add('is-active');
+        editor.querySelector('.reel-magic-remove').classList.remove('is-active');
+        recordEditorChange(before);
+        reelMessage(root, 'Velocity Magic applied');
+      }
+      function removeMagic() {
+        clip.speedCurve = 'none';
+        clip.speed = 1;
+        clip.velocityPoints = [];
+        refreshSequenceDuration();
+        renderClipTimeline();
+        const item = layoutForClip(clip.id);
+        seekSequenceTime(item ? item.start : 0, true);
+        updateTrimSelection();
+        editor.querySelector('.reel-magic-apply').classList.remove('is-active');
+        editor.querySelector('.reel-magic-remove').classList.add('is-active');
+        recordEditorChange(before);
+        reelMessage(root, 'Velocity Magic removed');
+      }
+      editor.querySelector('.reel-magic-apply').classList.toggle('is-active', clip.speedCurve === 'magic');
+      editor.querySelector('.reel-magic-remove').classList.toggle('is-active', clip.speedCurve !== 'magic');
+      editor.querySelector('.reel-magic-apply').addEventListener('click', applyMagic);
+      editor.querySelector('.reel-magic-remove').addEventListener('click', removeMagic);
+      editor.querySelector('.reel-speed-done').addEventListener('click', function(){ closeToolPanel(); });
+      openToolPanel('Magic', editor);
+      toolPanel.classList.add('is-speed-panel');
+      flow.classList.add('is-speed-editing');
+    }
+
     function openSpeedEditor() {
       const clip = selectedClip();
       if (!clip) return;
@@ -4662,7 +4734,8 @@
       else if (toolName === 'effects') openBuiltInEffectsEditor();
       else if (toolName === 'cutout') openCutoutEditor();
       else if (toolName === 'background') openBackgroundEditor();
-      else if (toolName === 'filters' || toolName === 'magic') {
+      else if (toolName === 'magic') openMagicEditor();
+      else if (toolName === 'filters') {
         const clip = selectedClip(); if (!clip) return;
         const before = captureEditorSnapshot();
         clip.effect = effectOrder[(effectOrder.indexOf(clip.effect) + 1) % effectOrder.length];
@@ -4993,7 +5066,9 @@
           reelMessage(root, target.fit === 'cover' ? 'Video fills the frame' : 'Full video is visible');
         } else if (name === 'effects') {
           openBuiltInEffectsEditor();
-        } else if (name === 'filters' || name === 'magic') {
+        } else if (name === 'magic') {
+          openMagicEditor();
+        } else if (name === 'filters') {
           const historyBefore = captureEditorSnapshot();
           const target = currentEditingTarget();
           target.effect = effectOrder[(effectOrder.indexOf(target.effect) + 1) % effectOrder.length];
