@@ -1492,6 +1492,7 @@
     const cutoutFrameCanvas = document.createElement('canvas');
     let cutoutSegmenter = null, cutoutBusy = false, cutoutFailed = false, cutoutLastRun = 0;
     let cutoutFrameReady = false;
+    let cutoutPreviousAlpha = null, cutoutPreviousAlphaW = 0, cutoutPreviousAlphaH = 0, cutoutPreviousArea = 0;
     let customCutoutMask = null, customCutoutEditing = false, customCutoutErase = true, customCutoutBrush = 34;
     function syncCutoutCanvasGeometry() {
       if (!editStage || !editVideo || !editVideo.videoWidth || !editVideo.videoHeight) return;
@@ -1534,6 +1535,7 @@
     }
     function clearCutoutPreview() {
       cutoutFrameReady = false;
+      cutoutPreviousAlpha = null; cutoutPreviousAlphaW = 0; cutoutPreviousAlphaH = 0; cutoutPreviousArea = 0;
       cutoutCanvas.hidden = true;
       cutoutBackground.hidden = true;
       setCutoutVideoVisibility(false);
@@ -1593,8 +1595,8 @@
           const sourcePixels = analysisImage.data;
           const softMask = new Uint8Array(aw * ah);
           const hardMask = new Uint8Array(aw * ah);
-          const softThreshold = 118;
-          const hardThreshold = 184;
+          const softThreshold = 144;
+          const hardThreshold = 194;
           for (let pixelIndex = 0, dataIndex = 0; pixelIndex < softMask.length; pixelIndex += 1, dataIndex += 4) {
             const confidence = Math.max(sourcePixels[dataIndex], sourcePixels[dataIndex + 3]);
             softMask[pixelIndex] = confidence >= softThreshold ? 1 : 0;
@@ -1710,24 +1712,67 @@
           dilate3x3(grown, closedA);
           erode3x3(closedA, closedB, 4);
 
-          // TikTok-style matte: preserve the complete connected subject and
-          // derive a narrow soft edge from the model confidence. This keeps
-          // hair, hands and held props while avoiding a visible source-background ring.
+          // Build a narrow matte: a solid interior plus only a one-pixel
+          // confidence-based edge. This avoids restoring a thick ring of the
+          // original background around hair, sleeves and held objects.
           const finalMask = closedB;
-          const outputMask = analysisContext.createImageData(aw,ah);
+          const interior = new Uint8Array(finalMask.length);
+          erode3x3(finalMask, interior, 8);
+          const currentAlpha = new Uint8Array(finalMask.length);
+          let currentArea = 0, minSubjectX = aw, minSubjectY = ah, maxSubjectX = -1, maxSubjectY = -1;
           for (let i = 0; i < finalMask.length; i += 1) {
             if (!finalMask[i]) continue;
             const pixel = i * 4;
             const confidence = Math.max(sourcePixels[pixel], sourcePixels[pixel + 3]);
-            let alpha;
-            if (confidence >= 212) alpha = 255;
-            else if (confidence <= 142) alpha = 0;
-            else {
-              const t = (confidence - 142) / 70;
-              const smooth = t * t * (3 - 2 * t);
-              alpha = Math.round(255 * smooth);
+            let alpha = 0;
+            if (interior[i]) alpha = confidence >= 168 ? 255 : Math.max(210, confidence);
+            else if (confidence >= 176) {
+              const t = Math.min(1, Math.max(0, (confidence - 176) / 48));
+              alpha = Math.round(72 + 183 * (t * t * (3 - 2 * t)));
             }
-            if (alpha < 18) continue;
+            if (alpha < 48) continue;
+            currentAlpha[i] = alpha;
+            currentArea += 1;
+            const x = i % aw, y = (i / aw) | 0;
+            if (x < minSubjectX) minSubjectX = x; if (x > maxSubjectX) maxSubjectX = x;
+            if (y < minSubjectY) minSubjectY = y; if (y > maxSubjectY) maxSubjectY = y;
+          }
+
+          // Reject weak or fragmented masks. Keep the last good cutout visible
+          // instead of flashing a broken partial person during model warm-up,
+          // seeks or difficult motion frames.
+          const subjectW = maxSubjectX >= minSubjectX ? maxSubjectX - minSubjectX + 1 : 0;
+          const subjectH = maxSubjectY >= minSubjectY ? maxSubjectY - minSubjectY + 1 : 0;
+          const areaRatio = currentArea / Math.max(1, aw * ah);
+          const suddenAreaChange = cutoutPreviousArea > 0 && (currentArea < cutoutPreviousArea * 0.48 || currentArea > cutoutPreviousArea * 1.9);
+          const invalidMask = areaRatio < 0.012 || subjectW < aw * 0.1 || subjectH < ah * 0.16 || suddenAreaChange;
+          if (invalidMask && cutoutFrameReady) {
+            syncCutoutCanvasGeometry();
+            cutoutCanvas.hidden = false;
+            setCutoutVideoVisibility(true);
+            return;
+          }
+
+          // Temporal stabilization only when dimensions match. Strong current
+          // pixels update quickly; uncertain boundary pixels change gradually.
+          if (cutoutPreviousAlpha && cutoutPreviousAlphaW === aw && cutoutPreviousAlphaH === ah && !invalidMask) {
+            for (let i = 0; i < currentAlpha.length; i += 1) {
+              const nowAlpha = currentAlpha[i];
+              const oldAlpha = cutoutPreviousAlpha[i];
+              if (nowAlpha >= 220) currentAlpha[i] = Math.round(nowAlpha * 0.82 + oldAlpha * 0.18);
+              else if (nowAlpha > 0 && oldAlpha > 0) currentAlpha[i] = Math.round(nowAlpha * 0.68 + oldAlpha * 0.32);
+            }
+          }
+          if (!invalidMask) {
+            cutoutPreviousAlpha = currentAlpha.slice();
+            cutoutPreviousAlphaW = aw; cutoutPreviousAlphaH = ah; cutoutPreviousArea = currentArea;
+          }
+
+          const outputMask = analysisContext.createImageData(aw,ah);
+          for (let i = 0; i < currentAlpha.length; i += 1) {
+            const alpha = currentAlpha[i];
+            if (!alpha) continue;
+            const pixel = i * 4;
             outputMask.data[pixel] = 255;
             outputMask.data[pixel + 1] = 255;
             outputMask.data[pixel + 2] = 255;
@@ -1736,7 +1781,7 @@
           analysisContext.clearRect(0,0,aw,ah);
           analysisContext.putImageData(outputMask,0,0);
           maskContext.imageSmoothingEnabled = true;
-          maskContext.filter = 'blur(0.18px)';
+          maskContext.filter = 'blur(0.08px)';
           maskContext.drawImage(analysisCanvas,0,0,w,h);
           maskContext.filter = 'none';
           if (clip.cutoutMode === 'custom' && customCutoutMask) {
