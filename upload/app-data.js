@@ -2150,72 +2150,72 @@
         case 'velocity':
           state.scaleX = state.scaleY = 1 + peak * .28 + Math.sin(t * Math.PI * 6) * .025;
           state.y = -peak * .055;
-          state.rotate = Math.sin(t * Math.PI * 4) * 1.7;
-          state.blur = peak * 1.2;
-          state.extraFilter = ' contrast(1.08) saturate(1.15)';
+          state.rotate = 0;
+          state.blur = 0;
+          state.extraFilter = ' contrast(1.04) saturate(1.08)';
           break;
         case 'velocity-ghost':
           state.scaleX = state.scaleY = 1 + peak * .25;
           state.x = shakeX * (0.9 + peak * 1.1);
           state.y = shakeY * .65;
-          state.rotate = Math.sin((Number(elapsed) || 0) * 17) * 2.2;
+          state.rotate = 0;
           state.opacity = .95;
-          state.blur = 1.6 + peak * 1.1;
-          state.extraFilter = ' contrast(1.1) saturate(1.06) drop-shadow(12px 0 0 rgba(255,255,255,.26)) drop-shadow(-8px 0 0 rgba(255,255,255,.18))';
+          state.blur = 0;
+          state.extraFilter = ' contrast(1.05) drop-shadow(10px 0 0 rgba(255,255,255,.22)) drop-shadow(-7px 0 0 rgba(255,255,255,.14))';
           break;
         case 'velocity-zoom':
           state.scaleX = state.scaleY = 1 + peak * .5 + smooth * .14;
           state.y = -peak * .09;
-          state.rotate = Math.sin(t * Math.PI * 8) * 1.2;
-          state.blur = peak * 1.4;
-          state.extraFilter = ' contrast(1.14) saturate(1.18)';
+          state.rotate = 0;
+          state.blur = 0;
+          state.extraFilter = ' contrast(1.06) saturate(1.1)';
           break;
         case 'velocity-rgb':
           state.scaleX = state.scaleY = 1 + peak * .3;
           state.x = shakeX * .4;
-          state.rotate = Math.sin((Number(elapsed) || 0) * 20) * 1.4;
-          state.blur = peak * .7;
-          state.extraFilter = ' contrast(1.12) saturate(1.3) drop-shadow(10px 0 0 rgba(255,20,100,.55)) drop-shadow(-10px 0 0 rgba(0,220,255,.52))';
+          state.rotate = 0;
+          state.blur = 0;
+          state.extraFilter = ' contrast(1.06) saturate(1.18) drop-shadow(7px 0 0 rgba(255,20,100,.44)) drop-shadow(-7px 0 0 rgba(0,220,255,.42))';
           break;
         case 'velocity-flare':
           state.scaleX = state.scaleY = 1 + peak * .26;
           state.y = -peak * .04;
-          state.blur = .9 + peak * .95;
-          state.extraFilter = ' brightness(1.08) contrast(1.12) saturate(1.18) sepia(.08) drop-shadow(0 0 18px rgba(255,210,120,.42))';
+          state.blur = 0;
+          state.extraFilter = ' brightness(1.06) contrast(1.06) saturate(1.12) sepia(.04) drop-shadow(0 0 12px rgba(255,210,120,.3))';
           break;
         case 'velocity-flash':
           state.scaleX = state.scaleY = 1 + peak * .24;
           state.y = -peak * .035;
-          state.blur = peak * .9;
+          state.blur = 0;
           state.extraFilter = ' brightness(' + (1 + flash * 1.35) + ') contrast(' + (1.06 + flash * .25) + ') saturate(' + (1.1 + flash * .55) + ')';
           break;
         case 'camera-motion':
-          state.scaleX = state.scaleY = 1.12 + smooth * .28;
-          state.x = -.08 + smooth * .16;
-          state.y = Math.sin(t * Math.PI * 2) * .035 - .03;
-          state.rotate = -3 + smooth * 6;
+          state.scaleX = state.scaleY = 1.08 + smooth * .22;
+          state.x = -.055 + smooth * .11;
+          state.y = -.02 + smooth * .035;
+          state.rotate = -1.2 + smooth * 2.4;
           state.extraFilter = ' contrast(1.08) saturate(1.08)';
           break;
         case 'speed-zoom':
-          state.scaleX = state.scaleY = 1.05 + smooth * .62 + Math.sin(t * Math.PI * 4) * .03;
-          state.y = -smooth * .08;
-          state.rotate = Math.sin(t * Math.PI * 6) * 1.4;
-          state.blur = .8 + peak * 1.3;
-          state.extraFilter = ' contrast(1.12) saturate(1.16)';
+          state.scaleX = state.scaleY = 1.04 + Math.max(0, Math.sin(t * Math.PI * 4)) * .34 + smooth * .18;
+          state.y = -Math.max(0, Math.sin(t * Math.PI * 4)) * .035;
+          state.rotate = 0;
+          state.blur = 0;
+          state.extraFilter = ' contrast(1.06) saturate(1.1)';
           break;
         case 'slowmo-zoom':
-          state.scaleX = state.scaleY = 1.04 + smooth * .74;
-          state.y = -smooth * .06;
-          state.blur = .5 + peak * .35;
-          state.extraFilter = ' brightness(1.05) contrast(1.1) saturate(1.08)';
+          state.scaleX = state.scaleY = 1.03 + smooth * .5;
+          state.y = -smooth * .045;
+          state.blur = 0;
+          state.extraFilter = ' brightness(1.03) contrast(1.05) saturate(1.05)';
           break;
         case 'handshake':
           state.scaleX = state.scaleY = 1.04;
-          state.x = shakeX * 1.25;
-          state.y = shakeY * 1.15;
-          state.rotate = Math.sin((Number(elapsed) || 0) * 48) * 2.6;
-          state.blur = .9;
-          state.extraFilter = ' contrast(1.06)';
+          state.x = shakeX * .72;
+          state.y = shakeY * .68;
+          state.rotate = Math.sin((Number(elapsed) || 0) * 48) * 1.15;
+          state.blur = 0;
+          state.extraFilter = ' contrast(1.03)';
           break;
       }
       return state;
