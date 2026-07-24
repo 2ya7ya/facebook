@@ -2193,12 +2193,15 @@
       { id: 'handshake', label: 'Handshake', thumb: '', message: 'Handshake applied' }
     ];
     const magicPresetMap = magicPresetDefinitions.reduce(function(map, preset){ map[preset.id] = preset; return map; }, Object.create(null));
-    const framePresetIds = new Set(['none','cyber-cam','phantom','dolly-zoom-pro','photo-zoom']);
+    const framePresetIds = new Set(['none','cyber-cam','phantom','dolly-zoom-pro','photo-zoom','photo-puzzle','camera-bounce','swing-zoom']);
     const framePresetDefinitions = [
       { id: 'cyber-cam', label: 'Cyber Cam', message: 'Cyber Cam applied' },
       { id: 'phantom', label: 'Phantom', message: 'Phantom applied' },
       { id: 'dolly-zoom-pro', label: 'Dolly Zoom Pro', message: 'Dolly Zoom Pro applied' },
-      { id: 'photo-zoom', label: 'Photo Zoom', message: 'Photo Zoom applied' }
+      { id: 'photo-zoom', label: 'Photo Zoom', message: 'Photo Zoom applied' },
+      { id: 'photo-puzzle', label: 'Photo Puzzle', message: 'Photo Puzzle applied' },
+      { id: 'camera-bounce', label: 'Camera Bounce', message: 'Camera Bounce applied' },
+      { id: 'swing-zoom', label: 'Swing Zoom', message: 'Swing Zoom applied' }
     ];
     const framePresetMap = framePresetDefinitions.reduce(function(map, preset){ map[preset.id] = preset; return map; }, Object.create(null));
     function clipIsPicture(clip) {
@@ -2270,6 +2273,46 @@
           state.rotate = Math.sin(t * Math.PI * 1.25) * .08;
           state.blur = gentlePunch * .22;
           state.extraFilter = ' contrast(1.04) saturate(1.03) brightness(1.01)';
+          break;
+        }
+        case 'photo-puzzle': {
+          const snap = Math.min(3, Math.floor(t * 4));
+          const offsets = [
+            { x: -.08, y: -.05, r: -2.8, s: 1.14 },
+            { x:  .06, y: -.04, r:  2.2, s: 1.11 },
+            { x: -.05, y:  .05, r: -1.8, s: 1.09 },
+            { x:  .02, y:  .01, r:  0.0, s: 1.04 }
+          ];
+          const part = offsets[snap] || offsets[offsets.length - 1];
+          const settle = pulse(.28,.08,.8) + pulse(.52,.08,.6) + pulse(.77,.08,.45);
+          state.scaleX = state.scaleY = part.s - smooth * .04;
+          state.x = part.x * (1 - smooth * .78) + Math.sin(t * Math.PI * 8) * settle * .012;
+          state.y = part.y * (1 - smooth * .82);
+          state.rotate = part.r * (1 - smooth * .8);
+          state.blur = settle * .65;
+          state.extraFilter = ' contrast(1.08) saturate(1.04) brightness(1.02)';
+          break;
+        }
+        case 'camera-bounce': {
+          const bounce = Math.abs(Math.sin(t * Math.PI * 2.85));
+          const rebound = Math.abs(Math.sin((t + .06) * Math.PI * 5.7)) * .22;
+          state.scaleX = state.scaleY = 1.08 + bounce * .11;
+          state.y = -.02 - bounce * .085 + rebound * .03;
+          state.x = Math.sin(t * Math.PI * 2.85) * .014;
+          state.rotate = Math.sin(t * Math.PI * 2.85) * 1.2;
+          state.blur = bounce * .55;
+          state.extraFilter = ' contrast(1.06) saturate(1.05)';
+          break;
+        }
+        case 'swing-zoom': {
+          const swing = Math.sin(t * Math.PI * 2.2);
+          const accel = pulse(.14,.12,1) + pulse(.58,.14,.55);
+          state.scaleX = state.scaleY = 1.16 + easeOut * .16 + accel * .06;
+          state.x = swing * .08;
+          state.y = -.01 - easeOut * .035;
+          state.rotate = swing * 6.8;
+          state.blur = accel * .32;
+          state.extraFilter = ' contrast(1.05) saturate(1.06) brightness(1.01)';
           break;
         }
       }
@@ -2534,7 +2577,8 @@
     function clipAtSequenceTime(time) {
       const layout = sequenceLayout();
       if (!layout.length) return null;
-      const bounded = Math.min(Math.max(0, Number(time) || 0), Math.max(0, timelineDuration - .0001));
+      const raw = Math.min(Math.max(0, Number(time) || 0), Math.max(0, timelineDuration));
+      const bounded = raw <= 0 ? 0 : Math.max(0, raw - .0001);
       return layout.find(function (item) { return bounded >= item.start && bounded < item.end; }) || layout[layout.length - 1];
     }
     function currentClipItem() {
