@@ -1480,10 +1480,16 @@
     toolPanel.className = 'reel-tool-panel';
     toolPanel.setAttribute('aria-hidden', 'true');
     flow.appendChild(toolPanel);
+    const videoViewport = document.createElement('div');
+    videoViewport.className = 'reel-video-viewport';
+    if (editStage && editVideo) {
+      editStage.insertBefore(videoViewport, editVideo);
+      videoViewport.appendChild(editVideo);
+    }
     const videoBackground = document.createElement('div');
     videoBackground.className = 'reel-video-gallery-background';
     videoBackground.hidden = true;
-    if (editStage) editStage.insertBefore(videoBackground, editStage.firstChild);
+    if (videoViewport) videoViewport.insertBefore(videoBackground, videoViewport.firstChild);
     let backgroundTransformEditing = false;
     const backgroundPointers = new Map();
     let backgroundGesture = null;
@@ -1515,11 +1521,11 @@
     const cutoutBackground = document.createElement('div');
     cutoutBackground.className = 'reel-cutout-background';
     cutoutBackground.hidden = true;
-    if (editStage) editStage.appendChild(cutoutBackground);
+    if (videoViewport) videoViewport.appendChild(cutoutBackground);
     const cutoutCanvas = document.createElement('canvas');
     cutoutCanvas.className = 'reel-cutout-canvas';
     cutoutCanvas.hidden = true;
-    if (editStage) editStage.appendChild(cutoutCanvas);
+    if (videoViewport) videoViewport.appendChild(cutoutCanvas);
     const cutoutMaskCanvas = document.createElement('canvas');
     const cutoutFrameCanvas = document.createElement('canvas');
     let cutoutSegmenter = null, cutoutBusy = false, cutoutFailed = false, cutoutLastRun = 0;
@@ -1528,7 +1534,8 @@
     let customCutoutMask = null, customCutoutEditing = false, customCutoutErase = true, customCutoutBrush = 34;
     function syncCutoutCanvasGeometry() {
       if (!editStage || !editVideo || !editVideo.videoWidth || !editVideo.videoHeight) return;
-      const stageRect = editStage.getBoundingClientRect();
+      const geometryHost = cutoutCanvas.parentElement || editStage;
+      const stageRect = geometryHost.getBoundingClientRect();
       const videoRect = editVideo.getBoundingClientRect();
       const boxWidth = Math.max(1, videoRect.width);
       const boxHeight = Math.max(1, videoRect.height);
@@ -4368,8 +4375,8 @@
         + '<button type="button" class="reel-speed-preset reel-magic-remove"><span class="reel-speed-curve-card"><svg viewBox="0 0 72 56"><path d="M19 13L53 47M53 13L19 47"/></svg></span><span>None</span></button>'
         + '</div><p style="margin:8px 14px 0;color:#aaa;font-size:12px">3× fast → 0.2× slow motion → 1× normal</p>';
       function applyMagic() {
-        const endPoint = Math.min(sourceDuration, 4);
-        const slowPoint = Math.min(endPoint, Math.max(.05, Math.min(2.1, sourceDuration * .525)));
+        const endPoint = sourceDuration;
+        const slowPoint = Math.max(.05, sourceDuration * .525);
         clip.speedCurve = 'magic';
         clip.speed = 1;
         clip.velocityPoints = [
@@ -4712,8 +4719,8 @@
       }
     }
     if (editStage) {
-      editStage.addEventListener('pointerdown', function(e){ if(!backgroundTransformEditing || !selectedClip() || !selectedClip().videoBackgroundImage) return; if(e.target.closest('.reel-tool-panel')) return; e.preventDefault(); backgroundPointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); try{editStage.setPointerCapture(e.pointerId);}catch(_){} resetBackgroundGesture(); });
-      editStage.addEventListener('pointermove', function(e){ if(!backgroundTransformEditing || !backgroundPointers.has(e.pointerId)) return; e.preventDefault(); backgroundPointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); const clip=selectedClip(), points=Array.from(backgroundPointers.values()), r=editStage.getBoundingClientRect(); if(!clip||!backgroundGesture)return; if(points.length===1 && backgroundGesture.type==='drag'){ clip.videoTransformX=Math.max(-3,Math.min(3,backgroundGesture.tx+(points[0].x-backgroundGesture.x)/Math.max(1,r.width))); clip.videoTransformY=Math.max(-3,Math.min(3,backgroundGesture.ty+(points[0].y-backgroundGesture.y)/Math.max(1,r.height))); } else if(points.length>=2){ if(backgroundGesture.type!=='pinch') resetBackgroundGesture(); const a=points[0],b=points[1],dx=b.x-a.x,dy=b.y-a.y,dist=Math.max(1,Math.hypot(dx,dy)),ang=Math.atan2(dy,dx)*180/Math.PI,cx=(a.x+b.x)/2,cy=(a.y+b.y)/2; clip.videoTransformScale=Math.max(.2,Math.min(5,backgroundGesture.scale*dist/backgroundGesture.distance)); clip.videoTransformRotate=backgroundGesture.rotate+(ang-backgroundGesture.angle); clip.videoTransformX=Math.max(-3,Math.min(3,backgroundGesture.tx+(cx-backgroundGesture.centerX)/Math.max(1,r.width))); clip.videoTransformY=Math.max(-3,Math.min(3,backgroundGesture.ty+(cy-backgroundGesture.centerY)/Math.max(1,r.height))); } syncVideoBackgroundAndTransform(); });
+      editStage.addEventListener('pointerdown', function(e){ if(!backgroundTransformEditing || !selectedClip() || !selectedClip().videoBackgroundImage) return; if(e.target.closest('.reel-tool-panel') || !e.target.closest('.reel-video-viewport')) return; e.preventDefault(); backgroundPointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); try{editStage.setPointerCapture(e.pointerId);}catch(_){} resetBackgroundGesture(); });
+      editStage.addEventListener('pointermove', function(e){ if(!backgroundTransformEditing || !backgroundPointers.has(e.pointerId)) return; e.preventDefault(); backgroundPointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); const clip=selectedClip(), points=Array.from(backgroundPointers.values()), r=(videoViewport || editStage).getBoundingClientRect(); if(!clip||!backgroundGesture)return; if(points.length===1 && backgroundGesture.type==='drag'){ clip.videoTransformX=Math.max(-3,Math.min(3,backgroundGesture.tx+(points[0].x-backgroundGesture.x)/Math.max(1,r.width))); clip.videoTransformY=Math.max(-3,Math.min(3,backgroundGesture.ty+(points[0].y-backgroundGesture.y)/Math.max(1,r.height))); } else if(points.length>=2){ if(backgroundGesture.type!=='pinch') resetBackgroundGesture(); const a=points[0],b=points[1],dx=b.x-a.x,dy=b.y-a.y,dist=Math.max(1,Math.hypot(dx,dy)),ang=Math.atan2(dy,dx)*180/Math.PI,cx=(a.x+b.x)/2,cy=(a.y+b.y)/2; clip.videoTransformScale=Math.max(.2,Math.min(5,backgroundGesture.scale*dist/backgroundGesture.distance)); clip.videoTransformRotate=backgroundGesture.rotate+(ang-backgroundGesture.angle); clip.videoTransformX=Math.max(-3,Math.min(3,backgroundGesture.tx+(cx-backgroundGesture.centerX)/Math.max(1,r.width))); clip.videoTransformY=Math.max(-3,Math.min(3,backgroundGesture.ty+(cy-backgroundGesture.centerY)/Math.max(1,r.height))); } syncVideoBackgroundAndTransform(); });
       const endBgPointer=function(e){ if(!backgroundPointers.has(e.pointerId))return; backgroundPointers.delete(e.pointerId); resetBackgroundGesture(); };
       editStage.addEventListener('pointerup',endBgPointer); editStage.addEventListener('pointercancel',endBgPointer);
     }
