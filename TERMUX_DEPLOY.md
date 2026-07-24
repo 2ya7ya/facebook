@@ -1,6 +1,6 @@
 cd ~/facebook || exit 1
 
-ZIP="$HOME/storage/downloads/facebook_magic_second_pass_reference_tuned.zip"
+ZIP="$HOME/storage/downloads/facebook_magic_second_pass_thumbnails_fixed.zip"
 
 if [ ! -f "$ZIP" ]; then
   echo "File not found: $ZIP"
@@ -14,7 +14,7 @@ git add .
 if git diff --cached --quiet; then
   echo "Nothing new to commit"
 else
-  git commit -m "Second pass tune magic effects from TikTok references"
+  git commit -m "Embed Magic GIF thumbnails"
   git push origin main
 fi
 
