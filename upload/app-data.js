@@ -1480,6 +1480,38 @@
     toolPanel.className = 'reel-tool-panel';
     toolPanel.setAttribute('aria-hidden', 'true');
     flow.appendChild(toolPanel);
+    const videoBackground = document.createElement('div');
+    videoBackground.className = 'reel-video-gallery-background';
+    videoBackground.hidden = true;
+    if (editStage) editStage.insertBefore(videoBackground, editStage.firstChild);
+    let backgroundTransformEditing = false;
+    const backgroundPointers = new Map();
+    let backgroundGesture = null;
+    function selectedVisualSettings() { const item = currentClipItem(); return item ? item.clip : editState; }
+    function baseVideoTransform(settings) {
+      const x = Number(settings && settings.videoTransformX) || 0;
+      const y = Number(settings && settings.videoTransformY) || 0;
+      const scale = Math.max(.2, Math.min(5, Number(settings && settings.videoTransformScale) || 1));
+      const rotate = Number(settings && settings.videoTransformRotate) || 0;
+      return 'translate3d(' + (x * 100) + '%,' + (y * 100) + '%,0) rotate(' + rotate + 'deg) scale(' + scale + ')';
+    }
+    function syncVideoBackgroundAndTransform() {
+      const settings = selectedVisualSettings();
+      const source = settings && settings.videoBackgroundImage || '';
+      videoBackground.hidden = !source;
+      videoBackground.style.backgroundImage = source ? 'url("' + String(source).replace(/"/g, '%22') + '")' : '';
+      const transform = baseVideoTransform(settings);
+      previewVideos.forEach(function(video){
+        if (!video.__reelClipAnimationActive) {
+          video.style.transform = transform;
+          video.style.transformOrigin = '50% 50%';
+        }
+      });
+      if (!cutoutCanvas.hidden) {
+        cutoutCanvas.style.transform = transform;
+        cutoutCanvas.style.transformOrigin = '50% 50%';
+      }
+    }
     const cutoutBackground = document.createElement('div');
     cutoutBackground.className = 'reel-cutout-background';
     cutoutBackground.hidden = true;
@@ -1992,7 +2024,12 @@
         ,animationCombo: String(source.animationCombo || 'none'),
         cutoutMode: ['none','background','custom'].includes(source.cutoutMode) ? source.cutoutMode : 'none',
         cutoutStroke: Math.max(-1, Math.min(13, Number(source.cutoutStroke) || 0)),
-        cutoutBackgroundImage: typeof source.cutoutBackgroundImage === 'string' ? source.cutoutBackgroundImage : ''
+        cutoutBackgroundImage: typeof source.cutoutBackgroundImage === 'string' ? source.cutoutBackgroundImage : '',
+        videoBackgroundImage: typeof source.videoBackgroundImage === 'string' ? source.videoBackgroundImage : '',
+        videoTransformX: Math.max(-3, Math.min(3, Number(source.videoTransformX) || 0)),
+        videoTransformY: Math.max(-3, Math.min(3, Number(source.videoTransformY) || 0)),
+        videoTransformScale: Math.max(.2, Math.min(5, Number(source.videoTransformScale) || 1)),
+        videoTransformRotate: Number(source.videoTransformRotate) || 0
       };
     }
     function normalizeClientClip(clip, fallbackStart, fallbackEnd) {
@@ -2547,6 +2584,7 @@
         applyVideoCrop(video, settings);
         ensureUserOverlay(video);
       });
+      syncVideoBackgroundAndTransform();
       updateCutoutPreview(true);
     }
     function renderVisualEffectPreview() {
@@ -2583,17 +2621,18 @@
         if (editVideo.__reelClipAnimationActive) {
           editVideo.__reelClipAnimationActive = false;
           editVideo.style.removeProperty('opacity');
-          editVideo.style.removeProperty('transform');
-          editVideo.style.removeProperty('transform-origin');
           editVideo.style.filter = 'brightness(' + item.clip.brightness + ') contrast(' + item.clip.contrast + ') saturate(' + item.clip.saturation + ') ' + (effectFilters[item.clip.effect] || '');
         }
+        editVideo.style.transform = baseVideoTransform(item.clip);
+        editVideo.style.transformOrigin = '50% 50%';
         return;
       }
       editVideo.__reelClipAnimationActive = true;
       const elapsed = Math.max(0, Math.min(item.duration, currentSequenceTime - item.start));
       const animation = clipAnimationState(item.clip, elapsed, item.duration);
       editVideo.style.opacity = String(animation.opacity);
-      editVideo.style.transform = 'translate3d(' + (animation.x * 100) + '%,' + (animation.y * 100) + '%,0) rotate(' + animation.rotate + 'deg) scale(' + animation.scaleX + ',' + animation.scaleY + ')';
+      const bx = Number(item.clip.videoTransformX) || 0, by = Number(item.clip.videoTransformY) || 0, bs = Math.max(.2, Math.min(5, Number(item.clip.videoTransformScale) || 1)), br = Number(item.clip.videoTransformRotate) || 0;
+      editVideo.style.transform = 'translate3d(' + ((bx + animation.x) * 100) + '%,' + ((by + animation.y) * 100) + '%,0) rotate(' + (br + animation.rotate) + 'deg) scale(' + (bs * animation.scaleX) + ',' + (bs * animation.scaleY) + ')';
       editVideo.style.transformOrigin = '50% 50%';
       const baseFilter = 'brightness(' + item.clip.brightness + ') contrast(' + item.clip.contrast + ') saturate(' + item.clip.saturation + ') ' + (effectFilters[item.clip.effect] || '');
       editVideo.style.filter = baseFilter + (animation.blur ? ' blur(' + animation.blur + 'px)' : '');
@@ -4563,11 +4602,55 @@
       openToolPanel('Cutout',wrap); toolPanel.classList.add('is-cutout-panel'); flow.classList.add('is-cutout-editing'); sync();
     }
 
+    function chooseVideoBackground(onDone) {
+      const picker = document.createElement('input');
+      picker.type = 'file'; picker.accept = 'image/*'; picker.style.display = 'none';
+      document.body.appendChild(picker);
+      picker.addEventListener('change', function(){
+        const file = picker.files && picker.files[0];
+        if (!file) { picker.remove(); return; }
+        const reader = new FileReader();
+        reader.onload = function(){ const clip = selectedClip(); if (clip) { clip.videoBackgroundImage = String(reader.result || ''); syncVideoBackgroundAndTransform(); if (onDone) onDone(clip); } picker.remove(); };
+        reader.onerror = function(){ picker.remove(); reelMessage(root, 'Could not open that picture.'); };
+        reader.readAsDataURL(file);
+      }, { once:true });
+      picker.click();
+    }
+    function openBackgroundEditor() {
+      const clip = selectedClip(); if (!clip) return;
+      const before = captureEditorSnapshot();
+      const showEditor = function(){
+        backgroundTransformEditing = true;
+        const wrap = document.createElement('div'); wrap.className = 'reel-background-editor';
+        wrap.innerHTML = '<p>Drag to move. Pinch to resize and rotate.</p><div><button type="button" data-bg-action="replace">Gallery</button><button type="button" data-bg-action="reset">Reset position</button><button type="button" data-bg-action="done">Done</button></div>';
+        wrap.querySelector('[data-bg-action="replace"]').addEventListener('click', function(){ chooseVideoBackground(function(){ applyPreviewEdits(); }); });
+        wrap.querySelector('[data-bg-action="reset"]').addEventListener('click', function(){ clip.videoTransformX=0; clip.videoTransformY=0; clip.videoTransformScale=1; clip.videoTransformRotate=0; syncVideoBackgroundAndTransform(); });
+        wrap.querySelector('[data-bg-action="done"]').addEventListener('click', function(){ backgroundTransformEditing=false; backgroundPointers.clear(); backgroundGesture=null; recordEditorChange(before); closeToolPanel(); renderClipTimeline(); });
+        openToolPanel('Background', wrap); syncVideoBackgroundAndTransform();
+      };
+      if (!clip.videoBackgroundImage) chooseVideoBackground(function(){ showEditor(); applyPreviewEdits(); }); else showEditor();
+    }
+    function resetBackgroundGesture() {
+      const points = Array.from(backgroundPointers.values());
+      const clip = selectedClip(); if (!clip || !points.length) { backgroundGesture = null; return; }
+      if (points.length === 1) backgroundGesture = { type:'drag', x:points[0].x, y:points[0].y, tx:Number(clip.videoTransformX)||0, ty:Number(clip.videoTransformY)||0 };
+      else {
+        const a=points[0], b=points[1], dx=b.x-a.x, dy=b.y-a.y;
+        backgroundGesture={type:'pinch', distance:Math.max(1,Math.hypot(dx,dy)), angle:Math.atan2(dy,dx)*180/Math.PI, scale:Number(clip.videoTransformScale)||1, rotate:Number(clip.videoTransformRotate)||0, centerX:(a.x+b.x)/2, centerY:(a.y+b.y)/2, tx:Number(clip.videoTransformX)||0, ty:Number(clip.videoTransformY)||0};
+      }
+    }
+    if (editStage) {
+      editStage.addEventListener('pointerdown', function(e){ if(!backgroundTransformEditing || !selectedClip() || !selectedClip().videoBackgroundImage) return; if(e.target.closest('.reel-tool-panel')) return; e.preventDefault(); backgroundPointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); try{editStage.setPointerCapture(e.pointerId);}catch(_){} resetBackgroundGesture(); });
+      editStage.addEventListener('pointermove', function(e){ if(!backgroundTransformEditing || !backgroundPointers.has(e.pointerId)) return; e.preventDefault(); backgroundPointers.set(e.pointerId,{x:e.clientX,y:e.clientY}); const clip=selectedClip(), points=Array.from(backgroundPointers.values()), r=editStage.getBoundingClientRect(); if(!clip||!backgroundGesture)return; if(points.length===1 && backgroundGesture.type==='drag'){ clip.videoTransformX=Math.max(-3,Math.min(3,backgroundGesture.tx+(points[0].x-backgroundGesture.x)/Math.max(1,r.width))); clip.videoTransformY=Math.max(-3,Math.min(3,backgroundGesture.ty+(points[0].y-backgroundGesture.y)/Math.max(1,r.height))); } else if(points.length>=2){ if(backgroundGesture.type!=='pinch') resetBackgroundGesture(); const a=points[0],b=points[1],dx=b.x-a.x,dy=b.y-a.y,dist=Math.max(1,Math.hypot(dx,dy)),ang=Math.atan2(dy,dx)*180/Math.PI,cx=(a.x+b.x)/2,cy=(a.y+b.y)/2; clip.videoTransformScale=Math.max(.2,Math.min(5,backgroundGesture.scale*dist/backgroundGesture.distance)); clip.videoTransformRotate=backgroundGesture.rotate+(ang-backgroundGesture.angle); clip.videoTransformX=Math.max(-3,Math.min(3,backgroundGesture.tx+(cx-backgroundGesture.centerX)/Math.max(1,r.width))); clip.videoTransformY=Math.max(-3,Math.min(3,backgroundGesture.ty+(cy-backgroundGesture.centerY)/Math.max(1,r.height))); } syncVideoBackgroundAndTransform(); });
+      const endBgPointer=function(e){ if(!backgroundPointers.has(e.pointerId))return; backgroundPointers.delete(e.pointerId); resetBackgroundGesture(); };
+      editStage.addEventListener('pointerup',endBgPointer); editStage.addEventListener('pointercancel',endBgPointer);
+    }
+
     document.addEventListener('click', function (event) {
       const button = event.target.closest('[data-selection-tool]');
       if (!button) return;
       const toolName = button.dataset.selectionTool;
-      if (!['split','replace','delete','speed','crop','animation','filters','effects','cutout','magic','adjust'].includes(toolName)) return;
+      if (!['split','replace','delete','speed','crop','animation','filters','effects','cutout','background','magic','adjust'].includes(toolName)) return;
       if (toolName !== 'animation' && !flow.contains(button)) return;
       event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation();
       if (toolName === 'split') splitAtPlayhead();
@@ -4578,6 +4661,7 @@
       else if (toolName === 'animation') openAnimationEditor();
       else if (toolName === 'effects') openBuiltInEffectsEditor();
       else if (toolName === 'cutout') openCutoutEditor();
+      else if (toolName === 'background') openBackgroundEditor();
       else if (toolName === 'filters' || toolName === 'magic') {
         const clip = selectedClip(); if (!clip) return;
         const before = captureEditorSnapshot();
