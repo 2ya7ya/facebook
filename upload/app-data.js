@@ -1013,8 +1013,20 @@
       recorder.addEventListener('stop', resolve, { once: true });
       recorder.addEventListener('error', function () { reject(new Error('The picture clip could not be prepared.')); }, { once: true });
     });
-    recorder.start(200);
-    await new Promise(function (resolve) { setTimeout(resolve, 1800); });
+    let pictureFrameTimer = 0;
+    function repaintPictureFrame() {
+      context.fillStyle = '#000';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+      const track = stream.getVideoTracks && stream.getVideoTracks()[0];
+      if (track && typeof track.requestFrame === 'function') track.requestFrame();
+    }
+    recorder.start(160);
+    repaintPictureFrame();
+    pictureFrameTimer = window.setInterval(repaintPictureFrame, 70);
+    await new Promise(function (resolve) { setTimeout(resolve, 1900); });
+    window.clearInterval(pictureFrameTimer);
+    repaintPictureFrame();
     recorder.stop();
     await stopped;
     stream.getTracks().forEach(function (track) { track.stop(); });
@@ -4303,9 +4315,10 @@
       const selected = file.files && file.files[0];
       if (!selected) return;
       const picture = /^image\//i.test(selected.type || '');
-      if (selected.size > 7 * 1024 * 1024) {
+      const maximumSelectedSize = picture ? 20 * 1024 * 1024 : 7 * 1024 * 1024;
+      if (selected.size > maximumSelectedSize) {
         file.value = '';
-        reelMessage(root, picture ? 'Choose a picture smaller than 7 MB.' : 'Choose a video smaller than 7 MB.');
+        reelMessage(root, picture ? 'Choose a picture smaller than 20 MB.' : 'Choose a video smaller than 7 MB.');
         return;
       }
       selectedVideo = selected;
