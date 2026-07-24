@@ -1523,9 +1523,10 @@
     }
     function syncCutoutBackground(clip) {
       const source = clip && clip.cutoutBackgroundImage || '';
-      cutoutBackground.hidden = !source;
-      cutoutBackground.style.backgroundImage = source ? 'url("' + String(source).replace(/"/g, '%22') + '")' : '';
-      if (source) syncCutoutCanvasGeometry();
+      const showGalleryBackground = !!source && clip && Number(clip.cutoutStroke) === -1;
+      cutoutBackground.hidden = !showGalleryBackground;
+      cutoutBackground.style.backgroundImage = showGalleryBackground ? 'url("' + String(source).replace(/"/g, '%22') + '")' : '';
+      if (showGalleryBackground) syncCutoutCanvasGeometry();
     }
     function setCutoutVideoVisibility(active) {
       previewVideos.forEach(function (video) { video.style.visibility = active ? 'hidden' : ''; });
@@ -1595,8 +1596,9 @@
           const sourcePixels = analysisImage.data;
           const softMask = new Uint8Array(aw * ah);
           const hardMask = new Uint8Array(aw * ah);
-          const softThreshold = 144;
-          const hardThreshold = 194;
+          const galleryMatte = !!(clip && clip.cutoutBackgroundImage && Number(clip.cutoutStroke) === -1);
+          const softThreshold = galleryMatte ? 154 : 144;
+          const hardThreshold = galleryMatte ? 202 : 194;
           for (let pixelIndex = 0, dataIndex = 0; pixelIndex < softMask.length; pixelIndex += 1, dataIndex += 4) {
             const confidence = Math.max(sourcePixels[dataIndex], sourcePixels[dataIndex + 3]);
             softMask[pixelIndex] = confidence >= softThreshold ? 1 : 0;
@@ -1716,19 +1718,24 @@
           // confidence-based edge. This avoids restoring a thick ring of the
           // original background around hair, sleeves and held objects.
           const finalMask = closedB;
-          const interior = new Uint8Array(finalMask.length);
-          erode3x3(finalMask, interior, 8);
-          const currentAlpha = new Uint8Array(finalMask.length);
+          const alphaMask = new Uint8Array(finalMask.length);
+          if (galleryMatte) erode3x3(finalMask, alphaMask, 5);
+          else alphaMask.set(finalMask);
+          const interior = new Uint8Array(alphaMask.length);
+          erode3x3(alphaMask, interior, galleryMatte ? 7 : 8);
+          const currentAlpha = new Uint8Array(alphaMask.length);
           let currentArea = 0, minSubjectX = aw, minSubjectY = ah, maxSubjectX = -1, maxSubjectY = -1;
-          for (let i = 0; i < finalMask.length; i += 1) {
-            if (!finalMask[i]) continue;
+          for (let i = 0; i < alphaMask.length; i += 1) {
+            if (!alphaMask[i]) continue;
             const pixel = i * 4;
             const confidence = Math.max(sourcePixels[pixel], sourcePixels[pixel + 3]);
             let alpha = 0;
-            if (interior[i]) alpha = confidence >= 168 ? 255 : Math.max(210, confidence);
-            else if (confidence >= 176) {
-              const t = Math.min(1, Math.max(0, (confidence - 176) / 48));
-              alpha = Math.round(72 + 183 * (t * t * (3 - 2 * t)));
+            if (interior[i]) alpha = confidence >= (galleryMatte ? 178 : 168) ? 255 : Math.max(galleryMatte ? 228 : 210, confidence);
+            else if (confidence >= (galleryMatte ? 206 : 176)) {
+              const edgeStart = galleryMatte ? 206 : 176;
+              const edgeRange = galleryMatte ? 34 : 48;
+              const t = Math.min(1, Math.max(0, (confidence - edgeStart) / edgeRange));
+              alpha = Math.round((galleryMatte ? 40 : 72) + (galleryMatte ? 215 : 183) * (t * t * (3 - 2 * t)));
             }
             if (alpha < 48) continue;
             currentAlpha[i] = alpha;
@@ -1781,7 +1788,7 @@
           analysisContext.clearRect(0,0,aw,ah);
           analysisContext.putImageData(outputMask,0,0);
           maskContext.imageSmoothingEnabled = true;
-          maskContext.filter = 'blur(0.08px)';
+          maskContext.filter = galleryMatte ? 'blur(0px)' : 'blur(0.08px)';
           maskContext.drawImage(analysisCanvas,0,0,w,h);
           maskContext.filter = 'none';
           if (clip.cutoutMode === 'custom' && customCutoutMask) {
@@ -2195,7 +2202,7 @@
         ,animationOut: String(source.animationOut || 'none')
         ,animationCombo: String(source.animationCombo || 'none'),
         cutoutMode: ['none','background','custom'].includes(source.cutoutMode) ? source.cutoutMode : 'none',
-        cutoutStroke: Math.max(0, Math.min(13, Number(source.cutoutStroke) || 0)),
+        cutoutStroke: Math.max(-1, Math.min(13, Number(source.cutoutStroke) || 0)),
         cutoutBackgroundImage: typeof source.cutoutBackgroundImage === 'string' ? source.cutoutBackgroundImage : ''
       };
     }
@@ -4709,7 +4716,8 @@
       let cutoutView = 'main';
       function applyStroke(){
         const filters=['none','drop-shadow(0 0 1px #fff) drop-shadow(0 0 4px #fff)','drop-shadow(-2px 0 #00f2ea) drop-shadow(2px 0 #ff0050)','drop-shadow(0 0 6px #ffe66d) drop-shadow(0 0 12px #ffe66d)','drop-shadow(0 0 3px #8cf0ff) drop-shadow(0 0 8px #8cf0ff)','drop-shadow(0 0 3px #ff74d4) drop-shadow(0 0 8px #ff74d4)','drop-shadow(0 0 4px #ffd24d) drop-shadow(0 0 10px #ffd24d)','drop-shadow(0 0 2px rgba(0,0,0,.9)) drop-shadow(0 0 10px rgba(0,0,0,.65))','drop-shadow(-3px 0 #2cf2ff) drop-shadow(3px 0 #6f37ff) drop-shadow(0 0 8px #00d9ff)','drop-shadow(0 0 4px #ff4b00) drop-shadow(0 0 10px #ff9d00) drop-shadow(0 -4px 8px #ffd000)','drop-shadow(0 0 3px #d9fbff) drop-shadow(0 0 9px #62dfff) drop-shadow(0 0 15px #aef7ff)','drop-shadow(-3px 0 #ff3864) drop-shadow(-1px 0 #ffcf33) drop-shadow(2px 0 #28e090) drop-shadow(4px 0 #4d7dff)','drop-shadow(0 0 0 #fff) drop-shadow(4px 4px 0 #000) drop-shadow(-2px -2px 0 #fff)','drop-shadow(-3px 0 rgba(0,255,255,.9)) drop-shadow(3px 0 rgba(255,0,255,.9)) drop-shadow(0 0 12px rgba(110,70,255,.9))'];
-        cutoutCanvas.style.filter=filters[Number(clip.cutoutStroke)||0]||'none';
+        const strokeIndex = Math.max(0, Number(clip.cutoutStroke) || 0);
+        cutoutCanvas.style.filter=filters[strokeIndex]||'none';
         syncCutoutBackground(clip);
       }
       function sync(){
@@ -4719,7 +4727,7 @@
         const tools=wrap.querySelector('.reel-cutout-custom-tools'); tools.hidden=!(clip.cutoutMode==='custom'&&cutoutView!=='stroke');
         const strokes=wrap.querySelector('.reel-cutout-stroke-options'); strokes.hidden=cutoutView!=='stroke';
         wrap.querySelectorAll('[data-cutout-stroke]').forEach(function(b){
-          const galleryActive = b.dataset.cutoutStroke === 'gallery' && !!clip.cutoutBackgroundImage;
+          const galleryActive = b.dataset.cutoutStroke === 'gallery' && !!clip.cutoutBackgroundImage && Number(clip.cutoutStroke) === -1;
           const styleActive = b.dataset.cutoutStroke !== 'gallery' && Number(b.dataset.cutoutStroke) === (Number(clip.cutoutStroke) || 0);
           b.classList.toggle('is-active', galleryActive || styleActive);
         });
@@ -4748,7 +4756,7 @@
             const file = picker.files && picker.files[0];
             if (!file) { picker.remove(); return; }
             const reader = new FileReader();
-            reader.onload = function(){ clip.cutoutBackgroundImage = String(reader.result || ''); syncCutoutBackground(clip); sync(); applyPreviewEdits(); picker.remove(); };
+            reader.onload = function(){ clip.cutoutBackgroundImage = String(reader.result || ''); clip.cutoutStroke = -1; syncCutoutBackground(clip); sync(); applyPreviewEdits(); picker.remove(); };
             reader.onerror = function(){ picker.remove(); reelMessage(root, 'Could not open that picture.'); };
             reader.readAsDataURL(file);
           }, { once:true });
@@ -4756,6 +4764,7 @@
           return;
         }
         clip.cutoutStroke = Number(b.dataset.cutoutStroke) || 0;
+        if (clip.cutoutStroke === 0) clip.cutoutBackgroundImage = '';
         applyStroke(); sync();
       });});
       wrap.querySelectorAll('[data-cutout-brush]').forEach(function(b){b.addEventListener('click',function(){ customCutoutErase=b.dataset.cutoutBrush==='erase'; wrap.querySelectorAll('[data-cutout-brush]').forEach(function(x){x.classList.toggle('is-active',x===b)}); });});
