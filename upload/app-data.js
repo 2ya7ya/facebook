@@ -1557,7 +1557,71 @@
           maskContext.setTransform(1,0,0,1,0,0);
           maskContext.globalCompositeOperation = 'source-over';
           maskContext.clearRect(0,0,w,h);
-          maskContext.drawImage(results.segmentationMask,0,0,w,h);
+
+          // Clean MediaPipe's soft mask before applying it. Working on a small
+          // grid keeps this fast on Android while letting us reject detached
+          // background objects and retain the main person-shaped component.
+          const analysisScale = Math.min(1, 180 / Math.max(w, h));
+          const aw = Math.max(48, Math.round(w * analysisScale));
+          const ah = Math.max(48, Math.round(h * analysisScale));
+          const analysisCanvas = document.createElement('canvas');
+          analysisCanvas.width = aw; analysisCanvas.height = ah;
+          const analysisContext = analysisCanvas.getContext('2d', { willReadFrequently: true });
+          analysisContext.clearRect(0,0,aw,ah);
+          analysisContext.drawImage(results.segmentationMask,0,0,aw,ah);
+          const analysisImage = analysisContext.getImageData(0,0,aw,ah);
+          const sourcePixels = analysisImage.data;
+          const binary = new Uint8Array(aw * ah);
+          const threshold = 145;
+          for (let pixelIndex = 0, dataIndex = 0; pixelIndex < binary.length; pixelIndex += 1, dataIndex += 4) {
+            const confidence = Math.max(sourcePixels[dataIndex], sourcePixels[dataIndex + 3]);
+            binary[pixelIndex] = confidence >= threshold ? 1 : 0;
+          }
+          // Remove isolated specks with a compact 3x3 majority pass.
+          const cleaned = new Uint8Array(binary.length);
+          for (let y = 1; y < ah - 1; y += 1) {
+            for (let x = 1; x < aw - 1; x += 1) {
+              let neighbours = 0;
+              for (let oy = -1; oy <= 1; oy += 1) for (let ox = -1; ox <= 1; ox += 1) neighbours += binary[(y + oy) * aw + x + ox];
+              cleaned[y * aw + x] = neighbours >= 5 ? 1 : 0;
+            }
+          }
+          const visited = new Uint8Array(cleaned.length);
+          let largest = [];
+          const queue = new Int32Array(cleaned.length);
+          for (let seed = 0; seed < cleaned.length; seed += 1) {
+            if (!cleaned[seed] || visited[seed]) continue;
+            let head = 0, tail = 0;
+            queue[tail++] = seed; visited[seed] = 1;
+            const component = [];
+            while (head < tail) {
+              const current = queue[head++]; component.push(current);
+              const cx = current % aw, cy = (current / aw) | 0;
+              const neighbours = [current-1,current+1,current-aw,current+aw];
+              for (let ni = 0; ni < 4; ni += 1) {
+                const next = neighbours[ni];
+                if (next < 0 || next >= cleaned.length || visited[next] || !cleaned[next]) continue;
+                const nx = next % aw;
+                if (Math.abs(nx - cx) > 1) continue;
+                visited[next] = 1; queue[tail++] = next;
+              }
+            }
+            if (component.length > largest.length) largest = component;
+          }
+          const outputMask = analysisContext.createImageData(aw,ah);
+          for (let i = 0; i < largest.length; i += 1) {
+            const pixel = largest[i] * 4;
+            outputMask.data[pixel] = 255;
+            outputMask.data[pixel + 1] = 255;
+            outputMask.data[pixel + 2] = 255;
+            outputMask.data[pixel + 3] = 255;
+          }
+          analysisContext.clearRect(0,0,aw,ah);
+          analysisContext.putImageData(outputMask,0,0);
+          maskContext.imageSmoothingEnabled = true;
+          maskContext.filter = 'blur(0.7px)';
+          maskContext.drawImage(analysisCanvas,0,0,w,h);
+          maskContext.filter = 'none';
           if (clip.cutoutMode === 'custom' && customCutoutMask) {
             maskContext.globalCompositeOperation = 'destination-in';
             maskContext.drawImage(customCutoutMask,0,0,w,h);
@@ -1606,14 +1670,27 @@
       const active = clip && clip.cutoutMode && clip.cutoutMode !== 'none';
       if (!active) { clearCutoutPreview(); return; }
       if (!editVideo || editVideo.readyState < 2) {
-        cutoutCanvas.hidden = true;
-        setCutoutVideoVisibility(false);
+        // During timeline scrubbing the browser may temporarily lower
+        // readyState. Keep the most recent cutout frame pinned over the video
+        // instead of flashing the uncut original frame.
+        if (cutoutFrameReady) {
+          syncCutoutCanvasGeometry();
+          cutoutCanvas.hidden = false;
+          setCutoutVideoVisibility(true);
+        } else {
+          cutoutCanvas.hidden = true;
+          setCutoutVideoVisibility(false);
+        }
         return;
       }
-      // Keep the original video visible until a valid segmented frame is ready.
+      // Keep the previous valid cutout visible while a newly-seeked frame is
+      // being segmented. Only show the original before the first mask exists.
       if (!cutoutFrameReady) {
         cutoutCanvas.hidden = true;
         setCutoutVideoVisibility(false);
+      } else {
+        cutoutCanvas.hidden = false;
+        setCutoutVideoVisibility(true);
       }
       const now = performance.now();
       if (!force && (cutoutBusy || now - cutoutLastRun < 95)) return;
