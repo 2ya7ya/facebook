@@ -1955,12 +1955,51 @@
       sheet.appendChild(done);
       const body = document.createElement('div'); body.className = 'reel-music-adjust-body'; sheet.appendChild(body);
       if (mode === 'volume') {
-        const slider = document.createElement('input'); slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.step = '1'; slider.value = String(Math.round(track.volume * 100)); slider.className = 'reel-music-volume-slider';
-        const icon = document.createElement('img'); icon.src = '/reel-ui/sound-volume.png'; icon.alt = '';
+        let applyToAll = false;
+        const applyRow = document.createElement('button');
+        applyRow.type = 'button';
+        applyRow.className = 'reel-music-apply-all';
+        applyRow.setAttribute('aria-pressed', 'false');
+        applyRow.innerHTML = '<span class="reel-music-apply-all-label"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 10l11-6 11 6-11 6z"/><path d="M5 16l11 6 11-6M5 22l11 6 11-6"/></svg><strong>Apply to all</strong></span><span class="reel-music-apply-all-check" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M8 25.5l10.3 10L40 9.5"/></svg></span>';
+        body.appendChild(applyRow);
+
+        const slider = document.createElement('input');
+        slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.step = '1';
+        slider.value = String(Math.round(track.volume * 100));
+        slider.className = 'reel-music-volume-slider';
+        slider.setAttribute('aria-label', 'Volume');
+        const icon = document.createElement('span');
+        icon.className = 'reel-music-volume-icon';
+        icon.innerHTML = '<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 13h6l7-6v18l-7-6H5z"/><path d="M22 12c2 2 2 6 0 8"/><path d="M25 9c4 4 4 10 0 14"/></svg>';
         const wrap = document.createElement('div'); wrap.className = 'reel-music-volume-row'; wrap.append(icon, slider); body.appendChild(wrap);
         const before = captureEditorSnapshot(); let changed = false;
-        slider.addEventListener('input', function () { track.volume = Number(slider.value) / 100; changed = true; resumeMusicAdjustmentPlayback(); });
+        function paintVolumeTrack() {
+          const value = Math.max(0, Math.min(100, Number(slider.value) || 0));
+          slider.style.setProperty('--reel-volume-fill', value + '%');
+          icon.classList.toggle('is-muted', value <= 0);
+        }
+        function setVolume(value) {
+          const normalized = Math.max(0, Math.min(1, Number(value) / 100));
+          if (applyToAll) ensureMusicTracks().forEach(function (item) { item.volume = normalized; });
+          else track.volume = normalized;
+          changed = true;
+          paintVolumeTrack();
+          resumeMusicAdjustmentPlayback();
+        }
+        applyRow.addEventListener('click', function () {
+          applyToAll = !applyToAll;
+          applyRow.classList.toggle('is-active', applyToAll);
+          applyRow.setAttribute('aria-pressed', applyToAll ? 'true' : 'false');
+          if (applyToAll) {
+            const normalized = Math.max(0, Math.min(1, Number(slider.value) / 100));
+            ensureMusicTracks().forEach(function (item) { item.volume = normalized; });
+            changed = true;
+            resumeMusicAdjustmentPlayback();
+          }
+        });
+        slider.addEventListener('input', function () { setVolume(slider.value); });
         slider.addEventListener('change', function () { if (changed) recordEditorChange(before); changed = false; });
+        paintVolumeTrack();
       } else {
         [['Fade in','fadeIn'],['Fade out','fadeOut']].forEach(function (item) {
           const duration = Math.max(.18, track.end - track.start); const maxFade = Math.min(10, duration / 2);
@@ -2018,6 +2057,12 @@
         copyButton.setAttribute('aria-disabled', disableCopy ? 'true' : 'false');
         copyButton.title = disableCopy ? 'All clips already have sound' : 'Copy sound to next clip';
       }
+      ['volume','fade'].forEach(function (action) {
+        const control = musicSelectionToolbar.querySelector('[data-music-track-action="' + action + '"]');
+        if (!control) return;
+        control.disabled = !music;
+        control.setAttribute('aria-disabled', music ? 'false' : 'true');
+      });
       musicSelectionToolbar.classList.toggle('is-visible', visible);
       musicSelectionToolbar.setAttribute('aria-hidden', visible ? 'false' : 'true');
       if (editStage) editStage.classList.toggle('is-music-track-selected', visible);
