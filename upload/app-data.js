@@ -1042,7 +1042,7 @@
     const blob = new Blob(chunks, { type: recorder.mimeType || 'video/webm' });
     if (!blob.size) throw new Error('The picture clip could not be prepared.');
     const videoData = await blobToDataUrl(blob);
-    return { videoData: videoData, imageData: imageData, thumbnail: imageData, duration: 4, encodedDuration: 1.8 };
+    return { videoData: videoData, imageData: imageData, thumbnail: imageData, duration: 3, encodedDuration: 1.8 };
   }
 
 
@@ -1561,6 +1561,12 @@
       editStage.insertBefore(videoViewport, editVideo);
       videoViewport.appendChild(editVideo);
     }
+    const picturePreviewImage = document.createElement('img');
+    picturePreviewImage.className = 'reel-picture-preview-image';
+    picturePreviewImage.alt = '';
+    picturePreviewImage.draggable = false;
+    picturePreviewImage.hidden = true;
+    videoViewport.appendChild(picturePreviewImage);
     const videoBackground = document.createElement('div');
     videoBackground.className = 'reel-video-gallery-background';
     videoBackground.hidden = true;
@@ -2945,6 +2951,30 @@
         updatePlaybackCropMask(video, 0, 0, 0, 0, false);
       }
     }
+    function syncPicturePreviewImage(item) {
+      if (!picturePreviewImage || !editVideo) return;
+      const clip = item && item.clip;
+      const picture = Boolean(clip && clipIsPicture(clip));
+      const imageSource = picture ? String(clip.imageData || clip.thumbnail || '') : '';
+      picturePreviewImage.hidden = !picture || !imageSource;
+      editVideo.classList.toggle('is-picture-source-hidden', picture && Boolean(imageSource));
+      if (!picture || !imageSource) {
+        picturePreviewImage.removeAttribute('src');
+        return;
+      }
+      if (picturePreviewImage.__reelImageSource !== imageSource) {
+        picturePreviewImage.__reelImageSource = imageSource;
+        picturePreviewImage.src = imageSource;
+      }
+      picturePreviewImage.style.objectFit = 'contain';
+      picturePreviewImage.style.objectPosition = 'center center';
+      picturePreviewImage.style.filter = editVideo.style.filter || 'none';
+      picturePreviewImage.style.transform = editVideo.style.transform || 'none';
+      picturePreviewImage.style.transformOrigin = editVideo.style.transformOrigin || '50% 50%';
+      picturePreviewImage.style.opacity = editVideo.style.opacity || '1';
+      picturePreviewImage.style.clipPath = editVideo.style.clipPath || 'none';
+    }
+
     function applyPreviewEdits() {
       const settings = currentClipItem() ? currentClipItem().clip : editState;
       const filter = 'brightness(' + settings.brightness + ') contrast(' + settings.contrast + ') saturate(' + settings.saturation + ') ' + (effectFilters[settings.effect] || '');
@@ -2954,6 +2984,7 @@
         ensureUserOverlay(video);
       });
       syncVideoBackgroundAndTransform();
+      syncPicturePreviewImage(currentClipItem());
       updateCutoutPreview(true);
     }
     function renderVisualEffectPreview() {
@@ -3008,6 +3039,7 @@
         editVideo.style.transform = 'translate3d(' + ((bx + visual.x) * 100) + '%,' + ((by + visual.y) * 100) + '%,0) rotate(' + (br + visual.rotate) + 'deg) scale(' + (bs * visual.scaleX) + ',' + (bs * visual.scaleY) + ')';
         editVideo.style.transformOrigin = '50% 50%';
         editVideo.style.filter = baseFilter + (visual.blur ? ' blur(' + visual.blur + 'px)' : '') + (visual.extraFilter || '');
+        syncPicturePreviewImage(item);
         return;
       }
       editVideo.__reelClipAnimationActive = true;
@@ -3017,6 +3049,7 @@
       editVideo.style.transformOrigin = '50% 50%';
       const totalBlur = (animation.blur || 0) + (visual.blur || 0);
       editVideo.style.filter = baseFilter + (totalBlur ? ' blur(' + totalBlur + 'px)' : '') + (visual.extraFilter || '');
+      syncPicturePreviewImage(item);
     }
     function closeToolPanel() {
       if (editVideo.__magicPreviewCleanup) { editVideo.__magicPreviewCleanup(); editVideo.__magicPreviewCleanup = null; }
@@ -3423,7 +3456,10 @@
           }
           updateTrimSelection();
           const updated = layoutForClip(clip.id);
-          seekSequenceTime(updated ? updated.start : 0, true);
+          const preservedTime = edge === 'end'
+            ? Math.min(updated ? updated.end : currentSequenceTime, Math.max(updated ? updated.start : 0, currentSequenceTime))
+            : (updated ? updated.start : 0);
+          seekSequenceTime(preservedTime, true);
           renderTimelineAt(currentSequenceTime);
           updateEditTimeDisplay(currentSequenceTime);
           updateTimelineRuler(currentSequenceTime);
@@ -4619,7 +4655,7 @@
             clip.sourceStart = 0;
             clip.sourceEnd = prepared.duration;
             clip.availableStart = 0;
-            clip.availableEnd = prepared.duration;
+            clip.availableEnd = 60;
             clip.mediaType = 'image';
             clip.kind = 'image';
             clip.framePreset = 'none';
