@@ -1558,12 +1558,13 @@
           maskContext.globalCompositeOperation = 'source-over';
           maskContext.clearRect(0,0,w,h);
 
-          // Build a stricter subject mask. Use a larger analysis grid,
-          // reject low-confidence pixels, remove tiny fragments, and choose
-          // the main central person instead of blindly keeping every object.
-          const analysisScale = Math.min(1, 256 / Math.max(w, h));
-          const aw = Math.max(72, Math.round(w * analysisScale));
-          const ah = Math.max(72, Math.round(h * analysisScale));
+          // Build a more selective subject mask. We combine a hard mask for
+          // anchor pixels with a softer mask for edge recovery, score candidate
+          // components for "person-likeness", then grow only the chosen subject
+          // back into nearby soft-confidence pixels.
+          const analysisScale = Math.min(1, 384 / Math.max(w, h));
+          const aw = Math.max(96, Math.round(w * analysisScale));
+          const ah = Math.max(96, Math.round(h * analysisScale));
           const analysisCanvas = document.createElement('canvas');
           analysisCanvas.width = aw; analysisCanvas.height = ah;
           const analysisContext = analysisCanvas.getContext('2d', { willReadFrequently: true });
@@ -1571,54 +1572,67 @@
           analysisContext.drawImage(results.segmentationMask,0,0,aw,ah);
           const analysisImage = analysisContext.getImageData(0,0,aw,ah);
           const sourcePixels = analysisImage.data;
-          const binary = new Uint8Array(aw * ah);
-          const threshold = 172;
-          for (let pixelIndex = 0, dataIndex = 0; pixelIndex < binary.length; pixelIndex += 1, dataIndex += 4) {
+          const softMask = new Uint8Array(aw * ah);
+          const hardMask = new Uint8Array(aw * ah);
+          const softThreshold = 148;
+          const hardThreshold = 192;
+          for (let pixelIndex = 0, dataIndex = 0; pixelIndex < softMask.length; pixelIndex += 1, dataIndex += 4) {
             const confidence = Math.max(sourcePixels[dataIndex], sourcePixels[dataIndex + 3]);
-            binary[pixelIndex] = confidence >= threshold ? 1 : 0;
+            softMask[pixelIndex] = confidence >= softThreshold ? 1 : 0;
+            hardMask[pixelIndex] = confidence >= hardThreshold ? 1 : 0;
           }
 
-          // Morphological opening: erode once to break thin links to unwanted
-          // objects, then dilate to restore the person's outline.
-          const eroded = new Uint8Array(binary.length);
-          for (let y = 1; y < ah - 1; y += 1) {
-            for (let x = 1; x < aw - 1; x += 1) {
-              let count = 0;
-              for (let oy = -1; oy <= 1; oy += 1) for (let ox = -1; ox <= 1; ox += 1) count += binary[(y + oy) * aw + x + ox];
-              eroded[y * aw + x] = count >= 7 ? 1 : 0;
+          function erode3x3(source, target, minCount) {
+            target.fill(0);
+            for (let y = 1; y < ah - 1; y += 1) {
+              for (let x = 1; x < aw - 1; x += 1) {
+                let count = 0;
+                for (let oy = -1; oy <= 1; oy += 1) for (let ox = -1; ox <= 1; ox += 1) count += source[(y + oy) * aw + x + ox];
+                target[y * aw + x] = count >= minCount ? 1 : 0;
+              }
             }
           }
-          const cleaned = new Uint8Array(binary.length);
-          for (let y = 1; y < ah - 1; y += 1) {
-            for (let x = 1; x < aw - 1; x += 1) {
-              let present = 0;
-              for (let oy = -1; oy <= 1 && !present; oy += 1) for (let ox = -1; ox <= 1; ox += 1) if (eroded[(y + oy) * aw + x + ox]) { present = 1; break; }
-              cleaned[y * aw + x] = present;
+          function dilate3x3(source, target) {
+            target.fill(0);
+            for (let y = 1; y < ah - 1; y += 1) {
+              for (let x = 1; x < aw - 1; x += 1) {
+                let present = 0;
+                for (let oy = -1; oy <= 1 && !present; oy += 1) for (let ox = -1; ox <= 1; ox += 1) if (source[(y + oy) * aw + x + ox]) { present = 1; break; }
+                target[y * aw + x] = present;
+              }
             }
           }
 
-          const visited = new Uint8Array(cleaned.length);
-          const queue = new Int32Array(cleaned.length);
+          // Slight opening on the hard mask removes props / attached objects.
+          const openedA = new Uint8Array(hardMask.length);
+          const openedB = new Uint8Array(hardMask.length);
+          erode3x3(hardMask, openedA, 6);
+          dilate3x3(openedA, openedB);
+
+          const visited = new Uint8Array(openedB.length);
+          const queue = new Int32Array(Math.max(openedB.length, 1));
           let bestComponent = [];
           let bestScore = -Infinity;
           const frameCenterX = (aw - 1) / 2;
           const frameCenterY = (ah - 1) / 2;
-          const minComponentArea = Math.max(24, Math.round(aw * ah * 0.003));
-          for (let seed = 0; seed < cleaned.length; seed += 1) {
-            if (!cleaned[seed] || visited[seed]) continue;
+          const minComponentArea = Math.max(28, Math.round(aw * ah * 0.0025));
+          for (let seed = 0; seed < openedB.length; seed += 1) {
+            if (!openedB[seed] || visited[seed]) continue;
             let head = 0, tail = 0;
             queue[tail++] = seed; visited[seed] = 1;
             const component = [];
-            let sumX = 0, sumY = 0, borderHits = 0;
+            let sumX = 0, sumY = 0, borderHits = 0, minX = aw, minY = ah, maxX = 0, maxY = 0;
             while (head < tail) {
               const current = queue[head++]; component.push(current);
               const cx = current % aw, cy = (current / aw) | 0;
               sumX += cx; sumY += cy;
+              if (cx < minX) minX = cx; if (cx > maxX) maxX = cx;
+              if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
               if (cx <= 1 || cy <= 1 || cx >= aw - 2 || cy >= ah - 2) borderHits += 1;
-              const neighbours = [current-1,current+1,current-aw,current+aw];
+              const neighbours = [current - 1, current + 1, current - aw, current + aw];
               for (let ni = 0; ni < 4; ni += 1) {
                 const next = neighbours[ni];
-                if (next < 0 || next >= cleaned.length || visited[next] || !cleaned[next]) continue;
+                if (next < 0 || next >= openedB.length || visited[next] || !openedB[next]) continue;
                 const nx = next % aw;
                 if (Math.abs(nx - cx) > 1) continue;
                 visited[next] = 1; queue[tail++] = next;
@@ -1631,29 +1645,55 @@
             const dy = (centerY - frameCenterY) / Math.max(1, ah / 2);
             const centerDistance = Math.sqrt(dx * dx + dy * dy);
             const borderRatio = borderHits / component.length;
-            const areaScore = component.length;
-            const centerBonus = areaScore * Math.max(0, 1 - centerDistance) * 0.65;
-            const borderPenalty = areaScore * borderRatio * 2.4;
-            const score = areaScore + centerBonus - borderPenalty;
+            const boxW = Math.max(1, maxX - minX + 1);
+            const boxH = Math.max(1, maxY - minY + 1);
+            const aspect = boxH / boxW;
+            const fillRatio = component.length / (boxW * boxH);
+            const tallBonus = aspect >= 1.05 ? component.length * Math.min(0.5, (aspect - 1.0) * 0.16) : -component.length * 0.08;
+            const centerBonus = component.length * Math.max(0, 1 - centerDistance) * 0.72;
+            const borderPenalty = component.length * borderRatio * 2.6;
+            const fillPenalty = fillRatio > 0.88 ? component.length * 0.12 : 0;
+            const score = component.length + centerBonus + tallBonus - borderPenalty - fillPenalty;
             if (score > bestScore) { bestScore = score; bestComponent = component; }
           }
 
-          // Expand the selected subject by one pixel to recover hair and hand
-          // edges lost by the opening pass, while keeping detached objects out.
-          const selected = new Uint8Array(cleaned.length);
-          for (let i = 0; i < bestComponent.length; i += 1) selected[bestComponent[i]] = 1;
-          const expanded = new Uint8Array(selected.length);
-          for (let y = 1; y < ah - 1; y += 1) {
-            for (let x = 1; x < aw - 1; x += 1) {
-              let present = 0;
-              for (let oy = -1; oy <= 1 && !present; oy += 1) for (let ox = -1; ox <= 1; ox += 1) if (selected[(y + oy) * aw + x + ox]) { present = 1; break; }
-              expanded[y * aw + x] = present;
+          const grown = new Uint8Array(softMask.length);
+          if (bestComponent.length) {
+            const growthVisited = new Uint8Array(softMask.length);
+            let head = 0, tail = 0;
+            for (let i = 0; i < bestComponent.length; i += 1) {
+              const index = bestComponent[i];
+              queue[tail++] = index;
+              growthVisited[index] = 1;
+              grown[index] = 1;
+            }
+            while (head < tail) {
+              const current = queue[head++];
+              const cx = current % aw, cy = (current / aw) | 0;
+              for (let oy = -1; oy <= 1; oy += 1) {
+                for (let ox = -1; ox <= 1; ox += 1) {
+                  if (!ox && !oy) continue;
+                  const nx = cx + ox, ny = cy + oy;
+                  if (nx < 0 || ny < 0 || nx >= aw || ny >= ah) continue;
+                  const next = ny * aw + nx;
+                  if (growthVisited[next] || !softMask[next]) continue;
+                  growthVisited[next] = 1;
+                  grown[next] = 1;
+                  queue[tail++] = next;
+                }
+              }
             }
           }
 
+          // Fill tiny holes and smooth the chosen subject once.
+          const closedA = new Uint8Array(grown.length);
+          const closedB = new Uint8Array(grown.length);
+          dilate3x3(grown, closedA);
+          erode3x3(closedA, closedB, 4);
+
           const outputMask = analysisContext.createImageData(aw,ah);
-          for (let i = 0; i < expanded.length; i += 1) {
-            if (!expanded[i]) continue;
+          for (let i = 0; i < closedB.length; i += 1) {
+            if (!closedB[i]) continue;
             const pixel = i * 4;
             outputMask.data[pixel] = 255;
             outputMask.data[pixel + 1] = 255;
@@ -1663,7 +1703,7 @@
           analysisContext.clearRect(0,0,aw,ah);
           analysisContext.putImageData(outputMask,0,0);
           maskContext.imageSmoothingEnabled = true;
-          maskContext.filter = 'blur(0.45px)';
+          maskContext.filter = 'blur(0.35px)';
           maskContext.drawImage(analysisCanvas,0,0,w,h);
           maskContext.filter = 'none';
           if (clip.cutoutMode === 'custom' && customCutoutMask) {
