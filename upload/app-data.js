@@ -5048,7 +5048,6 @@
         + '<button type="button" class="reel-magic-clear" data-magic-clear aria-label="None"><svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="17"></circle><path d="M15 15l18 18"></path></svg></button>'
         + '<div class="reel-magic-tabs" role="tablist" aria-label="Magic mode"><button type="button" data-magic-tab="video">Video</button><button type="button" data-magic-tab="frame">Frame</button></div>'
         + '<button type="button" class="reel-speed-done" aria-label="Done"><svg class="reel-speed-done-icon" viewBox="0 0 48 48"><path d="M8 25.5l10.3 10L40 9.5"/></svg></button></div>'
-        + '<div class="reel-frame-subtabs" data-frame-subtabs hidden><button type="button" class="is-active">Motion</button><button type="button">Layer</button><button type="button">AI Drawing</button><button type="button">AI Portrait</button></div>'
         + '<div class="reel-speed-presets reel-magic-presets" data-magic-list="video">'
         + magicPresetDefinitions.filter(function(preset){ return preset.id !== 'none'; }).map(function(preset){ const active=currentMagicPreset===preset.id?' is-active':''; return '<button type="button" class="reel-speed-preset reel-magic-preset'+active+'" data-magic-preset="'+preset.id+'"><span class="reel-speed-curve-card"><canvas class="reel-magic-thumb-canvas" width="96" height="96" data-preview-kind="video" data-magic-preview="'+preset.id+'"></canvas></span><span>'+preset.label+'</span></button>'; }).join('')
         + '</div>'
@@ -5106,7 +5105,7 @@
         const activePreset = activeMagicTab==='frame' ? (clip.framePreset||'none') : (clip.magicPreset||'none');
         const clear=editor.querySelector('[data-magic-clear]'); const enabled=activePreset!=='none'; clear.disabled=!enabled; clear.classList.toggle('is-enabled',enabled); clear.classList.toggle('is-selected',false);
         editor.querySelectorAll('[data-magic-tab]').forEach(function(tab){ const active=tab.getAttribute('data-magic-tab')===activeMagicTab; tab.classList.toggle('is-active',active); tab.setAttribute('aria-selected',active?'true':'false'); });
-        editor.querySelector('[data-magic-list="video"]').hidden=activeMagicTab!=='video'; editor.querySelector('[data-magic-list="frame"]').hidden=activeMagicTab!=='frame'; editor.querySelector('[data-frame-subtabs]').hidden=activeMagicTab!=='frame';
+        editor.querySelector('[data-magic-list="video"]').hidden=activeMagicTab!=='video'; editor.querySelector('[data-magic-list="frame"]').hidden=activeMagicTab!=='frame';
       }
       function refreshAfterPreset(message){ refreshSequenceDuration(); renderClipTimeline(); const item=layoutForClip(clip.id); seekSequenceTime(item?item.start:0,true); updateTrimSelection(); recordOnce(); if(message)reelMessage(root,message); }
       function selectVideoPreset(id){ if(pictureClip){ reelMessage(root,'Video effects only work on video clips.'); return; } const safe=magicPresetIds.has(id)?id:'none'; applyMagicPresetToClip(clip,safe,sourceDuration); clip.framePreset='none'; editor.querySelectorAll('[data-magic-preset]').forEach(function(button){button.classList.toggle('is-active',button.getAttribute('data-magic-preset')===safe);}); refreshAfterPreset((magicPresetMap[safe]&&magicPresetMap[safe].message)||'Magic updated'); syncHeader(); }
@@ -5459,6 +5458,116 @@
       paint();
     }
 
+    function openFiltersEditor() {
+      const clip = selectedClip();
+      if (!clip) return;
+      const before = captureEditorSnapshot();
+      let historyRecorded = false;
+      const editor = document.createElement('div');
+      editor.className = 'reel-speed-editor reel-magic-editor reel-filters-editor';
+      const activeFilter = reelEffectIds.has(clip.effect) ? clip.effect : 'none';
+      editor.innerHTML = '<div class="reel-magic-head reel-filters-head">'
+        + '<button type="button" class="reel-magic-clear reel-filter-clear' + (activeFilter !== 'none' ? ' is-enabled' : '') + '" data-filter-clear aria-label="Remove filter"' + (activeFilter === 'none' ? ' disabled' : '') + '>'
+        + '<svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="17"></circle><path d="M15 15l18 18"></path></svg>'
+        + '</button>'
+        + '<div class="reel-filter-title">Filters</div>'
+        + '<button type="button" class="reel-speed-done" aria-label="Done"><svg class="reel-speed-done-icon" viewBox="0 0 48 48"><path d="M8 25.5l10.3 10L40 9.5"/></svg></button>'
+        + '</div>'
+        + '<div class="reel-speed-presets reel-magic-presets reel-filter-presets">'
+        + reelEffectCatalog.filter(function(effect){ return effect.id !== 'none'; }).map(function(effect){
+          const active = activeFilter === effect.id ? ' is-active' : '';
+          return '<button type="button" class="reel-speed-preset reel-magic-preset reel-filter-preset' + active + '" data-filter-id="' + effect.id + '">'
+            + '<span class="reel-speed-curve-card"><canvas class="reel-filter-thumb-canvas" width="96" height="96" data-filter-preview="' + effect.id + '" aria-hidden="true"></canvas></span>'
+            + '<span>' + effect.name + '</span></button>';
+        }).join('')
+        + '</div>';
+
+      const sourceCanvas = document.createElement('canvas');
+      sourceCanvas.width = 192; sourceCanvas.height = 192;
+      const sourceContext = sourceCanvas.getContext('2d');
+      let sourceReady = false;
+      let stopped = false;
+      let raf = 0;
+      let lastPaint = 0;
+
+      function drawSource() {
+        if (!sourceContext) return false;
+        sourceContext.setTransform(1,0,0,1,0,0);
+        sourceContext.clearRect(0,0,192,192);
+        sourceContext.fillStyle = '#111'; sourceContext.fillRect(0,0,192,192);
+        if (clipIsPicture(clip)) {
+          const imageSource = clip.imageData || clip.thumbnail || clip.sourceData || '';
+          if (imageSource && !sourceReady) {
+            const image = new Image();
+            image.onload = function(){
+              if (stopped || !sourceContext) return;
+              const sw=image.naturalWidth||image.width, sh=image.naturalHeight||image.height;
+              const side=Math.min(sw,sh), sx=(sw-side)/2, sy=(sh-side)/2;
+              sourceContext.drawImage(image,sx,sy,side,side,0,0,192,192);
+              sourceReady=true;
+            };
+            image.src=imageSource;
+          }
+          return sourceReady;
+        }
+        if (!editVideo || editVideo.readyState < 2 || !editVideo.videoWidth || !editVideo.videoHeight) return false;
+        const side=Math.min(editVideo.videoWidth,editVideo.videoHeight);
+        const sx=(editVideo.videoWidth-side)/2, sy=(editVideo.videoHeight-side)/2;
+        try { sourceContext.drawImage(editVideo,sx,sy,side,side,0,0,192,192); sourceReady=true; return true; } catch(_error){ return false; }
+      }
+
+      function paintThumb(canvas, filterId) {
+        const context=canvas.getContext('2d'); if(!context || !sourceReady) return;
+        context.setTransform(1,0,0,1,0,0); context.clearRect(0,0,canvas.width,canvas.height);
+        context.fillStyle='#111'; context.fillRect(0,0,canvas.width,canvas.height);
+        context.filter=effectFilters[filterId] || 'none';
+        context.drawImage(sourceCanvas,0,0,canvas.width,canvas.height);
+        context.filter='none';
+      }
+
+      function renderThumbs(now) {
+        if (stopped || !editor.isConnected) return;
+        if (document.hidden || now-lastPaint < 120) { raf=requestAnimationFrame(renderThumbs); return; }
+        lastPaint=now;
+        if (!sourceReady) drawSource();
+        const width=window.innerWidth||0, height=window.innerHeight||0;
+        editor.querySelectorAll('.reel-filter-thumb-canvas').forEach(function(canvas){
+          const rect=canvas.getBoundingClientRect();
+          if(rect.right < -24 || rect.left > width+24 || rect.bottom < 0 || rect.top > height) return;
+          paintThumb(canvas, canvas.getAttribute('data-filter-preview') || 'none');
+        });
+        raf=requestAnimationFrame(renderThumbs);
+      }
+
+      function syncFilterState(filterId) {
+        editor.querySelectorAll('[data-filter-id]').forEach(function(button){ button.classList.toggle('is-active',button.getAttribute('data-filter-id')===filterId); });
+        const clear=editor.querySelector('[data-filter-clear]');
+        const enabled=filterId!=='none';
+        clear.disabled=!enabled;
+        clear.classList.toggle('is-enabled',enabled);
+      }
+
+      function selectFilter(filterId) {
+        const safe=reelEffectIds.has(filterId)?filterId:'none';
+        clip.effect=safe;
+        applyPreviewEdits();
+        applyClipAnimationPreview(currentClipItem());
+        renderClipTimeline();
+        syncFilterState(safe);
+        if(!historyRecorded){ recordEditorChange(before); historyRecorded=true; }
+        reelMessage(root,safe==='none'?'Filter removed':(reelEffectCatalog.find(function(item){return item.id===safe;})||{name:'Filter'}).name+' filter');
+      }
+
+      editor.querySelectorAll('[data-filter-id]').forEach(function(button){ button.addEventListener('click',function(){ selectFilter(button.getAttribute('data-filter-id')); }); });
+      editor.querySelector('[data-filter-clear]').addEventListener('click',function(){ if(!this.disabled) selectFilter('none'); });
+      editor.querySelector('.reel-speed-done').addEventListener('click',function(){ stopped=true; if(raf)cancelAnimationFrame(raf); closeToolPanel(); });
+      drawSource();
+      raf=requestAnimationFrame(renderThumbs);
+      openToolPanel('Filters',editor);
+      toolPanel.classList.add('is-speed-panel');
+      flow.classList.add('is-speed-editing');
+    }
+
     function openBackgroundEditor() {
       const clip = selectedClip(); if (!clip) return;
       const before = captureEditorSnapshot();
@@ -5520,13 +5629,8 @@
         recordEditorChange(before);
         reelMessage(root, 'Rotated ' + clip.videoTransformRotate + '°');
       }
-      else if (toolName === 'filters') {
-        const clip = selectedClip(); if (!clip) return;
-        const before = captureEditorSnapshot();
-        clip.effect = effectOrder[(effectOrder.indexOf(clip.effect) + 1) % effectOrder.length];
-        applyPreviewEdits(); renderClipTimeline(); recordEditorChange(before);
-        reelMessage(root, clip.effect === 'none' ? 'Effect removed' : clip.effect.charAt(0).toUpperCase() + clip.effect.slice(1) + ' effect');
-      } else if (toolName === 'adjust') {
+      else if (toolName === 'filters') openFiltersEditor();
+      else if (toolName === 'adjust') {
         const wrap = document.createElement('div');
         wrap.append(rangeControl('Brightness', 'brightness', .5, 1.5, .05), rangeControl('Contrast', 'contrast', .5, 1.5, .05), rangeControl('Saturation', 'saturation', 0, 2, .05));
         openToolPanel('Adjust clip', wrap);
