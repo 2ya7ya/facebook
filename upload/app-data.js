@@ -1494,6 +1494,57 @@
     const backgroundPointers = new Map();
     let backgroundGesture = null;
     function selectedVisualSettings() { const item = currentClipItem(); return item ? item.clip : editState; }
+    let magicFaceDetector = null;
+    let magicFaceBusy = false;
+    let magicFaceLastRun = 0;
+    let magicFaceState = { x: .5, y: .42, confidence: 0 };
+    function ensureMagicFaceDetector() {
+      if (magicFaceDetector || typeof window.FaceDetector !== 'function') return magicFaceDetector;
+      try { magicFaceDetector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 1 }); } catch (_error) { magicFaceDetector = null; }
+      return magicFaceDetector;
+    }
+    function updateMagicFaceTracking() {
+      const item = currentClipItem();
+      const effect = item && item.clip && item.clip.magicVisualEffect;
+      if ((effect !== 'face-tracking' && effect !== 'face-closeup') || !editVideo || editVideo.readyState < 2) return;
+      const detector = ensureMagicFaceDetector();
+      const now = performance.now();
+      if (!detector || magicFaceBusy || now - magicFaceLastRun < 120) return;
+      magicFaceBusy = true; magicFaceLastRun = now;
+      detector.detect(editVideo).then(function(faces){
+        if (!faces || !faces.length || !editVideo.videoWidth || !editVideo.videoHeight) {
+          magicFaceState.confidence *= .85;
+          return;
+        }
+        const box = faces[0].boundingBox;
+        const nx = Math.min(1, Math.max(0, (box.x + box.width / 2) / editVideo.videoWidth));
+        const ny = Math.min(1, Math.max(0, (box.y + box.height * .43) / editVideo.videoHeight));
+        const blend = magicFaceState.confidence ? .28 : 1;
+        magicFaceState.x += (nx - magicFaceState.x) * blend;
+        magicFaceState.y += (ny - magicFaceState.y) * blend;
+        magicFaceState.confidence = 1;
+      }).catch(function(){ magicFaceState.confidence *= .8; }).finally(function(){ magicFaceBusy = false; });
+    }
+    function magicVisualState(item) {
+      const clip = item && item.clip;
+      const effect = clip && clip.magicVisualEffect || 'none';
+      const duration = Math.max(.05, item && item.duration || 1);
+      const elapsed = Math.max(0, Math.min(duration, currentSequenceTime - (item ? item.start : 0)));
+      const t = duration > 0 ? elapsed / duration : 0;
+      const wave = .5 - .5 * Math.cos(t * Math.PI * 4);
+      if (effect === 'camera-zoom') {
+        return { x: Math.sin(t * Math.PI * 2) * .045, y: Math.cos(t * Math.PI * 1.6) * .025, scale: 1 + .22 * wave, rotate: Math.sin(t * Math.PI * 2) * .35 };
+      }
+      if (effect === 'face-tracking' || effect === 'face-closeup') {
+        updateMagicFaceTracking();
+        const faceX = magicFaceState.confidence ? magicFaceState.x : .5;
+        const faceY = magicFaceState.confidence ? magicFaceState.y : .42;
+        const scale = effect === 'face-closeup' ? 1.72 : 1.24;
+        const strength = effect === 'face-closeup' ? .76 : .5;
+        return { x: (.5 - faceX) * strength, y: (.45 - faceY) * strength, scale: scale, rotate: 0 };
+      }
+      return { x: 0, y: 0, scale: 1, rotate: 0 };
+    }
     function baseVideoTransform(settings) {
       const x = Number(settings && settings.videoTransformX) || 0;
       const y = Number(settings && settings.videoTransformY) || 0;
@@ -1506,7 +1557,13 @@
       const source = settings && settings.videoBackgroundImage || '';
       videoBackground.hidden = !source;
       videoBackground.style.backgroundImage = source ? 'url("' + String(source).replace(/"/g, '%22') + '")' : '';
-      const transform = baseVideoTransform(settings);
+      const item = currentClipItem();
+      const magic = magicVisualState(item);
+      const x = (Number(settings && settings.videoTransformX) || 0) + magic.x;
+      const y = (Number(settings && settings.videoTransformY) || 0) + magic.y;
+      const scale = Math.max(.2, Math.min(5, Number(settings && settings.videoTransformScale) || 1)) * magic.scale;
+      const rotate = (Number(settings && settings.videoTransformRotate) || 0) + magic.rotate;
+      const transform = 'translate3d(' + (x * 100) + '%,' + (y * 100) + '%,0) rotate(' + rotate + 'deg) scale(' + scale + ')';
       previewVideos.forEach(function(video){
         if (!video.__reelClipAnimationActive) {
           video.style.transform = transform;
@@ -2007,6 +2064,7 @@
         speed: Math.min(10, Math.max(.1, Number(source.speed) || 1)),
         speedCurve: ['none','custom','montage','highlight','bullet','jump-cut','flash-in','flash-out','magic'].includes(source.speedCurve) ? source.speedCurve : 'none',
         velocityPoints: Array.isArray(source.velocityPoints) ? source.velocityPoints.map(function(point){ return { time: Math.max(0, Number(point && point.time) || 0), speed: Math.min(10, Math.max(.1, Number(point && point.speed) || 1)) }; }).sort(function(a,b){ return a.time-b.time; }).slice(0,16) : [],
+        magicVisualEffect: ['none','camera-zoom','face-tracking','face-closeup'].includes(source.magicVisualEffect) ? source.magicVisualEffect : 'none',
         brightness: Math.min(1.5, Math.max(.5, Number(source.brightness) || 1)),
         contrast: Math.min(1.5, Math.max(.5, Number(source.contrast) || 1)),
         saturation: Math.min(2, Math.max(0, Number(source.saturation) || 1)),
@@ -2640,23 +2698,16 @@
     function applyClipAnimationPreview(item) {
       if (!item || !editVideo) return;
       const hasAnimation = (item.clip.animationIn && item.clip.animationIn !== 'none') || (item.clip.animationOut && item.clip.animationOut !== 'none') || (item.clip.animationCombo && item.clip.animationCombo !== 'none');
-      if (!hasAnimation) {
-        if (editVideo.__reelClipAnimationActive) {
-          editVideo.__reelClipAnimationActive = false;
-          editVideo.style.removeProperty('opacity');
-          editVideo.style.filter = 'brightness(' + item.clip.brightness + ') contrast(' + item.clip.contrast + ') saturate(' + item.clip.saturation + ') ' + (effectFilters[item.clip.effect] || '');
-        }
-        editVideo.style.transform = baseVideoTransform(item.clip);
-        editVideo.style.transformOrigin = '50% 50%';
-        return;
-      }
-      editVideo.__reelClipAnimationActive = true;
-      const elapsed = Math.max(0, Math.min(item.duration, currentSequenceTime - item.start));
-      const animation = clipAnimationState(item.clip, elapsed, item.duration);
-      editVideo.style.opacity = String(animation.opacity);
-      const bx = Number(item.clip.videoTransformX) || 0, by = Number(item.clip.videoTransformY) || 0, bs = Math.max(.2, Math.min(5, Number(item.clip.videoTransformScale) || 1)), br = Number(item.clip.videoTransformRotate) || 0;
-      editVideo.style.transform = 'translate3d(' + ((bx + animation.x) * 100) + '%,' + ((by + animation.y) * 100) + '%,0) rotate(' + (br + animation.rotate) + 'deg) scale(' + (bs * animation.scaleX) + ',' + (bs * animation.scaleY) + ')';
-      editVideo.style.transformOrigin = '50% 50%';
+      const animation = hasAnimation ? clipAnimationState(item.clip, Math.max(0, Math.min(item.duration, currentSequenceTime - item.start)), item.duration) : { x:0, y:0, scaleX:1, scaleY:1, rotate:0, opacity:1, blur:0 };
+      const magic = magicVisualState(item);
+      const bx = Number(item.clip.videoTransformX) || 0;
+      const by = Number(item.clip.videoTransformY) || 0;
+      const bs = Math.max(.2, Math.min(5, Number(item.clip.videoTransformScale) || 1));
+      const br = Number(item.clip.videoTransformRotate) || 0;
+      const transform = 'translate3d(' + ((bx + animation.x + magic.x) * 100) + '%,' + ((by + animation.y + magic.y) * 100) + '%,0) rotate(' + (br + animation.rotate + magic.rotate) + 'deg) scale(' + (bs * animation.scaleX * magic.scale) + ',' + (bs * animation.scaleY * magic.scale) + ')';
+      editVideo.__reelClipAnimationActive = hasAnimation || item.clip.magicVisualEffect !== 'none';
+      previewVideos.forEach(function(video){ video.style.transform = transform; video.style.transformOrigin = '50% 50%'; video.style.opacity = String(animation.opacity); });
+      if (!cutoutCanvas.hidden) { cutoutCanvas.style.transform = transform; cutoutCanvas.style.transformOrigin = '50% 50%'; cutoutCanvas.style.opacity = String(animation.opacity); }
       const baseFilter = 'brightness(' + item.clip.brightness + ') contrast(' + item.clip.contrast + ') saturate(' + item.clip.saturation + ') ' + (effectFilters[item.clip.effect] || '');
       editVideo.style.filter = baseFilter + (animation.blur ? ' blur(' + animation.blur + 'px)' : '');
     }
@@ -4369,53 +4420,41 @@
       const sourceDuration = Math.max(.05, clip.sourceEnd - clip.sourceStart);
       const editor = document.createElement('div');
       editor.className = 'reel-speed-editor reel-magic-editor';
-      editor.innerHTML = '<div class="reel-speed-tabs-row"><strong style="font-size:16px">Velocity Magic</strong><button type="button" class="reel-speed-done" aria-label="Done"><svg class="reel-speed-done-icon" viewBox="0 0 48 48"><path d="M8 25.5l10.3 10L40 9.5"/></svg></button></div>'
+      editor.innerHTML = '<div class="reel-speed-tabs-row"><strong style="font-size:16px">Magic</strong><button type="button" class="reel-speed-done" aria-label="Done"><svg class="reel-speed-done-icon" viewBox="0 0 48 48"><path d="M8 25.5l10.3 10L40 9.5"/></svg></button></div>'
         + '<div class="reel-speed-presets">'
-        + '<button type="button" class="reel-speed-preset reel-magic-apply"><span class="reel-speed-curve-card"><svg viewBox="0 0 72 56"><polyline points="8,10 37,47 64,30"/></svg></span><span>Magic</span></button>'
-        + '<button type="button" class="reel-speed-preset reel-magic-remove"><span class="reel-speed-curve-card"><svg viewBox="0 0 72 56"><path d="M19 13L53 47M53 13L19 47"/></svg></span><span>None</span></button>'
-        + '</div><p style="margin:8px 14px 0;color:#aaa;font-size:12px">3× fast → 0.2× slow motion → 1× normal</p>';
-      function applyMagic() {
-        const endPoint = sourceDuration;
-        const slowPoint = Math.max(.05, sourceDuration * .525);
-        clip.speedCurve = 'magic';
-        clip.speed = 1;
-        clip.velocityPoints = [
-          { time: 0, speed: 3 },
-          { time: slowPoint, speed: .2 },
-          { time: endPoint, speed: 1 }
-        ];
-        refreshSequenceDuration();
-        renderClipTimeline();
-        const item = layoutForClip(clip.id);
-        seekSequenceTime(item ? item.start : 0, true);
-        updateTrimSelection();
-        editor.querySelector('.reel-magic-apply').classList.add('is-active');
-        editor.querySelector('.reel-magic-remove').classList.remove('is-active');
-        recordEditorChange(before);
-        reelMessage(root, 'Velocity Magic applied');
+        + '<button type="button" class="reel-speed-preset" data-magic-effect="velocity"><span class="reel-speed-curve-card"><svg viewBox="0 0 72 56"><polyline points="8,10 37,47 64,30"/></svg></span><span>Velocity</span></button>'
+        + '<button type="button" class="reel-speed-preset" data-magic-effect="camera-zoom"><span class="reel-speed-curve-card"><svg viewBox="0 0 72 56"><rect x="14" y="12" width="44" height="32" rx="4"/><path d="M25 33l9-9 8 8 6-6 8 8"/><path d="M50 8v10M45 13h10"/></svg></span><span>Camera Zoom</span></button>'
+        + '<button type="button" class="reel-speed-preset" data-magic-effect="face-tracking"><span class="reel-speed-curve-card"><svg viewBox="0 0 72 56"><circle cx="36" cy="25" r="9"/><path d="M22 48c2-10 8-15 14-15s12 5 14 15"/><path d="M13 18V9h9M59 18V9h-9M13 38v9h9M59 38v9h-9"/></svg></span><span>Face Tracking</span></button>'
+        + '<button type="button" class="reel-speed-preset" data-magic-effect="face-closeup"><span class="reel-speed-curve-card"><svg viewBox="0 0 72 56"><circle cx="36" cy="25" r="14"/><path d="M29 23h2M41 23h2M31 32c3 3 7 3 10 0"/></svg></span><span>Face Close-up</span></button>'
+        + '<button type="button" class="reel-speed-preset" data-magic-effect="none"><span class="reel-speed-curve-card"><svg viewBox="0 0 72 56"><path d="M19 13L53 47M53 13L19 47"/></svg></span><span>None</span></button>'
+        + '</div>';
+      function syncSelection() {
+        editor.querySelectorAll('[data-magic-effect]').forEach(function(button){
+          const effect = button.dataset.magicEffect;
+          const active = effect === 'velocity' ? clip.speedCurve === 'magic' : effect === 'none' ? (clip.speedCurve !== 'magic' && clip.magicVisualEffect === 'none') : clip.magicVisualEffect === effect;
+          button.classList.toggle('is-active', active);
+        });
       }
-      function removeMagic() {
-        clip.speedCurve = 'none';
-        clip.speed = 1;
-        clip.velocityPoints = [];
-        refreshSequenceDuration();
-        renderClipTimeline();
-        const item = layoutForClip(clip.id);
-        seekSequenceTime(item ? item.start : 0, true);
-        updateTrimSelection();
-        editor.querySelector('.reel-magic-apply').classList.remove('is-active');
-        editor.querySelector('.reel-magic-remove').classList.add('is-active');
-        recordEditorChange(before);
-        reelMessage(root, 'Velocity Magic removed');
+      function chooseMagic(effect) {
+        if (effect === 'velocity') {
+          clip.magicVisualEffect = 'none';
+          clip.speedCurve = 'magic'; clip.speed = 1;
+          clip.velocityPoints = [{time:0,speed:3},{time:Math.max(.05,sourceDuration*.525),speed:.2},{time:sourceDuration,speed:1}];
+        } else {
+          clip.speedCurve = 'none'; clip.speed = 1; clip.velocityPoints = [];
+          clip.magicVisualEffect = effect === 'none' ? 'none' : effect;
+          if (effect === 'face-tracking' || effect === 'face-closeup') magicFaceState = { x:.5, y:.42, confidence:0 };
+        }
+        refreshSequenceDuration(); renderClipTimeline(); applyPreviewEdits();
+        const item = layoutForClip(clip.id); seekSequenceTime(item ? item.start : 0, true); updateTrimSelection();
+        syncSelection(); recordEditorChange(before);
+        reelMessage(root, effect === 'none' ? 'Magic removed' : (effect === 'velocity' ? 'Velocity applied' : editor.querySelector('[data-magic-effect="'+effect+'"] span:last-child').textContent + ' applied'));
       }
-      editor.querySelector('.reel-magic-apply').classList.toggle('is-active', clip.speedCurve === 'magic');
-      editor.querySelector('.reel-magic-remove').classList.toggle('is-active', clip.speedCurve !== 'magic');
-      editor.querySelector('.reel-magic-apply').addEventListener('click', applyMagic);
-      editor.querySelector('.reel-magic-remove').addEventListener('click', removeMagic);
+      editor.querySelectorAll('[data-magic-effect]').forEach(function(button){ button.addEventListener('click', function(){ chooseMagic(button.dataset.magicEffect); }); });
       editor.querySelector('.reel-speed-done').addEventListener('click', function(){ closeToolPanel(); });
+      syncSelection();
       openToolPanel('Magic', editor);
-      toolPanel.classList.add('is-speed-panel');
-      flow.classList.add('is-speed-editing');
+      toolPanel.classList.add('is-speed-panel'); flow.classList.add('is-speed-editing');
     }
 
     function openSpeedEditor() {
