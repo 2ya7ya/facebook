@@ -4342,6 +4342,17 @@
           video.removeAttribute('src');
           video.__reelSource = '';
         });
+        if (picture) {
+          sourceMediaDuration = Math.max(.1, Number(editState.clips[0] && editState.clips[0].sourceEnd) || 1.8);
+          timelineBuildKey = '';
+          timelineFrameSources = [{ time: 0, src: editState.imageData || editState.clips[0].thumbnail || '' }];
+          refreshSequenceDuration();
+          currentSequenceTime = 0;
+          renderClipTimeline();
+          updateEditTimeDisplay(0);
+          updateTimelineRuler(0);
+          updateTrimSelection();
+        }
         applyPreviewEdits();
         openFlow();
       } catch (error) {
