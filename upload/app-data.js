@@ -1480,6 +1480,10 @@
     toolPanel.className = 'reel-tool-panel';
     toolPanel.setAttribute('aria-hidden', 'true');
     flow.appendChild(toolPanel);
+    const cutoutBackground = document.createElement('div');
+    cutoutBackground.className = 'reel-cutout-background';
+    cutoutBackground.hidden = true;
+    if (editStage) editStage.appendChild(cutoutBackground);
     const cutoutCanvas = document.createElement('canvas');
     cutoutCanvas.className = 'reel-cutout-canvas';
     cutoutCanvas.hidden = true;
@@ -1505,18 +1509,33 @@
         width = height * sourceRatio;
         offsetX = (boxWidth - width) / 2;
       }
-      cutoutCanvas.style.left = (videoRect.left - stageRect.left + offsetX) + 'px';
-      cutoutCanvas.style.top = (videoRect.top - stageRect.top + offsetY) + 'px';
+      const left = (videoRect.left - stageRect.left + offsetX) + 'px';
+      const top = (videoRect.top - stageRect.top + offsetY) + 'px';
+      cutoutCanvas.style.left = left;
+      cutoutCanvas.style.top = top;
       cutoutCanvas.style.width = width + 'px';
       cutoutCanvas.style.height = height + 'px';
+      cutoutBackground.style.left = left;
+      cutoutBackground.style.top = top;
+      cutoutBackground.style.width = width + 'px';
+      cutoutBackground.style.height = height + 'px';
+    }
+    function syncCutoutBackground(clip) {
+      const source = clip && clip.cutoutBackgroundImage || '';
+      cutoutBackground.hidden = !source;
+      cutoutBackground.style.backgroundImage = source ? 'url("' + String(source).replace(/"/g, '%22') + '")' : '';
+      if (source) syncCutoutCanvasGeometry();
     }
     function setCutoutVideoVisibility(active) {
       previewVideos.forEach(function (video) { video.style.visibility = active ? 'hidden' : ''; });
       if (active) syncCutoutCanvasGeometry();
+      const clip = selectedClip();
+      syncCutoutBackground(active ? clip : null);
     }
     function clearCutoutPreview() {
       cutoutFrameReady = false;
       cutoutCanvas.hidden = true;
+      cutoutBackground.hidden = true;
       setCutoutVideoVisibility(false);
       const context = cutoutCanvas.getContext('2d');
       if (context) context.clearRect(0, 0, cutoutCanvas.width, cutoutCanvas.height);
@@ -2116,7 +2135,9 @@
         ,animationIn: String(source.animationIn || 'none')
         ,animationOut: String(source.animationOut || 'none')
         ,animationCombo: String(source.animationCombo || 'none'),
-        cutoutMode: ['none','background','custom'].includes(source.cutoutMode) ? source.cutoutMode : 'none'
+        cutoutMode: ['none','background','custom'].includes(source.cutoutMode) ? source.cutoutMode : 'none',
+        cutoutStroke: Math.max(0, Math.min(13, Number(source.cutoutStroke) || 0)),
+        cutoutBackgroundImage: typeof source.cutoutBackgroundImage === 'string' ? source.cutoutBackgroundImage : ''
       };
     }
     function normalizeClientClip(clip, fallbackStart, fallbackEnd) {
@@ -4592,6 +4613,7 @@
       const wrap = document.createElement('div'); wrap.className='reel-cutout-options';
       if (clip.cutoutStroke == null) clip.cutoutStroke = 0;
       const strokeButtons = [
+        ['gallery','Gallery','gallery'],
         ['0','None','none'],
         ['1','White','white'],
         ['2','Duo','duo'],
@@ -4599,12 +4621,20 @@
         ['4','Cyan','cyan'],
         ['5','Pink','pink'],
         ['6','Gold','gold'],
-        ['7','Shadow','shadow']
+        ['7','Shadow','shadow'],
+        ['8','Electric','electric'],
+        ['9','Fire','fire'],
+        ['10','Ice','ice'],
+        ['11','Rainbow','rainbow'],
+        ['12','Comic','comic'],
+        ['13','Hologram','hologram']
       ].map(function(item){
         const cls = item[2] === 'none' ? ' stroke-style-none' : ' stroke-style-' + item[2];
-        const inner = item[2] === 'none'
-          ? '<span class="stroke-card stroke-card-none"><span class="stroke-none-symbol">⊘</span></span><em>'+item[1]+'</em>'
-          : '<span class="stroke-card'+cls+'"></span><em>'+item[1]+'</em>';
+        const inner = item[2] === 'gallery'
+          ? '<span class="stroke-card stroke-card-gallery"><svg viewBox="0 0 48 48"><rect x="7" y="9" width="34" height="30" rx="4"/><circle cx="17" cy="19" r="4"/><path d="M10 35l9-9 7 7 5-5 8 7"/><path d="M24 4v10M19 9h10"/></svg></span><em>'+item[1]+'</em>'
+          : item[2] === 'none'
+            ? '<span class="stroke-card stroke-card-none"><span class="stroke-none-symbol">⊘</span></span><em>'+item[1]+'</em>'
+            : '<span class="stroke-card'+cls+'"></span><em>'+item[1]+'</em>';
         return '<button type="button" data-cutout-stroke="'+item[0]+'" aria-label="'+item[1]+' stroke">'+inner+'</button>';
       }).join('');
       wrap.innerHTML = '<div class="reel-cutout-main-row">'
@@ -4619,8 +4649,9 @@
         + '<div class="reel-cutout-footer"><button type="button" class="reel-cutout-reset"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M9 10H3V4"/><path d="M4 10a13 13 0 1 1-1 10"/></svg></button><button type="button" class="reel-cutout-done" aria-label="Done"><svg viewBox="0 0 32 32"><path d="M6 17l7 7L27 8"/></svg></button></div>';
       let cutoutView = 'main';
       function applyStroke(){
-        const filters=['none','drop-shadow(0 0 1px #fff) drop-shadow(0 0 4px #fff)','drop-shadow(-2px 0 #00f2ea) drop-shadow(2px 0 #ff0050)','drop-shadow(0 0 6px #ffe66d) drop-shadow(0 0 12px #ffe66d)','drop-shadow(0 0 3px #8cf0ff) drop-shadow(0 0 8px #8cf0ff)','drop-shadow(0 0 3px #ff74d4) drop-shadow(0 0 8px #ff74d4)','drop-shadow(0 0 4px #ffd24d) drop-shadow(0 0 10px #ffd24d)','drop-shadow(0 0 2px rgba(0,0,0,.9)) drop-shadow(0 0 10px rgba(0,0,0,.65))'];
+        const filters=['none','drop-shadow(0 0 1px #fff) drop-shadow(0 0 4px #fff)','drop-shadow(-2px 0 #00f2ea) drop-shadow(2px 0 #ff0050)','drop-shadow(0 0 6px #ffe66d) drop-shadow(0 0 12px #ffe66d)','drop-shadow(0 0 3px #8cf0ff) drop-shadow(0 0 8px #8cf0ff)','drop-shadow(0 0 3px #ff74d4) drop-shadow(0 0 8px #ff74d4)','drop-shadow(0 0 4px #ffd24d) drop-shadow(0 0 10px #ffd24d)','drop-shadow(0 0 2px rgba(0,0,0,.9)) drop-shadow(0 0 10px rgba(0,0,0,.65))','drop-shadow(-3px 0 #2cf2ff) drop-shadow(3px 0 #6f37ff) drop-shadow(0 0 8px #00d9ff)','drop-shadow(0 0 4px #ff4b00) drop-shadow(0 0 10px #ff9d00) drop-shadow(0 -4px 8px #ffd000)','drop-shadow(0 0 3px #d9fbff) drop-shadow(0 0 9px #62dfff) drop-shadow(0 0 15px #aef7ff)','drop-shadow(-3px 0 #ff3864) drop-shadow(-1px 0 #ffcf33) drop-shadow(2px 0 #28e090) drop-shadow(4px 0 #4d7dff)','drop-shadow(0 0 0 #fff) drop-shadow(4px 4px 0 #000) drop-shadow(-2px -2px 0 #fff)','drop-shadow(-3px 0 rgba(0,255,255,.9)) drop-shadow(3px 0 rgba(255,0,255,.9)) drop-shadow(0 0 12px rgba(110,70,255,.9))'];
         cutoutCanvas.style.filter=filters[Number(clip.cutoutStroke)||0]||'none';
+        syncCutoutBackground(clip);
       }
       function sync(){
         wrap.classList.toggle('is-stroke-view', cutoutView==='stroke');
@@ -4628,7 +4659,11 @@
         wrap.querySelector('[data-cutout-view="stroke"]').classList.toggle('is-active',cutoutView==='stroke');
         const tools=wrap.querySelector('.reel-cutout-custom-tools'); tools.hidden=!(clip.cutoutMode==='custom'&&cutoutView!=='stroke');
         const strokes=wrap.querySelector('.reel-cutout-stroke-options'); strokes.hidden=cutoutView!=='stroke';
-        wrap.querySelectorAll('[data-cutout-stroke]').forEach(function(b){b.classList.toggle('is-active',Number(b.dataset.cutoutStroke)===(Number(clip.cutoutStroke)||0))});
+        wrap.querySelectorAll('[data-cutout-stroke]').forEach(function(b){
+          const galleryActive = b.dataset.cutoutStroke === 'gallery' && !!clip.cutoutBackgroundImage;
+          const styleActive = b.dataset.cutoutStroke !== 'gallery' && Number(b.dataset.cutoutStroke) === (Number(clip.cutoutStroke) || 0);
+          b.classList.toggle('is-active', galleryActive || styleActive);
+        });
         customCutoutEditing=clip.cutoutMode==='custom'&&cutoutView!=='stroke';
         applyStroke(); updateCutoutPreview(true);
       }
@@ -4645,10 +4680,28 @@
         sync(); applyPreviewEdits();
       });});
       wrap.querySelector('[data-cutout-view="stroke"]').addEventListener('click',function(){cutoutView=cutoutView==='stroke'?'main':'stroke'; if(!clip.cutoutMode || clip.cutoutMode==='none') clip.cutoutMode='background'; sync();});
-      wrap.querySelectorAll('[data-cutout-stroke]').forEach(function(b){b.addEventListener('click',function(){clip.cutoutStroke=Number(b.dataset.cutoutStroke)||0;applyStroke();sync();});});
+      wrap.querySelectorAll('[data-cutout-stroke]').forEach(function(b){b.addEventListener('click',function(){
+        if (b.dataset.cutoutStroke === 'gallery') {
+          const picker = document.createElement('input');
+          picker.type = 'file'; picker.accept = 'image/*'; picker.style.display = 'none';
+          document.body.appendChild(picker);
+          picker.addEventListener('change', function(){
+            const file = picker.files && picker.files[0];
+            if (!file) { picker.remove(); return; }
+            const reader = new FileReader();
+            reader.onload = function(){ clip.cutoutBackgroundImage = String(reader.result || ''); syncCutoutBackground(clip); sync(); applyPreviewEdits(); picker.remove(); };
+            reader.onerror = function(){ picker.remove(); reelMessage(root, 'Could not open that picture.'); };
+            reader.readAsDataURL(file);
+          }, { once:true });
+          picker.click();
+          return;
+        }
+        clip.cutoutStroke = Number(b.dataset.cutoutStroke) || 0;
+        applyStroke(); sync();
+      });});
       wrap.querySelectorAll('[data-cutout-brush]').forEach(function(b){b.addEventListener('click',function(){ customCutoutErase=b.dataset.cutoutBrush==='erase'; wrap.querySelectorAll('[data-cutout-brush]').forEach(function(x){x.classList.toggle('is-active',x===b)}); });});
       wrap.querySelector('input').addEventListener('input',function(){customCutoutBrush=Number(this.value)||34;});
-      wrap.querySelector('.reel-cutout-reset').addEventListener('click',function(){clip.cutoutMode='none';clip.cutoutStroke=0;customCutoutMask=null;cutoutView='main';clearCutoutPreview();sync();applyPreviewEdits();});
+      wrap.querySelector('.reel-cutout-reset').addEventListener('click',function(){clip.cutoutMode='none';clip.cutoutStroke=0;clip.cutoutBackgroundImage='';customCutoutMask=null;cutoutView='main';clearCutoutPreview();sync();applyPreviewEdits();});
       wrap.querySelector('.reel-cutout-done').addEventListener('click',function(){customCutoutEditing=false;recordEditorChange(before);closeToolPanel();renderClipTimeline();});
       openToolPanel('Cutout',wrap); toolPanel.classList.add('is-cutout-panel'); flow.classList.add('is-cutout-editing'); sync();
     }
