@@ -572,6 +572,11 @@ async function ensureWhatsAppSupportInboxSchema() {
     ALTER TABLE whatsapp_human_escalations
     ADD COLUMN IF NOT EXISTS display_name VARCHAR(160)
   `);
+
+  await pool.query(`
+    ALTER TABLE whatsapp_human_escalations
+    ADD COLUMN IF NOT EXISTS unread_count INTEGER NOT NULL DEFAULT 0
+  `);
 }
 
 async function saveWhatsAppEscalationIdentity(userId, displayName) {
@@ -625,6 +630,7 @@ app.get('/api/admin/whatsapp/escalations', requireApiAuth, requireOwnerApi, asyn
         user_key,
         phone_number,
         display_name,
+        COALESCE(unread_count, 0) AS unread_count,
         active,
         requested_at,
         updated_at
@@ -648,6 +654,83 @@ app.get('/api/admin/whatsapp/escalations', requireApiAuth, requireOwnerApi, asyn
     });
   }
 });
+
+
+app.get('/api/admin/whatsapp/unread-count',
+  requireApiAuth,
+  requireOwnerApi,
+  async (req, res) => {
+    try {
+      await ensureWhatsAppSupportInboxSchema();
+
+      const result = await pool.query(`
+        SELECT COALESCE(SUM(unread_count), 0)::int AS unread_count
+        FROM whatsapp_human_escalations
+        WHERE active = TRUE
+      `);
+
+      return res.json({
+        unreadCount: Number(result.rows[0]?.unread_count || 0)
+      });
+    } catch (error) {
+      console.error(
+        'WhatsApp unread count failed:',
+        error.message
+      );
+
+      return res.status(500).json({
+        error: 'Could not load unread support count'
+      });
+    }
+  }
+);
+
+app.post(
+  '/api/admin/whatsapp/escalations/:userKey/read',
+  requireApiAuth,
+  requireOwnerApi,
+  async (req, res) => {
+    try {
+      await ensureWhatsAppSupportInboxSchema();
+
+      const userKey =
+        String(req.params.userKey || '').trim();
+
+      if (!/^[a-f0-9]{64}$/.test(userKey)) {
+        return res.status(400).json({
+          error: 'Invalid conversation'
+        });
+      }
+
+      await pool.query(`
+        UPDATE whatsapp_human_escalations
+        SET unread_count = 0
+        WHERE user_key = $1
+      `, [userKey]);
+
+      const result = await pool.query(`
+        SELECT COALESCE(SUM(unread_count), 0)::int AS unread_count
+        FROM whatsapp_human_escalations
+        WHERE active = TRUE
+      `);
+
+      return res.json({
+        ok: true,
+        unreadCount:
+          Number(result.rows[0]?.unread_count || 0)
+      });
+    } catch (error) {
+      console.error(
+        'WhatsApp support mark-read failed:',
+        error.message
+      );
+
+      return res.status(500).json({
+        error: 'Could not mark conversation as read'
+      });
+    }
+  }
+);
 
 app.get('/api/admin/whatsapp/escalations/:userKey/messages', requireApiAuth, requireOwnerApi, async (req, res) => {
   try {
@@ -826,6 +909,7 @@ app.post('/api/admin/whatsapp/escalations/:userKey/resolve', requireApiAuth, req
       `
         UPDATE whatsapp_human_escalations
         SET active = FALSE,
+            unread_count = 0,
             updated_at = NOW()
         WHERE user_key = $1
         RETURNING phone_number
@@ -922,6 +1006,19 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
         contactName
       );
 
+      await addWhatsAppMemoryMessage(
+        from,
+        'user',
+        text
+      );
+
+      await pushWhatsAppSupportMessage({
+        from,
+        text,
+        messageId,
+        displayName: contactName
+      });
+
       await sendWhatsAppSystemText(
         from,
         'Your conversation has been escalated to human support. The AI assistant will stop replying until you send "resume bot".'
@@ -939,6 +1036,17 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
         'user',
         text
       );
+
+      const contactName = String(
+        change?.contacts?.[0]?.profile?.name || ''
+      ).trim();
+
+      await pushWhatsAppSupportMessage({
+        from,
+        text,
+        messageId,
+        displayName: contactName
+      });
 
       console.log(
         'AI reply skipped because conversation is escalated:',
@@ -1991,6 +2099,145 @@ async function sendNotificationPush({
     }
   } catch (error) {
     console.error('Notification push failed:', error.message);
+  }
+}
+
+
+async function pushWhatsAppSupportMessage({
+  from,
+  text,
+  messageId = '',
+  displayName = ''
+}) {
+  if (!pool) return;
+
+  try {
+    await ensureWhatsAppSupportInboxSchema();
+
+    const userKey =
+      whatsappMemoryUserKey(from);
+
+    const updated = await pool.query(
+      `
+        UPDATE whatsapp_human_escalations
+        SET unread_count = COALESCE(unread_count, 0) + 1,
+            updated_at = NOW()
+        WHERE user_key = $1
+          AND active = TRUE
+        RETURNING
+          user_key,
+          phone_number,
+          display_name,
+          unread_count
+      `,
+      [userKey]
+    );
+
+    const conversation = updated.rows[0];
+
+    if (!conversation) return;
+
+    const messaging =
+      getFirebaseMessaging();
+
+    if (!messaging) return;
+
+    const tokensResult = await pool.query(
+      `
+        SELECT token
+        FROM fcm_device_tokens
+        WHERE user_id = 1
+        ORDER BY updated_at DESC
+      `
+    );
+
+    const tokens = tokensResult.rows
+      .map(row => String(row.token || '').trim())
+      .filter(Boolean);
+
+    if (!tokens.length) return;
+
+    const name =
+      String(
+        displayName ||
+        conversation.display_name ||
+        conversation.phone_number ||
+        'WhatsApp User'
+      ).trim();
+
+    const cleanText =
+      String(text || '')
+        .trim()
+        .slice(0, 1000);
+
+    const result =
+      await messaging.sendEachForMulticast({
+        tokens,
+
+        data: {
+          title: name || 'WhatsApp Support',
+          body: cleanText || 'New WhatsApp support message',
+          type: 'whatsapp_support',
+
+          notificationId:
+            String(
+              messageId ||
+              `wa-${Date.now()}`
+            ),
+
+          supportUserKey:
+            String(conversation.user_key || ''),
+
+          supportName:
+            name || 'WhatsApp User',
+
+          supportPhone:
+            String(
+              conversation.phone_number ||
+              from ||
+              ''
+            )
+        },
+
+        android: {
+          priority: 'high'
+        }
+      });
+
+    const staleTokens = [];
+
+    result.responses.forEach(
+      (item, index) => {
+        if (item.success) return;
+
+        const code =
+          String(item.error?.code || '');
+
+        if (
+          code ===
+            'messaging/registration-token-not-registered' ||
+          code ===
+            'messaging/invalid-registration-token'
+        ) {
+          staleTokens.push(tokens[index]);
+        }
+      }
+    );
+
+    if (staleTokens.length) {
+      await pool.query(
+        `
+          DELETE FROM fcm_device_tokens
+          WHERE token = ANY($1::text[])
+        `,
+        [staleTokens]
+      );
+    }
+  } catch (error) {
+    console.error(
+      'WhatsApp support push failed:',
+      error.message
+    );
   }
 }
 
