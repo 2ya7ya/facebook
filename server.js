@@ -67,6 +67,7 @@ app.get('/api/whatsapp/webhook', (req, res) => {
 });
 
 let lastWhatsAppWebhookEvent = null;
+let lastWhatsAppReplyDebug = null;
 
 app.post('/api/whatsapp/webhook', async (req, res) => {
   lastWhatsAppWebhookEvent = {
@@ -99,6 +100,11 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
     ).trim();
 
     if (!accessToken) {
+      lastWhatsAppReplyDebug = {
+        at: new Date().toISOString(),
+        ok: false,
+        reason: 'missing_access_token'
+      };
       console.error('WHATSAPP_ACCESS_TOKEN is not configured.');
       return;
     }
@@ -126,6 +132,15 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
 
     const result = await apiResponse.text();
 
+    lastWhatsAppReplyDebug = {
+      at: new Date().toISOString(),
+      ok: apiResponse.ok,
+      status: apiResponse.status,
+      to: from,
+      phoneNumberId,
+      result
+    };
+
     if (!apiResponse.ok) {
       console.error('WhatsApp reply failed:', result);
     } else {
@@ -138,7 +153,10 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
 
 app.get('/api/whatsapp/debug-last-event', (req, res) => {
   res.set('Cache-Control', 'no-store');
-  return res.json(lastWhatsAppWebhookEvent || { receivedAt: null });
+  return res.json({
+    webhook: lastWhatsAppWebhookEvent || { receivedAt: null },
+    reply: lastWhatsAppReplyDebug
+  });
 });
 
 
