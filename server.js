@@ -1910,7 +1910,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'request_password_recovery',
     description:
-      'Create a real password-recovery support case for the verified account. This does not change the password because Flux does not yet have a safe automated recovery-delivery channel.',
+      'Create a password-recovery support case ONLY when the customer clearly says they forgot their password, need to reset their password, or specifically requests password recovery. Never use this merely because the customer says they cannot access or sign in to their account.',
     strict: true,
     parameters: {
       type: 'object',
@@ -2828,6 +2828,14 @@ You have real Flux support tools. Use them when the customer asks about somethin
 
 Tool rules:
 - Never claim an account was found, inspected, changed, appealed, signed out, or escalated unless a tool result confirms it.
+- A generic statement such as "I can't access my account", "I can't log in", "my account won't open", or equivalent wording is NOT automatically a password-recovery request and is NOT automatically a human-support request.
+- For a generic account-access problem, first determine which Flux account the customer means.
+- First try lookup_my_account for the WhatsApp-linked account.
+- If no Flux account is linked to the WhatsApp number, ask the customer for the registered email address, phone number, or username, then use lookup_account_by_identifier.
+- Once the intended account is identified, ask one diagnostic question about what happens during sign-in, such as incorrect password, suspension message, verification problem, or another error.
+- Use request_password_recovery only when the customer clearly indicates a forgotten password, password reset, or password recovery.
+- Do not use escalate_to_human merely because the customer reports trouble accessing an account.
+- Use escalate_to_human only when the customer explicitly requests a person, a tool says human review is required, or the issue genuinely cannot be completed by the available Flux tools.
 - First try the WhatsApp-linked account automatically.
 - If no account matches the WhatsApp number, ask the customer for the email address, phone number, or username registered on Flux.
 - Use lookup_account_by_identifier after the customer provides one of those identifiers.
