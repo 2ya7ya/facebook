@@ -1658,6 +1658,182 @@ function escapeFluxEmailHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+
+async function ensureFluxPasswordResetSchema() {
+  await ensureDatabase();
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS flux_password_reset_tokens (
+      token_hash VARCHAR(128) PRIMARY KEY,
+      user_id BIGINT NOT NULL,
+      email VARCHAR(255) NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS flux_password_reset_tokens_user_idx
+    ON flux_password_reset_tokens (user_id, created_at DESC)
+  `);
+
+  await pool.query(`
+    DELETE FROM flux_password_reset_tokens
+    WHERE expires_at < NOW() - INTERVAL '1 day'
+  `);
+}
+
+function fluxPasswordResetTokenHash(token) {
+  return crypto
+    .createHash('sha256')
+    .update(String(token || ''))
+    .digest('hex');
+}
+
+function fluxPublicBaseUrl() {
+  return String(
+    process.env.PUBLIC_BASE_URL ||
+    'https://facetokapp.duckdns.org'
+  )
+    .trim()
+    .replace(/\/+$/, '');
+}
+
+async function createFluxPasswordResetToken(userId, email) {
+  await ensureFluxPasswordResetSchema();
+
+  const token =
+    crypto.randomBytes(32)
+      .toString('base64url');
+
+  const tokenHash =
+    fluxPasswordResetTokenHash(token);
+
+  await pool.query(
+    `
+      DELETE FROM flux_password_reset_tokens
+      WHERE user_id = $1
+        AND used_at IS NULL
+    `,
+    [userId]
+  );
+
+  await pool.query(
+    `
+      INSERT INTO flux_password_reset_tokens
+        (
+          token_hash,
+          user_id,
+          email,
+          expires_at
+        )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        NOW() + INTERVAL '15 minutes'
+      )
+    `,
+    [
+      tokenHash,
+      Number(userId),
+      String(email || '').trim()
+    ]
+  );
+
+  return token;
+}
+
+async function sendFluxPasswordResetEmail({
+  email,
+  token,
+  displayName = ''
+}) {
+  const transport =
+    getFluxMailTransport();
+
+  if (!transport) {
+    throw new Error(
+      'Flux email delivery is not configured.'
+    );
+  }
+
+  const to =
+    String(email || '').trim();
+
+  if (
+    !to ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)
+  ) {
+    throw new Error(
+      'A valid registered email is required.'
+    );
+  }
+
+  const from =
+    String(
+      process.env.SMTP_FROM ||
+      process.env.SMTP_USER ||
+      ''
+    ).trim();
+
+  const resetUrl =
+    `${fluxPublicBaseUrl()}/reset-password?token=${encodeURIComponent(token)}`;
+
+  const name =
+    String(displayName || '').trim();
+
+  const greeting =
+    name ? `Hi ${name},` : 'Hello,';
+
+  await transport.sendMail({
+    from,
+    to,
+    subject:
+      'Reset your Flux password',
+    text:
+`${greeting}
+
+We received a request to reset your Flux password.
+
+Open this secure link:
+${resetUrl}
+
+This link expires in 15 minutes and can only be used once.
+
+If you did not request a password reset, ignore this email.
+
+Flux Support`,
+    html:
+`<!doctype html>
+<html>
+<body style="font-family:Arial,sans-serif;background:#f5f6f7;padding:24px;color:#111;">
+  <div style="max-width:520px;margin:auto;background:#fff;border-radius:14px;padding:28px;">
+    <h2 style="margin-top:0;">Reset your Flux password</h2>
+    <p>${escapeFluxEmailHtml(greeting)}</p>
+    <p>We received a request to reset your Flux password.</p>
+
+    <p style="margin:28px 0;">
+      <a href="${escapeFluxEmailHtml(resetUrl)}"
+         style="background:#0866ff;color:#fff;text-decoration:none;padding:13px 20px;border-radius:8px;font-weight:700;">
+        Reset password
+      </a>
+    </p>
+
+    <p>This link expires in <strong>15 minutes</strong> and can only be used once.</p>
+
+    <p style="color:#65676b;font-size:13px;">
+      If you did not request this password reset, ignore this email.
+    </p>
+
+    <p>Flux Support</p>
+  </div>
+</body>
+</html>`
+  });
+}
+
 async function sendFluxVerificationEmail({
   email,
   code,
@@ -2050,7 +2226,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'request_password_recovery',
     description:
-      'Create a password-recovery support case ONLY when the customer clearly says they forgot their password, need to reset their password, or specifically requests password recovery. Never use this merely because the customer says they cannot access or sign in to their account.',
+      'Send a secure one-time password-reset link to the verified Flux account registered email. Use only when the customer clearly says they forgot their password, need to reset it, or explicitly requests password recovery.',
     strict: true,
     parameters: {
       type: 'object',
@@ -2763,46 +2939,62 @@ async function executeFluxAiSupportTool(
 
     const account = verifiedAccount;
 
-    if (!account) {
+    const registeredEmail =
+      String(account.email || '').trim();
+
+    if (!registeredEmail) {
       return {
         ok: false,
-        code: 'ACCOUNT_NOT_VERIFIED',
+        code: 'NO_REGISTERED_EMAIL',
         message:
-          'No Flux account could be verified from this WhatsApp number.'
+          'This account does not have a registered email address for password recovery.'
       };
     }
 
-    const issue =
-      String(
-        args?.issue || ''
-      ).trim();
+    const token =
+      await createFluxPasswordResetToken(
+        Number(account.id),
+        registeredEmail
+      );
+
+    try {
+      await sendFluxPasswordResetEmail({
+        email: registeredEmail,
+        token,
+        displayName:
+          String(account.full_name || '')
+      });
+
+    } catch (error) {
+      console.error(
+        'Flux password reset email failed:',
+        error.message
+      );
+
+      return {
+        ok: false,
+        code: 'PASSWORD_RESET_DELIVERY_FAILED',
+        message:
+          'The password-reset email could not be delivered right now.'
+      };
+    }
 
     const supportCase =
       await createFluxSupportCase({
         from,
-        userId: verifiedUserId,
+        userId: Number(account.id),
         type: 'password_recovery',
         subject:
           'Password recovery',
         details:
-          issue ||
+          String(args?.issue || '').trim() ||
           'Customer requested password recovery.'
       });
 
-    await setWhatsAppHumanEscalation(
-      from,
-      true
-    );
-
-    await saveWhatsAppEscalationIdentity(
-      from,
-      displayName
-    );
-
     await recordFluxSupportAction(
       from,
-      verifiedUserId,
-      'request_password_recovery',
+      Number(account.id),
+      'password_reset_link_sent',
       {
         caseId:
           Number(supportCase.id)
@@ -2811,11 +3003,15 @@ async function executeFluxAiSupportTool(
 
     return {
       ok: true,
+      resetLinkSent: true,
+      deliveryMethod: 'email',
+      maskedEmail:
+        maskFluxEmail(registeredEmail),
+      expiresInMinutes: 15,
       caseId:
         Number(supportCase.id),
-      escalatedToHuman: true,
       message:
-        'A password-recovery case has been created and transferred to human support. No password was changed.'
+        `A secure password-reset link was sent to ${maskFluxEmail(registeredEmail)}. It expires in 15 minutes.`
     };
   }
 
@@ -3014,7 +3210,11 @@ Tool rules:
 - Never reveal password hashes, session keys, raw IP addresses, access tokens, authentication cookies, database fields, or internal secrets.
 - If lookup_my_account says no linked account exists, do not guess account information.
 - Never ask the customer for a password, OTP, recovery code, authentication cookie, or secret.
-- Password recovery currently creates a real support case and transfers it to human support. It does not automatically change a password.
+- Password recovery sends a one-time secure reset link to the verified account's registered email.
+- The customer must choose the new password on the secure Flux reset page, never inside WhatsApp.
+- Never ask the customer to send a new password through WhatsApp.
+- A password reset link expires after 15 minutes and can only be used once.
+- After a successful password reset, all existing Flux sessions are revoked.
 - Never call confirm_revoke_all_sessions unless request_revoke_all_sessions was previously completed and the customer has explicitly confirmed in a later message.
 - If a destructive or sensitive action has not been confirmed, explain what will happen and ask for confirmation.
 - Suspension appeals create review cases; never promise that the account will be restored.
@@ -4638,11 +4838,74 @@ function withTimeout(promise, milliseconds, message) {
 }
 
 async function hashPassword(password) {
-  return password;
+  const value = String(password || '');
+
+  const salt =
+    crypto.randomBytes(16).toString('hex');
+
+  const derived =
+    await scrypt(
+      value,
+      salt,
+      64
+    );
+
+  return [
+    'scrypt',
+    salt,
+    Buffer.from(derived).toString('hex')
+  ].join(':');
 }
 
 async function verifyPassword(password, stored) {
-  return String(password || "") === String(stored || "");
+  const value =
+    String(password || '');
+
+  const saved =
+    String(stored || '');
+
+  if (!saved.startsWith('scrypt:')) {
+    return value === saved;
+  }
+
+  const parts = saved.split(':');
+
+  if (parts.length !== 3) return false;
+
+  const salt = parts[1];
+  const expectedHex = parts[2];
+
+  if (
+    !salt ||
+    !/^[0-9a-f]+$/i.test(expectedHex)
+  ) {
+    return false;
+  }
+
+  const derived =
+    await scrypt(
+      value,
+      salt,
+      64
+    );
+
+  const actual =
+    Buffer.from(derived);
+
+  const expected =
+    Buffer.from(
+      expectedHex,
+      'hex'
+    );
+
+  if (actual.length !== expected.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(
+    actual,
+    expected
+  );
 }
 
 async function findUserForLogin(identifier) {
@@ -4667,10 +4930,23 @@ async function findUserForLogin(identifier) {
 async function authenticateUser(identifier, password) {
   const user = await findUserForLogin(identifier);
   if (!user) return null;
-  let matched = (user.password_hash === password);
-  let needsUpgrade = matched && !String(user.password_hash || '').startsWith('scrypt:');
+  let matched =
+    await verifyPassword(
+      password,
+      user.password_hash
+    );
+
+  let needsUpgrade =
+    matched &&
+    !String(
+      user.password_hash || ''
+    ).startsWith('scrypt:');
+
   if (!matched && user.legacy_password) {
-    matched = (user.legacy_password === password);
+    matched =
+      String(user.legacy_password) ===
+      String(password);
+
     needsUpgrade = matched;
   }
   if (!matched) return null;
@@ -4688,8 +4964,14 @@ async function authenticateUser(identifier, password) {
   }
   if (user.deactivated_at) await pool.query('UPDATE users SET deactivated_at = NULL WHERE id = $1', [user.id]);
   if (needsUpgrade) {
-    const upgraded = password;
-    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [upgraded, user.id]);
+    const upgraded =
+      await hashPassword(password);
+
+    await pool.query(
+      'UPDATE users SET password_hash = $1 WHERE id = $2',
+      [upgraded, user.id]
+    );
+
     user.password_hash = upgraded;
   }
   return user;
@@ -4698,7 +4980,11 @@ async function authenticateUser(identifier, password) {
 async function createUserAccount(fullName, identifier, password) {
   await ensureAuthDatabase();
   const columns = ['full_name', 'identifier', 'password_hash'];
-  const values = [fullName, identifier, password];
+  const values = [
+    fullName,
+    identifier,
+    await hashPassword(password)
+  ];
   const addLegacyValue = (column, value) => {
     if (!column || columns.includes(column) || !userAuthColumns.has(column)) return;
     columns.push(column);
@@ -6295,6 +6581,283 @@ app.post('/register', async (request, response) => {
     return loginPageError(response, 'Could not create the account. Try again.', 'signup');
   }
 });
+
+
+app.get('/reset-password', async (request, response) => {
+  const token =
+    String(request.query?.token || '').trim();
+
+  if (!token) {
+    return response
+      .status(400)
+      .send(`
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Flux password reset</title>
+</head>
+<body style="font-family:Arial,sans-serif;background:#f5f6f7;padding:24px;">
+<div style="max-width:480px;margin:60px auto;background:white;padding:28px;border-radius:14px;">
+<h2>Invalid reset link</h2>
+<p>This password-reset link is missing or invalid.</p>
+</div>
+</body>
+</html>`);
+  }
+
+  await ensureFluxPasswordResetSchema();
+
+  const result =
+    await pool.query(
+      `
+        SELECT user_id
+        FROM flux_password_reset_tokens
+        WHERE token_hash = $1
+          AND used_at IS NULL
+          AND expires_at > NOW()
+        LIMIT 1
+      `,
+      [fluxPasswordResetTokenHash(token)]
+    );
+
+  if (!result.rowCount) {
+    return response
+      .status(400)
+      .send(`
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Flux password reset</title>
+</head>
+<body style="font-family:Arial,sans-serif;background:#f5f6f7;padding:24px;">
+<div style="max-width:480px;margin:60px auto;background:white;padding:28px;border-radius:14px;">
+<h2>Reset link expired</h2>
+<p>This password-reset link is invalid, expired, or has already been used.</p>
+</div>
+</body>
+</html>`);
+  }
+
+  response.set(
+    'Cache-Control',
+    'no-store'
+  );
+
+  response.send(`
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reset your Flux password</title>
+</head>
+<body style="font-family:Arial,sans-serif;background:#f5f6f7;margin:0;padding:24px;color:#111;">
+<div style="max-width:480px;margin:60px auto;background:#fff;border-radius:16px;padding:28px;box-shadow:0 2px 12px rgba(0,0,0,.08);">
+<h2 style="margin-top:0;">Reset your Flux password</h2>
+
+<form method="post" action="/api/password-reset/complete">
+<input type="hidden" name="token" value="${escapeFluxEmailHtml(token)}">
+
+<label style="display:block;font-weight:700;margin-bottom:8px;">New password</label>
+
+<input
+  type="password"
+  name="newPassword"
+  minlength="8"
+  maxlength="200"
+  required
+  autocomplete="new-password"
+  style="box-sizing:border-box;width:100%;padding:13px;border:1px solid #ccd0d5;border-radius:8px;font-size:16px;"
+>
+
+<p style="font-size:13px;color:#65676b;">
+Use at least 8 characters with at least one letter and one number.
+</p>
+
+<button
+  type="submit"
+  style="width:100%;border:0;border-radius:8px;background:#0866ff;color:#fff;padding:13px;font-size:16px;font-weight:700;"
+>
+Reset password
+</button>
+</form>
+</div>
+</body>
+</html>`);
+});
+
+app.post(
+  '/api/password-reset/complete',
+  express.urlencoded({ extended: false }),
+  async (request, response) => {
+    const token =
+      String(
+        request.body?.token || ''
+      ).trim();
+
+    const newPassword =
+      String(
+        request.body?.newPassword || ''
+      );
+
+    if (
+      newPassword.length < 8 ||
+      newPassword.length > 200 ||
+      !/[A-Za-z]/.test(newPassword) ||
+      !/[0-9]/.test(newPassword)
+    ) {
+      return response
+        .status(400)
+        .send('Use at least 8 characters with a letter and number.');
+    }
+
+    if (!token) {
+      return response
+        .status(400)
+        .send('Invalid reset link.');
+    }
+
+    await ensureFluxPasswordResetSchema();
+
+    const client =
+      await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      const result =
+        await client.query(
+          `
+            SELECT user_id
+            FROM flux_password_reset_tokens
+            WHERE token_hash = $1
+              AND used_at IS NULL
+              AND expires_at > NOW()
+            FOR UPDATE
+          `,
+          [
+            fluxPasswordResetTokenHash(token)
+          ]
+        );
+
+      if (!result.rowCount) {
+        await client.query('ROLLBACK');
+
+        return response
+          .status(400)
+          .send(
+            'This password-reset link is invalid, expired, or has already been used.'
+          );
+      }
+
+      const userId =
+        Number(
+          result.rows[0].user_id
+        );
+
+      const passwordHash =
+        await hashPassword(
+          newPassword
+        );
+
+      await client.query(
+        `
+          UPDATE users
+          SET
+            password_hash = $1,
+            sessions_revoked_at = NOW()
+          WHERE id = $2
+        `,
+        [
+          passwordHash,
+          userId
+        ]
+      );
+
+      await client.query(
+        `
+          UPDATE account_login_sessions
+          SET
+            ended_at = COALESCE(ended_at, NOW()),
+            last_active_at = NOW()
+          WHERE user_id = $1
+            AND ended_at IS NULL
+        `,
+        [userId]
+      );
+
+      await client.query(
+        `
+          UPDATE flux_password_reset_tokens
+          SET used_at = NOW()
+          WHERE token_hash = $1
+        `,
+        [
+          fluxPasswordResetTokenHash(token)
+        ]
+      );
+
+      await client.query(
+        `
+          UPDATE flux_password_reset_tokens
+          SET used_at = COALESCE(used_at, NOW())
+          WHERE user_id = $1
+            AND token_hash <> $2
+            AND used_at IS NULL
+        `,
+        [
+          userId,
+          fluxPasswordResetTokenHash(token)
+        ]
+      );
+
+      await client.query('COMMIT');
+
+      response.set(
+        'Cache-Control',
+        'no-store'
+      );
+
+      return response.send(`
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Password changed</title>
+</head>
+<body style="font-family:Arial,sans-serif;background:#f5f6f7;padding:24px;color:#111;">
+<div style="max-width:480px;margin:60px auto;background:#fff;border-radius:16px;padding:28px;">
+<h2>Password changed</h2>
+<p>Your Flux password has been reset successfully.</p>
+<p>For security, all previous Flux sessions have been signed out.</p>
+<p>You can now return to Flux and sign in with your new password.</p>
+</div>
+</body>
+</html>`);
+
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {}
+
+      console.error(
+        'Flux password reset failed:',
+        error.message
+      );
+
+      return response
+        .status(500)
+        .send(
+          'Your password could not be reset. Please try again.'
+        );
+
+    } finally {
+      client.release();
+    }
+  }
+);
+
 
 app.post('/api/logout', async (request, response) => {
   const session = readSession(request);
