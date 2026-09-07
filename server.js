@@ -1247,6 +1247,1198 @@ app.post('/api/admin/whatsapp/escalations/:userKey/resolve', requireApiAuth, req
   }
 });
 
+
+/* ============================================================
+ * Flux AI Support actions
+ * The model never receives arbitrary database access.
+ * Every action is explicitly defined and permission checked.
+ * ============================================================ */
+
+let fluxSupportActionSchemaReady = false;
+
+async function ensureFluxSupportActionSchema() {
+  if (!pool) throw new Error('Database is not configured');
+
+  if (fluxSupportActionSchemaReady) return;
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS flux_support_cases (
+      id BIGSERIAL PRIMARY KEY,
+      user_key VARCHAR(64) NOT NULL,
+      flux_user_id BIGINT,
+      whatsapp_number VARCHAR(40) NOT NULL,
+      case_type VARCHAR(64) NOT NULL,
+      status VARCHAR(24) NOT NULL DEFAULT 'open',
+      subject VARCHAR(200) NOT NULL DEFAULT '',
+      details TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS flux_support_cases_user_key_idx
+    ON flux_support_cases (user_key, created_at DESC)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS flux_support_pending_actions (
+      user_key VARCHAR(64) PRIMARY KEY,
+      action VARCHAR(64) NOT NULL,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NOT NULL
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS flux_support_action_audit (
+      id BIGSERIAL PRIMARY KEY,
+      user_key VARCHAR(64) NOT NULL,
+      flux_user_id BIGINT,
+      action VARCHAR(80) NOT NULL,
+      details JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  fluxSupportActionSchemaReady = true;
+}
+
+function fluxPhoneDigits(value) {
+  return String(value || '')
+    .replace(/\D/g, '')
+    .replace(/^00/, '');
+}
+
+function maskFluxEmail(value) {
+  const email = String(value || '').trim();
+
+  const at = email.indexOf('@');
+  if (at <= 0) return '';
+
+  const local = email.slice(0, at);
+  const domain = email.slice(at + 1);
+
+  const shown =
+    local.length <= 2
+      ? local.charAt(0) + '*'
+      : local.slice(0, 2) + '*'.repeat(
+          Math.min(6, Math.max(2, local.length - 2))
+        );
+
+  return `${shown}@${domain}`;
+}
+
+function maskFluxPhone(value) {
+  const digits = fluxPhoneDigits(value);
+
+  if (!digits) return '';
+
+  if (digits.length <= 4) {
+    return '*'.repeat(digits.length);
+  }
+
+  return (
+    '*'.repeat(Math.max(4, digits.length - 4)) +
+    digits.slice(-4)
+  );
+}
+
+async function findFluxAccountForWhatsApp(from) {
+  await ensureDatabase();
+
+  const digits = fluxPhoneDigits(from);
+
+  if (!digits) return null;
+
+  const result = await pool.query(
+    `
+      SELECT
+        id,
+        full_name,
+        identifier,
+        email,
+        phone,
+        username,
+        deactivated_at,
+        admin_suspended_at,
+        admin_suspended_until,
+        created_at,
+        last_seen_at
+      FROM users
+      WHERE
+        regexp_replace(
+          COALESCE(phone, ''),
+          '[^0-9]',
+          '',
+          'g'
+        ) = $1
+        OR (
+          COALESCE(identifier, '') NOT LIKE '%@%'
+          AND regexp_replace(
+            COALESCE(identifier, ''),
+            '[^0-9]',
+            '',
+            'g'
+          ) = $1
+        )
+      ORDER BY id ASC
+      LIMIT 1
+    `,
+    [digits]
+  );
+
+  return result.rows[0] || null;
+}
+
+function safeFluxAccountSummary(user) {
+  if (!user) return null;
+
+  const suspended =
+    Boolean(user.admin_suspended_at) &&
+    (
+      !user.admin_suspended_until ||
+      new Date(
+        user.admin_suspended_until
+      ).getTime() > Date.now()
+    );
+
+  return {
+    found: true,
+    accountId: Number(user.id),
+    displayName:
+      String(user.full_name || ''),
+    username:
+      String(user.username || ''),
+    email:
+      maskFluxEmail(user.email),
+    phone:
+      maskFluxPhone(
+        user.phone || user.identifier
+      ),
+    deactivated:
+      Boolean(user.deactivated_at),
+    suspended,
+    suspendedUntil:
+      suspended
+        ? user.admin_suspended_until || null
+        : null,
+    joinedAt:
+      user.created_at || null
+  };
+}
+
+async function recordFluxSupportAction(
+  from,
+  userId,
+  action,
+  details = {}
+) {
+  try {
+    await ensureFluxSupportActionSchema();
+
+    await pool.query(
+      `
+        INSERT INTO flux_support_action_audit
+          (
+            user_key,
+            flux_user_id,
+            action,
+            details
+          )
+        VALUES ($1, $2, $3, $4::jsonb)
+      `,
+      [
+        whatsappMemoryUserKey(from),
+        userId || null,
+        String(action || '').slice(0, 80),
+        JSON.stringify(details || {})
+      ]
+    );
+  } catch (error) {
+    console.error(
+      'Flux support audit failed:',
+      error.message
+    );
+  }
+}
+
+async function createFluxSupportCase({
+  from,
+  userId = null,
+  type,
+  subject = '',
+  details = ''
+}) {
+  await ensureFluxSupportActionSchema();
+
+  const result = await pool.query(
+    `
+      INSERT INTO flux_support_cases
+        (
+          user_key,
+          flux_user_id,
+          whatsapp_number,
+          case_type,
+          subject,
+          details
+        )
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id, status, created_at
+    `,
+    [
+      whatsappMemoryUserKey(from),
+      userId || null,
+      String(from || '').trim(),
+      String(type || '').slice(0, 64),
+      String(subject || '').trim().slice(0, 200),
+      String(details || '').trim().slice(0, 5000)
+    ]
+  );
+
+  return result.rows[0];
+}
+
+const FLUX_AI_SUPPORT_TOOLS = [
+  {
+    type: 'function',
+    name: 'lookup_my_account',
+    description:
+      'Find the customer Flux account linked to the phone number they are currently using on WhatsApp. Use this before making account-specific claims.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'get_account_status',
+    description:
+      'Check the real current status of the Flux account linked to this WhatsApp number, including whether it is suspended or deactivated.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'list_active_sessions',
+    description:
+      'List active Flux login sessions for the verified account linked to this WhatsApp number. Returns safe device, platform, location and activity information.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'request_revoke_all_sessions',
+    description:
+      'Prepare the action to sign the customer out of all Flux devices. This DOES NOT revoke sessions yet. Use it first, then ask the customer to explicitly confirm.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'confirm_revoke_all_sessions',
+    description:
+      'Actually revoke all Flux sessions after a pending revoke request exists and the customer explicitly confirms in a later message.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'submit_suspension_appeal',
+    description:
+      'Create a real suspension appeal case for the verified Flux account.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        reason: {
+          type: 'string',
+          description:
+            'The customer explanation for why the suspension should be reviewed.'
+        }
+      },
+      required: ['reason'],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'request_password_recovery',
+    description:
+      'Create a real password-recovery support case for the verified account. This does not change the password because Flux does not yet have a safe automated recovery-delivery channel.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        issue: {
+          type: 'string',
+          description:
+            'Short description of the login or password problem.'
+        }
+      },
+      required: ['issue'],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'submit_bug_report',
+    description:
+      'Create a real technical support case for a Flux bug or malfunction.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        subject: {
+          type: 'string'
+        },
+        details: {
+          type: 'string'
+        }
+      },
+      required: [
+        'subject',
+        'details'
+      ],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'submit_feedback',
+    description:
+      'Save real product feedback from the customer for the Flux team.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        feedback: {
+          type: 'string'
+        }
+      },
+      required: ['feedback'],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'escalate_to_human',
+    description:
+      'Transfer the current WhatsApp conversation to Flux human support.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        reason: {
+          type: 'string'
+        }
+      },
+      required: ['reason'],
+      additionalProperties: false
+    }
+  }
+];
+
+async function executeFluxAiSupportTool(
+  name,
+  args,
+  context
+) {
+  const from =
+    String(context?.from || '').trim();
+
+  const displayName =
+    String(
+      context?.displayName || ''
+    ).trim();
+
+  if (!from) {
+    return {
+      ok: false,
+      error: 'Customer identity is unavailable.'
+    };
+  }
+
+  await ensureFluxSupportActionSchema();
+
+  const account =
+    await findFluxAccountForWhatsApp(from);
+
+  const verifiedUserId =
+    account ? Number(account.id) : null;
+
+  if (name === 'lookup_my_account') {
+    if (!account) {
+      return {
+        ok: true,
+        found: false,
+        message:
+          'No Flux account is linked to this WhatsApp number.'
+      };
+    }
+
+    return {
+      ok: true,
+      account:
+        safeFluxAccountSummary(account)
+    };
+  }
+
+  if (name === 'get_account_status') {
+    if (!account) {
+      return {
+        ok: false,
+        code: 'ACCOUNT_NOT_VERIFIED',
+        message:
+          'I could not verify a Flux account from this WhatsApp number.'
+      };
+    }
+
+    return {
+      ok: true,
+      account:
+        safeFluxAccountSummary(account)
+    };
+  }
+
+  if (name === 'list_active_sessions') {
+    if (!account) {
+      return {
+        ok: false,
+        code: 'ACCOUNT_NOT_VERIFIED',
+        message:
+          'A Flux account must be verified from this WhatsApp number before sessions can be viewed.'
+      };
+    }
+
+    const result = await pool.query(
+      `
+        SELECT
+          device_model,
+          platform_name,
+          platform_version,
+          location,
+          login_method,
+          created_at,
+          last_active_at
+        FROM account_login_sessions
+        WHERE user_id = $1
+          AND ended_at IS NULL
+        ORDER BY last_active_at DESC
+        LIMIT 20
+      `,
+      [verifiedUserId]
+    );
+
+    return {
+      ok: true,
+      count: result.rows.length,
+      sessions: result.rows.map(
+        row => ({
+          device:
+            String(
+              row.device_model ||
+              'Unknown device'
+            ),
+          platform:
+            String(
+              row.platform_name || ''
+            ),
+          platformVersion:
+            String(
+              row.platform_version || ''
+            ),
+          location:
+            String(row.location || ''),
+          loginMethod:
+            String(
+              row.login_method ||
+              'Password'
+            ),
+          signedInAt:
+            row.created_at || null,
+          lastActiveAt:
+            row.last_active_at || null
+        })
+      )
+    };
+  }
+
+  if (name === 'request_revoke_all_sessions') {
+    if (!account) {
+      return {
+        ok: false,
+        code: 'ACCOUNT_NOT_VERIFIED',
+        message:
+          'A Flux account must be verified before sessions can be revoked.'
+      };
+    }
+
+    if (verifiedUserId === 1) {
+      return {
+        ok: false,
+        code: 'OWNER_REQUIRES_HUMAN',
+        message:
+          'Automated session revocation is disabled for the Flux owner account. Human support is required.'
+      };
+    }
+
+    await pool.query(
+      `
+        INSERT INTO flux_support_pending_actions
+          (
+            user_key,
+            action,
+            payload,
+            created_at,
+            expires_at
+          )
+        VALUES (
+          $1,
+          'revoke_all_sessions',
+          $2::jsonb,
+          NOW(),
+          NOW() + INTERVAL '15 minutes'
+        )
+        ON CONFLICT (user_key)
+        DO UPDATE SET
+          action = EXCLUDED.action,
+          payload = EXCLUDED.payload,
+          created_at = NOW(),
+          expires_at =
+            NOW() + INTERVAL '15 minutes'
+      `,
+      [
+        whatsappMemoryUserKey(from),
+        JSON.stringify({
+          userId: verifiedUserId
+        })
+      ]
+    );
+
+    return {
+      ok: true,
+      confirmationRequired: true,
+      expiresInMinutes: 15,
+      message:
+        'The sign-out action is ready but has NOT been executed. Ask the customer to explicitly confirm that they want to be signed out of all Flux devices.'
+    };
+  }
+
+  if (name === 'confirm_revoke_all_sessions') {
+    if (!account) {
+      return {
+        ok: false,
+        code: 'ACCOUNT_NOT_VERIFIED',
+        message:
+          'A Flux account must be verified before sessions can be revoked.'
+      };
+    }
+
+    if (verifiedUserId === 1) {
+      return {
+        ok: false,
+        code: 'OWNER_REQUIRES_HUMAN',
+        message:
+          'Automated session revocation is disabled for the Flux owner account.'
+      };
+    }
+
+    const pendingResult =
+      await pool.query(
+        `
+          DELETE FROM flux_support_pending_actions
+          WHERE user_key = $1
+            AND action =
+              'revoke_all_sessions'
+            AND expires_at > NOW()
+          RETURNING payload
+        `,
+        [whatsappMemoryUserKey(from)]
+      );
+
+    const pending =
+      pendingResult.rows[0];
+
+    if (
+      !pending ||
+      Number(
+        pending.payload?.userId
+      ) !== verifiedUserId
+    ) {
+      return {
+        ok: false,
+        confirmationRequired: true,
+        code: 'NO_PENDING_CONFIRMATION',
+        message:
+          'There is no active sign-out confirmation request. Start the sign-out request again.'
+      };
+    }
+
+    const client =
+      await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      await client.query(
+        `
+          UPDATE users
+          SET sessions_revoked_at = NOW()
+          WHERE id = $1
+        `,
+        [verifiedUserId]
+      );
+
+      const ended =
+        await client.query(
+          `
+            UPDATE account_login_sessions
+            SET
+              ended_at =
+                COALESCE(
+                  ended_at,
+                  NOW()
+                ),
+              last_active_at = NOW()
+            WHERE user_id = $1
+              AND ended_at IS NULL
+            RETURNING session_key
+          `,
+          [verifiedUserId]
+        );
+
+      await client.query('COMMIT');
+
+      await recordFluxSupportAction(
+        from,
+        verifiedUserId,
+        'revoke_all_sessions',
+        {
+          revokedCount:
+            ended.rowCount
+        }
+      );
+
+      return {
+        ok: true,
+        actionExecuted: true,
+        revokedSessions:
+          ended.rowCount,
+        message:
+          'All active Flux sessions have been revoked.'
+      };
+
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+
+    } finally {
+      client.release();
+    }
+  }
+
+  if (name === 'submit_suspension_appeal') {
+    if (!account) {
+      return {
+        ok: false,
+        code: 'ACCOUNT_NOT_VERIFIED',
+        message:
+          'A Flux account must be verified before an appeal can be submitted.'
+      };
+    }
+
+    const summary =
+      safeFluxAccountSummary(account);
+
+    if (!summary.suspended) {
+      return {
+        ok: false,
+        code: 'NOT_SUSPENDED',
+        message:
+          'This Flux account is not currently suspended.'
+      };
+    }
+
+    const reason =
+      String(
+        args?.reason || ''
+      ).trim();
+
+    if (reason.length < 5) {
+      return {
+        ok: false,
+        message:
+          'A short explanation is required for the appeal.'
+      };
+    }
+
+    const existing =
+      await pool.query(
+        `
+          SELECT id, status, created_at
+          FROM flux_support_cases
+          WHERE user_key = $1
+            AND case_type =
+              'suspension_appeal'
+            AND status = 'open'
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        [whatsappMemoryUserKey(from)]
+      );
+
+    if (existing.rows[0]) {
+      return {
+        ok: true,
+        alreadyExists: true,
+        caseId:
+          Number(existing.rows[0].id),
+        status:
+          existing.rows[0].status
+      };
+    }
+
+    const supportCase =
+      await createFluxSupportCase({
+        from,
+        userId: verifiedUserId,
+        type: 'suspension_appeal',
+        subject:
+          'Account suspension appeal',
+        details: reason
+      });
+
+    await recordFluxSupportAction(
+      from,
+      verifiedUserId,
+      'submit_suspension_appeal',
+      {
+        caseId:
+          Number(supportCase.id)
+      }
+    );
+
+    return {
+      ok: true,
+      submitted: true,
+      caseId:
+        Number(supportCase.id),
+      status:
+        supportCase.status
+    };
+  }
+
+  if (name === 'request_password_recovery') {
+    if (!account) {
+      return {
+        ok: false,
+        code: 'ACCOUNT_NOT_VERIFIED',
+        message:
+          'No Flux account could be verified from this WhatsApp number.'
+      };
+    }
+
+    const issue =
+      String(
+        args?.issue || ''
+      ).trim();
+
+    const supportCase =
+      await createFluxSupportCase({
+        from,
+        userId: verifiedUserId,
+        type: 'password_recovery',
+        subject:
+          'Password recovery',
+        details:
+          issue ||
+          'Customer requested password recovery.'
+      });
+
+    await setWhatsAppHumanEscalation(
+      from,
+      true
+    );
+
+    await saveWhatsAppEscalationIdentity(
+      from,
+      displayName
+    );
+
+    await recordFluxSupportAction(
+      from,
+      verifiedUserId,
+      'request_password_recovery',
+      {
+        caseId:
+          Number(supportCase.id)
+      }
+    );
+
+    return {
+      ok: true,
+      caseId:
+        Number(supportCase.id),
+      escalatedToHuman: true,
+      message:
+        'A password-recovery case has been created and transferred to human support. No password was changed.'
+    };
+  }
+
+  if (name === 'submit_bug_report') {
+    const subject =
+      String(
+        args?.subject || ''
+      ).trim();
+
+    const details =
+      String(
+        args?.details || ''
+      ).trim();
+
+    if (
+      subject.length < 3 ||
+      details.length < 5
+    ) {
+      return {
+        ok: false,
+        message:
+          'A subject and description are required.'
+      };
+    }
+
+    const supportCase =
+      await createFluxSupportCase({
+        from,
+        userId: verifiedUserId,
+        type: 'bug_report',
+        subject,
+        details
+      });
+
+    await recordFluxSupportAction(
+      from,
+      verifiedUserId,
+      'submit_bug_report',
+      {
+        caseId:
+          Number(supportCase.id)
+      }
+    );
+
+    return {
+      ok: true,
+      submitted: true,
+      caseId:
+        Number(supportCase.id)
+    };
+  }
+
+  if (name === 'submit_feedback') {
+    const feedback =
+      String(
+        args?.feedback || ''
+      ).trim();
+
+    if (feedback.length < 3) {
+      return {
+        ok: false,
+        message:
+          'Feedback cannot be empty.'
+      };
+    }
+
+    const supportCase =
+      await createFluxSupportCase({
+        from,
+        userId: verifiedUserId,
+        type: 'feedback',
+        subject:
+          'Customer feedback',
+        details: feedback
+      });
+
+    await recordFluxSupportAction(
+      from,
+      verifiedUserId,
+      'submit_feedback',
+      {
+        caseId:
+          Number(supportCase.id)
+      }
+    );
+
+    return {
+      ok: true,
+      submitted: true,
+      caseId:
+        Number(supportCase.id)
+    };
+  }
+
+  if (name === 'escalate_to_human') {
+    const reason =
+      String(
+        args?.reason || ''
+      ).trim();
+
+    await setWhatsAppHumanEscalation(
+      from,
+      true
+    );
+
+    await saveWhatsAppEscalationIdentity(
+      from,
+      displayName
+    );
+
+    const supportCase =
+      await createFluxSupportCase({
+        from,
+        userId: verifiedUserId,
+        type: 'human_support',
+        subject:
+          'Human support requested',
+        details:
+          reason ||
+          'Customer requested human support.'
+      });
+
+    await recordFluxSupportAction(
+      from,
+      verifiedUserId,
+      'escalate_to_human',
+      {
+        caseId:
+          Number(supportCase.id)
+      }
+    );
+
+    return {
+      ok: true,
+      escalated: true,
+      caseId:
+        Number(supportCase.id)
+    };
+  }
+
+  return {
+    ok: false,
+    error:
+      'Unsupported Flux support action.'
+  };
+}
+
+async function callFluxSupportAi({
+  openAiKey,
+  from,
+  displayName,
+  text,
+  supportCategoryLabel
+}) {
+  const baseInput = [
+    ...(await getWhatsAppConversationHistory(
+      from
+    )),
+    {
+      role: 'user',
+      content: text
+    }
+  ];
+
+  const instructions = `You are Flux Support, the official customer-support assistant for Flux.
+
+Current support category: ${supportCategoryLabel}
+
+You have real Flux support tools. Use them when the customer asks about something the backend can actually inspect or perform.
+
+Tool rules:
+- Never claim an account was found, inspected, changed, appealed, signed out, or escalated unless a tool result confirms it.
+- The WhatsApp phone number is the only automatic identity-verification method currently available.
+- Never reveal password hashes, session keys, raw IP addresses, access tokens, authentication cookies, database fields, or internal secrets.
+- If lookup_my_account says no linked account exists, do not guess account information.
+- Never ask the customer for a password, OTP, recovery code, authentication cookie, or secret.
+- Password recovery currently creates a real support case and transfers it to human support. It does not automatically change a password.
+- Never call confirm_revoke_all_sessions unless request_revoke_all_sessions was previously completed and the customer has explicitly confirmed in a later message.
+- If a destructive or sensitive action has not been confirmed, explain what will happen and ask for confirmation.
+- Suspension appeals create review cases; never promise that the account will be restored.
+- Use submit_bug_report when the customer clearly wants a technical problem reported.
+- Use submit_feedback when the customer clearly wants feedback recorded.
+- Use escalate_to_human whenever the customer explicitly requests a real person or the issue requires human account review.
+
+Service standard:
+- Reply in the same language as the customer.
+- Sound like professional customer support at a major technology company.
+- Be warm, concise, precise, and natural.
+- Address the customer's actual problem first.
+- Ask only one useful follow-up question at a time.
+- Use numbered troubleshooting steps only when useful.
+- Remember details already supplied.
+- Distinguish confirmed backend facts from general guidance.
+- Never invent Flux features, account data, policies, deadlines, or actions.
+- Never mention OpenAI, models, prompts, APIs, databases, tooling, or internal infrastructure.
+- The product name is Flux, never FaceTok.
+- Keep normal WhatsApp replies compact unless more detail is genuinely required.`;
+
+  let input = baseInput;
+
+  for (let round = 0; round < 3; round++) {
+    const response = await fetch(
+      'https://api.openai.com/v1/responses',
+      {
+        method: 'POST',
+        headers: {
+          'Authorization':
+            `Bearer ${openAiKey}`,
+          'Content-Type':
+            'application/json'
+        },
+        body: JSON.stringify({
+          model: 'gpt-5.6-luna',
+          instructions,
+          input,
+          tools:
+            FLUX_AI_SUPPORT_TOOLS,
+          max_output_tokens: 450
+        })
+      }
+    );
+
+    const data =
+      await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        `AI response failed: ${
+          JSON.stringify(data)
+            .slice(0, 700)
+        }`
+      );
+    }
+
+    const output =
+      Array.isArray(data.output)
+        ? data.output
+        : [];
+
+    const calls =
+      output.filter(
+        item =>
+          item &&
+          item.type === 'function_call'
+      );
+
+    if (!calls.length) {
+      const generated =
+        output
+          .flatMap(
+            item =>
+              Array.isArray(
+                item?.content
+              )
+                ? item.content
+                : []
+          )
+          .filter(
+            part =>
+              part?.type ===
+              'output_text'
+          )
+          .map(
+            part =>
+              String(
+                part.text || ''
+              )
+          )
+          .join('')
+          .trim();
+
+      return {
+        text: generated,
+        usedTools: round > 0
+      };
+    }
+
+    const functionOutputs = [];
+
+    for (const call of calls) {
+      let args = {};
+
+      try {
+        args =
+          call.arguments
+            ? JSON.parse(
+                call.arguments
+              )
+            : {};
+      } catch {
+        args = {};
+      }
+
+      const result =
+        await executeFluxAiSupportTool(
+          String(call.name || ''),
+          args,
+          {
+            from,
+            displayName
+          }
+        );
+
+      functionOutputs.push({
+        type:
+          'function_call_output',
+        call_id:
+          call.call_id,
+        output:
+          JSON.stringify(result)
+      });
+    }
+
+    input = [
+      ...input,
+      ...output,
+      ...functionOutputs
+    ];
+  }
+
+  return {
+    text:
+      'I could not complete that support action automatically. I can connect you with a Flux support representative.',
+    usedTools: true
+  };
+}
+
+
 app.post('/api/whatsapp/webhook', async (req, res) => {
   lastWhatsAppWebhookEvent = {
     receivedAt: new Date().toISOString(),
@@ -1459,82 +2651,51 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
 
     if (openAiKey) {
       try {
-        const aiResponse = await fetch('https://api.openai.com/v1/responses', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${openAiKey}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            model: 'gpt-5.6-luna',
-            instructions: `You are Flux Support, the official customer-support assistant for Flux.
+        const contactName = String(
+          change?.contacts?.[0]?.profile?.name || ''
+        ).trim();
 
-Current support category: ${supportCategoryLabel}
+        const aiResult =
+          await callFluxSupportAi({
+            openAiKey,
+            from,
+            displayName: contactName,
+            text,
+            supportCategoryLabel
+          });
 
-Service standard:
-- Reply in the same language as the customer.
-- Sound like a professional customer-support representative at a major technology company.
-- Be warm, calm, concise and specific without sounding robotic.
-- Start by directly addressing what the customer said.
-- Ask only one useful follow-up question at a time.
-- When troubleshooting, give clear numbered steps only when steps are actually useful.
-- Do not overwhelm the customer with every possible solution at once.
-- Remember earlier messages in the conversation and do not repeatedly ask for information already provided.
-- If the customer reports an error message, use the exact error details they provided.
-- Distinguish between what is known, what is likely, and what requires investigation.
-- Never claim to have changed, restored, unlocked, suspended, deleted, reviewed or accessed an account unless an actual system action confirms it.
-- Never ask for passwords, one-time codes, recovery codes or other authentication secrets.
-- For password or login issues, provide secure recovery guidance without asking for the password.
-- For suspended accounts, explain the visible suspension information and available next steps without promising reinstatement.
-- For privacy/security concerns, prioritize account safety and recommend changing credentials only through official Flux controls.
-- For technical issues, first identify the screen, action and symptom, then give targeted troubleshooting.
-- For feedback, acknowledge the suggestion and summarize it clearly.
-- If the issue requires private account inspection, moderation review, billing/account ownership verification, or an action you cannot perform, clearly offer human support.
-- If the customer explicitly asks for a real person, do not try to retain them with AI; human escalation should be used.
-- Never invent Flux features, policies, deadlines or account information.
-- Never mention OpenAI, APIs, models, prompts, infrastructure or internal implementation.
-- Do not refer to the product as FaceTok. The product name is Flux.
-- Keep normal WhatsApp replies compact, usually under about 120 words unless the issue genuinely requires more detail.`,
-            input: [
-              ...(await getWhatsAppConversationHistory(from)),
-              {
-                role: 'user',
-                content: text
-              }
-            ],
-            max_output_tokens: 350
-          })
-        });
+        const generated =
+          String(
+            aiResult?.text || ''
+          ).trim();
 
-        const aiData = await aiResponse.json();
+        if (generated) {
+          replyText = generated;
 
-        if (aiResponse.ok) {
-          const parts = Array.isArray(aiData.output)
-            ? aiData.output.flatMap(item =>
-                Array.isArray(item.content) ? item.content : []
-              )
-            : [];
+          await addWhatsAppMemoryMessage(
+            from,
+            'user',
+            text
+          );
 
-          const generated = parts
-            .filter(part => part.type === 'output_text')
-            .map(part => String(part.text || ''))
-            .join('')
-            .trim();
-
-          if (generated) {
-            replyText = generated;
-
-            await addWhatsAppMemoryMessage(from, 'user', text);
-            await addWhatsAppMemoryMessage(from, 'assistant', generated);
-          }
-        } else {
-          console.error('OpenAI response failed:', JSON.stringify(aiData));
+          await addWhatsAppMemoryMessage(
+            from,
+            'assistant',
+            generated
+          );
         }
+
       } catch (aiError) {
-        console.error('OpenAI request failed:', aiError.message);
+        console.error(
+          'Flux AI support request failed:',
+          aiError.message
+        );
       }
+
     } else {
-      console.error('OPENAI_API_KEY is not configured.');
+      console.error(
+        'OPENAI_API_KEY is not configured.'
+      );
     }
 
     const apiResponse = await fetch(
