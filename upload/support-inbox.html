@@ -606,9 +606,30 @@ async function openConversation(userKey) {
 
   renderConversationList();
 
-  const data = await api(
-    `/api/admin/whatsapp/escalations/${userKey}/messages`
-  );
+  messagesElement.innerHTML = `
+    <div class="placeholder">
+      Loading conversation...
+    </div>
+  `;
+
+  let data;
+
+  try {
+    data = await api(
+      `/api/admin/whatsapp/escalations/${userKey}/messages`
+    );
+  } catch (error) {
+    console.error('Conversation load failed:', error);
+
+    messagesElement.innerHTML = `
+      <div class="placeholder" style="color:#dc2626">
+        Could not open conversation:<br>
+        ${escapeHtml(error.message)}
+      </div>
+    `;
+
+    return;
+  }
 
   const conversation = data.conversation || {};
   const messages =

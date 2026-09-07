@@ -658,6 +658,7 @@ app.get('/api/admin/whatsapp/escalations/:userKey/messages', requireSupportInbox
     }
 
     await ensureWhatsAppSupportInboxSchema();
+    await ensureWhatsAppMemorySchema();
 
     const userKey = String(req.params.userKey || '').trim();
 
@@ -933,6 +934,12 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
       await isWhatsAppHumanEscalated(from);
 
     if (humanEscalated) {
+      await addWhatsAppMemoryMessage(
+        from,
+        'user',
+        text
+      );
+
       console.log(
         'AI reply skipped because conversation is escalated:',
         from
