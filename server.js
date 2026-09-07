@@ -516,6 +516,311 @@ async function sendWhatsAppSystemText(to, body) {
   }
 }
 
+
+async function ensureWhatsAppSupportInboxSchema() {
+  if (!pool) throw new Error('Database is not configured');
+
+  await ensureWhatsAppEscalationSchema();
+
+  await pool.query(`
+    ALTER TABLE whatsapp_human_escalations
+    ADD COLUMN IF NOT EXISTS phone_number VARCHAR(40)
+  `);
+
+  await pool.query(`
+    ALTER TABLE whatsapp_human_escalations
+    ADD COLUMN IF NOT EXISTS display_name VARCHAR(160)
+  `);
+}
+
+async function saveWhatsAppEscalationIdentity(userId, displayName) {
+  if (!pool) return;
+
+  try {
+    await ensureWhatsAppSupportInboxSchema();
+
+    const userKey = whatsappMemoryUserKey(userId);
+
+    await pool.query(
+      `
+        UPDATE whatsapp_human_escalations
+        SET phone_number = $2,
+            display_name = $3,
+            updated_at = NOW()
+        WHERE user_key = $1
+      `,
+      [
+        userKey,
+        String(userId || '').trim(),
+        String(displayName || '').trim()
+      ]
+    );
+  } catch (error) {
+    console.error(
+      'WhatsApp escalation identity save failed:',
+      error.message
+    );
+  }
+}
+
+/*
+ * IMPORTANT:
+ * These routes must ultimately be protected by your existing admin
+ * authentication before production use.
+ */
+
+app.get('/api/admin/whatsapp/escalations', async (req, res) => {
+  try {
+    if (!pool) {
+      return res.status(503).json({
+        error: 'Database is not configured'
+      });
+    }
+
+    await ensureWhatsAppSupportInboxSchema();
+
+    const result = await pool.query(`
+      SELECT
+        user_key,
+        phone_number,
+        display_name,
+        active,
+        requested_at,
+        updated_at
+      FROM whatsapp_human_escalations
+      WHERE active = TRUE
+      ORDER BY updated_at DESC
+      LIMIT 100
+    `);
+
+    return res.json({
+      conversations: result.rows
+    });
+  } catch (error) {
+    console.error(
+      'WhatsApp escalation list failed:',
+      error.message
+    );
+
+    return res.status(500).json({
+      error: 'Could not load support conversations'
+    });
+  }
+});
+
+app.get('/api/admin/whatsapp/escalations/:userKey/messages', async (req, res) => {
+  try {
+    if (!pool) {
+      return res.status(503).json({
+        error: 'Database is not configured'
+      });
+    }
+
+    await ensureWhatsAppSupportInboxSchema();
+
+    const userKey = String(req.params.userKey || '').trim();
+
+    if (!/^[a-f0-9]{64}$/.test(userKey)) {
+      return res.status(400).json({
+        error: 'Invalid conversation'
+      });
+    }
+
+    const conversationResult = await pool.query(
+      `
+        SELECT
+          user_key,
+          phone_number,
+          display_name,
+          active,
+          requested_at,
+          updated_at
+        FROM whatsapp_human_escalations
+        WHERE user_key = $1
+        LIMIT 1
+      `,
+      [userKey]
+    );
+
+    if (!conversationResult.rows.length) {
+      return res.status(404).json({
+        error: 'Conversation not found'
+      });
+    }
+
+    const messagesResult = await pool.query(
+      `
+        SELECT role, content, created_at
+        FROM whatsapp_ai_memory
+        WHERE user_key = $1
+        ORDER BY created_at ASC, id ASC
+        LIMIT 100
+      `,
+      [userKey]
+    );
+
+    return res.json({
+      conversation: conversationResult.rows[0],
+      messages: messagesResult.rows
+    });
+  } catch (error) {
+    console.error(
+      'WhatsApp escalation messages failed:',
+      error.message
+    );
+
+    return res.status(500).json({
+      error: 'Could not load conversation'
+    });
+  }
+});
+
+app.post('/api/admin/whatsapp/escalations/:userKey/reply', async (req, res) => {
+  try {
+    if (!pool) {
+      return res.status(503).json({
+        error: 'Database is not configured'
+      });
+    }
+
+    await ensureWhatsAppSupportInboxSchema();
+
+    const userKey = String(req.params.userKey || '').trim();
+    const text = String(req.body?.text || '').trim();
+
+    if (!/^[a-f0-9]{64}$/.test(userKey)) {
+      return res.status(400).json({
+        error: 'Invalid conversation'
+      });
+    }
+
+    if (!text || text.length > 4000) {
+      return res.status(400).json({
+        error: 'Reply must contain 1-4000 characters'
+      });
+    }
+
+    const result = await pool.query(
+      `
+        SELECT phone_number
+        FROM whatsapp_human_escalations
+        WHERE user_key = $1
+          AND active = TRUE
+        LIMIT 1
+      `,
+      [userKey]
+    );
+
+    const phoneNumber = String(
+      result.rows[0]?.phone_number || ''
+    ).trim();
+
+    if (!phoneNumber) {
+      return res.status(404).json({
+        error: 'Escalated conversation not found'
+      });
+    }
+
+    const sent = await sendWhatsAppSystemText(
+      phoneNumber,
+      text
+    );
+
+    if (!sent) {
+      return res.status(502).json({
+        error: 'WhatsApp message could not be sent'
+      });
+    }
+
+    await addWhatsAppMemoryMessage(
+      phoneNumber,
+      'assistant',
+      text
+    );
+
+    await pool.query(
+      `
+        UPDATE whatsapp_human_escalations
+        SET updated_at = NOW()
+        WHERE user_key = $1
+      `,
+      [userKey]
+    );
+
+    return res.json({
+      ok: true
+    });
+  } catch (error) {
+    console.error(
+      'WhatsApp manual reply failed:',
+      error.message
+    );
+
+    return res.status(500).json({
+      error: 'Could not send support reply'
+    });
+  }
+});
+
+app.post('/api/admin/whatsapp/escalations/:userKey/resolve', async (req, res) => {
+  try {
+    if (!pool) {
+      return res.status(503).json({
+        error: 'Database is not configured'
+      });
+    }
+
+    const userKey = String(req.params.userKey || '').trim();
+
+    if (!/^[a-f0-9]{64}$/.test(userKey)) {
+      return res.status(400).json({
+        error: 'Invalid conversation'
+      });
+    }
+
+    await ensureWhatsAppSupportInboxSchema();
+
+    const result = await pool.query(
+      `
+        UPDATE whatsapp_human_escalations
+        SET active = FALSE,
+            updated_at = NOW()
+        WHERE user_key = $1
+        RETURNING phone_number
+      `,
+      [userKey]
+    );
+
+    const phoneNumber = String(
+      result.rows[0]?.phone_number || ''
+    ).trim();
+
+    if (!phoneNumber) {
+      return res.status(404).json({
+        error: 'Conversation not found'
+      });
+    }
+
+    await sendWhatsAppSystemText(
+      phoneNumber,
+      'Human support has ended. AI support is active again.'
+    );
+
+    return res.json({
+      ok: true
+    });
+  } catch (error) {
+    console.error(
+      'WhatsApp escalation resolve failed:',
+      error.message
+    );
+
+    return res.status(500).json({
+      error: 'Could not resolve conversation'
+    });
+  }
+});
+
 app.post('/api/whatsapp/webhook', async (req, res) => {
   lastWhatsAppWebhookEvent = {
     receivedAt: new Date().toISOString(),
@@ -565,6 +870,15 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
 
     if (wantsHumanAgent(text)) {
       await setWhatsAppHumanEscalation(from, true);
+
+      const contactName = String(
+        change?.contacts?.[0]?.profile?.name || ''
+      ).trim();
+
+      await saveWhatsAppEscalationIdentity(
+        from,
+        contactName
+      );
 
       await sendWhatsAppSystemText(
         from,
