@@ -8435,6 +8435,35 @@ app.use('/edit_profile_assets', requireAuth, express.static(path.join(publicDire
   immutable: true
 }));
 
+// WhatsApp Business Platform webhook verification.
+app.get('/api/whatsapp/webhook', (request, response) => {
+  const verifyToken = String(process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || '').trim();
+  const mode = String(request.query['hub.mode'] || '');
+  const token = String(request.query['hub.verify_token'] || '');
+  const challenge = request.query['hub.challenge'];
+
+  if (!verifyToken) {
+    console.error('WHATSAPP_WEBHOOK_VERIFY_TOKEN is not configured.');
+    return response.sendStatus(503);
+  }
+
+  if (mode === 'subscribe' && token === verifyToken && challenge !== undefined) {
+    return response.status(200).send(String(challenge));
+  }
+
+  return response.sendStatus(403);
+});
+
+// Incoming WhatsApp events. Message processing will be added after
+// Meta webhook verification is confirmed.
+app.post('/api/whatsapp/webhook', (request, response) => {
+  if (request.body?.object !== 'whatsapp_business_account') {
+    return response.sendStatus(404);
+  }
+
+  response.sendStatus(200);
+});
+
 app.get('*splat', (request, response) => response.redirect(readSession(request) ? '/app' : '/'));
 
 const server = app.listen(port, '0.0.0.0', async () => {
