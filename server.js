@@ -73,7 +73,52 @@ const whatsappConversationMemory = new Map();
 const WHATSAPP_MEMORY_LIMIT = 12;
 const WHATSAPP_MEMORY_TTL_MS = 6 * 60 * 60 * 1000;
 
-function getWhatsAppConversation(userId) {
+let whatsappMemorySchemaReady = false;
+let whatsappMemorySchemaPromise = null;
+
+function whatsappMemoryUserKey(userId) {
+  return crypto
+    .createHash('sha256')
+    .update(`whatsapp:${String(userId || '').trim()}`)
+    .digest('hex');
+}
+
+async function ensureWhatsAppMemorySchema() {
+  if (!pool) return false;
+  if (whatsappMemorySchemaReady) return true;
+
+  if (!whatsappMemorySchemaPromise) {
+    whatsappMemorySchemaPromise = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS whatsapp_ai_memory (
+          id BIGSERIAL PRIMARY KEY,
+          user_key VARCHAR(64) NOT NULL,
+          role VARCHAR(16) NOT NULL,
+          content TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS whatsapp_ai_memory_user_time_idx
+        ON whatsapp_ai_memory(user_key, created_at DESC, id DESC)
+      `);
+
+      whatsappMemorySchemaReady = true;
+    })();
+  }
+
+  try {
+    await whatsappMemorySchemaPromise;
+    return true;
+  } catch (error) {
+    whatsappMemorySchemaPromise = null;
+    console.error('WhatsApp memory schema failed:', error.message);
+    return false;
+  }
+}
+
+function getRamWhatsAppConversation(userId) {
   const now = Date.now();
   const existing = whatsappConversationMemory.get(userId);
 
@@ -87,19 +132,106 @@ function getWhatsAppConversation(userId) {
   return existing;
 }
 
-function addWhatsAppMemoryMessage(userId, role, content) {
-  const conversation = getWhatsAppConversation(userId);
+async function getWhatsAppConversationHistory(userId) {
+  const ram = getRamWhatsAppConversation(userId);
 
-  conversation.messages.push({
-    role,
-    content: String(content || '').trim()
+  if (!pool) {
+    return ram.messages.slice(-WHATSAPP_MEMORY_LIMIT);
+  }
+
+  try {
+    const ready = await ensureWhatsAppMemorySchema();
+    if (!ready) return ram.messages.slice(-WHATSAPP_MEMORY_LIMIT);
+
+    const userKey = whatsappMemoryUserKey(userId);
+
+    const result = await pool.query(
+      `
+        SELECT role, content
+        FROM whatsapp_ai_memory
+        WHERE user_key = $1
+          AND created_at >= NOW() - INTERVAL '6 hours'
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2
+      `,
+      [userKey, WHATSAPP_MEMORY_LIMIT]
+    );
+
+    const messages = result.rows
+      .reverse()
+      .map(row => ({
+        role: String(row.role || ''),
+        content: String(row.content || '')
+      }))
+      .filter(item =>
+        (item.role === 'user' || item.role === 'assistant') &&
+        item.content
+      );
+
+    ram.messages = messages.slice(-WHATSAPP_MEMORY_LIMIT);
+    ram.updatedAt = Date.now();
+
+    return ram.messages;
+  } catch (error) {
+    console.error('WhatsApp memory load failed:', error.message);
+    return ram.messages.slice(-WHATSAPP_MEMORY_LIMIT);
+  }
+}
+
+async function addWhatsAppMemoryMessage(userId, role, content) {
+  const cleanContent = String(content || '').trim();
+  if (!cleanContent) return;
+
+  const cleanRole =
+    role === 'assistant' ? 'assistant' : 'user';
+
+  const ram = getRamWhatsAppConversation(userId);
+
+  ram.messages.push({
+    role: cleanRole,
+    content: cleanContent
   });
 
-  conversation.messages = conversation.messages
-    .filter(item => item.content)
-    .slice(-WHATSAPP_MEMORY_LIMIT);
+  ram.messages = ram.messages.slice(-WHATSAPP_MEMORY_LIMIT);
+  ram.updatedAt = Date.now();
 
-  conversation.updatedAt = Date.now();
+  if (!pool) return;
+
+  try {
+    const ready = await ensureWhatsAppMemorySchema();
+    if (!ready) return;
+
+    const userKey = whatsappMemoryUserKey(userId);
+
+    await pool.query(
+      `
+        INSERT INTO whatsapp_ai_memory
+          (user_key, role, content)
+        VALUES ($1, $2, $3)
+      `,
+      [userKey, cleanRole, cleanContent]
+    );
+
+    await pool.query(
+      `
+        DELETE FROM whatsapp_ai_memory
+        WHERE user_key = $1
+          AND (
+            created_at < NOW() - INTERVAL '6 hours'
+            OR id NOT IN (
+              SELECT id
+              FROM whatsapp_ai_memory
+              WHERE user_key = $1
+              ORDER BY created_at DESC, id DESC
+              LIMIT $2
+            )
+          )
+      `,
+      [userKey, WHATSAPP_MEMORY_LIMIT]
+    );
+  } catch (error) {
+    console.error('WhatsApp memory save failed:', error.message);
+  }
 }
 
 setInterval(() => {
@@ -179,7 +311,7 @@ Rules:
 - Do not make up FaceTok features.
 - Keep WhatsApp replies reasonably short.`,
             input: [
-              ...getWhatsAppConversation(from).messages,
+              ...(await getWhatsAppConversationHistory(from)),
               {
                 role: 'user',
                 content: text
@@ -207,8 +339,8 @@ Rules:
           if (generated) {
             replyText = generated;
 
-            addWhatsAppMemoryMessage(from, 'user', text);
-            addWhatsAppMemoryMessage(from, 'assistant', generated);
+            await addWhatsAppMemoryMessage(from, 'user', text);
+            await addWhatsAppMemoryMessage(from, 'assistant', generated);
           }
         } else {
           console.error('OpenAI response failed:', JSON.stringify(aiData));
