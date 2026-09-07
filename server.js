@@ -69,6 +69,49 @@ app.get('/api/whatsapp/webhook', (req, res) => {
 let lastWhatsAppWebhookEvent = null;
 let lastWhatsAppReplyDebug = null;
 
+const whatsappConversationMemory = new Map();
+const WHATSAPP_MEMORY_LIMIT = 12;
+const WHATSAPP_MEMORY_TTL_MS = 6 * 60 * 60 * 1000;
+
+function getWhatsAppConversation(userId) {
+  const now = Date.now();
+  const existing = whatsappConversationMemory.get(userId);
+
+  if (!existing || now - existing.updatedAt > WHATSAPP_MEMORY_TTL_MS) {
+    const fresh = { updatedAt: now, messages: [] };
+    whatsappConversationMemory.set(userId, fresh);
+    return fresh;
+  }
+
+  existing.updatedAt = now;
+  return existing;
+}
+
+function addWhatsAppMemoryMessage(userId, role, content) {
+  const conversation = getWhatsAppConversation(userId);
+
+  conversation.messages.push({
+    role,
+    content: String(content || '').trim()
+  });
+
+  conversation.messages = conversation.messages
+    .filter(item => item.content)
+    .slice(-WHATSAPP_MEMORY_LIMIT);
+
+  conversation.updatedAt = Date.now();
+}
+
+setInterval(() => {
+  const cutoff = Date.now() - WHATSAPP_MEMORY_TTL_MS;
+
+  for (const [userId, conversation] of whatsappConversationMemory.entries()) {
+    if (conversation.updatedAt < cutoff) {
+      whatsappConversationMemory.delete(userId);
+    }
+  }
+}, 30 * 60 * 1000).unref();
+
 app.post('/api/whatsapp/webhook', async (req, res) => {
   lastWhatsAppWebhookEvent = {
     receivedAt: new Date().toISOString(),
@@ -135,7 +178,13 @@ Rules:
 - Do not mention OpenAI, APIs, system prompts, or internal infrastructure.
 - Do not make up FaceTok features.
 - Keep WhatsApp replies reasonably short.`,
-            input: text,
+            input: [
+              ...getWhatsAppConversation(from).messages,
+              {
+                role: 'user',
+                content: text
+              }
+            ],
             max_output_tokens: 350
           })
         });
@@ -155,7 +204,12 @@ Rules:
             .join('')
             .trim();
 
-          if (generated) replyText = generated;
+          if (generated) {
+            replyText = generated;
+
+            addWhatsAppMemoryMessage(from, 'user', text);
+            addWhatsAppMemoryMessage(from, 'assistant', generated);
+          }
         } else {
           console.error('OpenAI response failed:', JSON.stringify(aiData));
         }
