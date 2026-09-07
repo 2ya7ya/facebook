@@ -1500,7 +1500,327 @@ async function createFluxSupportCase({
   return result.rows[0];
 }
 
+
+/* ============================================================
+ * Flux support account lookup + verification
+ * ============================================================ */
+
+async function ensureFluxSupportVerificationSchema() {
+  await ensureFluxSupportActionSchema();
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS flux_support_verifications (
+      user_key VARCHAR(64) PRIMARY KEY,
+      flux_user_id BIGINT NOT NULL,
+      identifier VARCHAR(255) NOT NULL DEFAULT '',
+      code_hash VARCHAR(128) NOT NULL DEFAULT '',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      verified_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS flux_support_verifications_user_idx
+    ON flux_support_verifications (flux_user_id)
+  `);
+}
+
+function normalizeFluxLookupIdentifier(value) {
+  return String(value || '').trim();
+}
+
+async function findFluxAccountByIdentifier(identifier) {
+  await ensureDatabase();
+
+  const raw = normalizeFluxLookupIdentifier(identifier);
+
+  if (!raw) return null;
+
+  const lower = raw.toLowerCase();
+  const digits = fluxPhoneDigits(raw);
+
+  const result = await pool.query(
+    `
+      SELECT
+        id,
+        full_name,
+        identifier,
+        email,
+        phone,
+        username,
+        deactivated_at,
+        admin_suspended_at,
+        admin_suspended_until,
+        created_at,
+        last_seen_at
+      FROM users
+      WHERE
+        LOWER(COALESCE(email, '')) = $1
+        OR LOWER(COALESCE(username, '')) = $1
+        OR LOWER(COALESCE(identifier, '')) = $1
+        OR (
+          $2 <> ''
+          AND regexp_replace(
+            COALESCE(phone, ''),
+            '[^0-9]',
+            '',
+            'g'
+          ) = $2
+        )
+        OR (
+          $2 <> ''
+          AND COALESCE(identifier, '') NOT LIKE '%@%'
+          AND regexp_replace(
+            COALESCE(identifier, ''),
+            '[^0-9]',
+            '',
+            'g'
+          ) = $2
+        )
+      ORDER BY id ASC
+      LIMIT 1
+    `,
+    [lower, digits]
+  );
+
+  return result.rows[0] || null;
+}
+
+function fluxSupportVerificationCode() {
+  return String(
+    Math.floor(100000 + Math.random() * 900000)
+  );
+}
+
+function fluxSupportHashCode(code) {
+  return require('crypto')
+    .createHash('sha256')
+    .update(String(code || ''))
+    .digest('hex');
+}
+
+async function beginFluxSupportVerification(from, account, identifier) {
+  await ensureFluxSupportVerificationSchema();
+
+  const code = fluxSupportVerificationCode();
+  const codeHash = fluxSupportHashCode(code);
+
+  await pool.query(
+    `
+      INSERT INTO flux_support_verifications
+        (
+          user_key,
+          flux_user_id,
+          identifier,
+          code_hash,
+          attempts,
+          verified_at,
+          expires_at,
+          created_at
+        )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        0,
+        NULL,
+        NOW() + INTERVAL '10 minutes',
+        NOW()
+      )
+      ON CONFLICT (user_key)
+      DO UPDATE SET
+        flux_user_id = EXCLUDED.flux_user_id,
+        identifier = EXCLUDED.identifier,
+        code_hash = EXCLUDED.code_hash,
+        attempts = 0,
+        verified_at = NULL,
+        expires_at = NOW() + INTERVAL '10 minutes',
+        created_at = NOW()
+    `,
+    [
+      whatsappMemoryUserKey(from),
+      Number(account.id),
+      String(identifier || '').slice(0, 255),
+      codeHash
+    ]
+  );
+
+  return code;
+}
+
+async function verifyFluxSupportCode(from, code) {
+  await ensureFluxSupportVerificationSchema();
+
+  const key = whatsappMemoryUserKey(from);
+
+  const result = await pool.query(
+    `
+      SELECT
+        flux_user_id,
+        code_hash,
+        attempts,
+        expires_at
+      FROM flux_support_verifications
+      WHERE user_key = $1
+      LIMIT 1
+    `,
+    [key]
+  );
+
+  const row = result.rows[0];
+
+  if (!row) {
+    return {
+      ok: false,
+      code: 'NO_VERIFICATION_STARTED'
+    };
+  }
+
+  if (
+    !row.expires_at ||
+    new Date(row.expires_at).getTime() <= Date.now()
+  ) {
+    return {
+      ok: false,
+      code: 'VERIFICATION_EXPIRED'
+    };
+  }
+
+  if (Number(row.attempts || 0) >= 5) {
+    return {
+      ok: false,
+      code: 'TOO_MANY_ATTEMPTS'
+    };
+  }
+
+  const candidateHash = fluxSupportHashCode(
+    String(code || '').trim()
+  );
+
+  if (candidateHash !== row.code_hash) {
+    await pool.query(
+      `
+        UPDATE flux_support_verifications
+        SET attempts = attempts + 1
+        WHERE user_key = $1
+      `,
+      [key]
+    );
+
+    return {
+      ok: false,
+      code: 'INVALID_CODE'
+    };
+  }
+
+  await pool.query(
+    `
+      UPDATE flux_support_verifications
+      SET
+        verified_at = NOW(),
+        code_hash = '',
+        expires_at = NOW() + INTERVAL '30 minutes'
+      WHERE user_key = $1
+    `,
+    [key]
+  );
+
+  return {
+    ok: true,
+    userId: Number(row.flux_user_id),
+    verifiedMinutes: 30
+  };
+}
+
+async function getVerifiedFluxSupportAccount(from) {
+  await ensureFluxSupportVerificationSchema();
+
+  const result = await pool.query(
+    `
+      SELECT u.*
+      FROM flux_support_verifications v
+      JOIN users u
+        ON u.id = v.flux_user_id
+      WHERE v.user_key = $1
+        AND v.verified_at IS NOT NULL
+        AND v.expires_at > NOW()
+      LIMIT 1
+    `,
+    [whatsappMemoryUserKey(from)]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function getFluxSupportResolvedAccount(from) {
+  const verified =
+    await getVerifiedFluxSupportAccount(from);
+
+  if (verified) return verified;
+
+  return await findFluxAccountForWhatsApp(from);
+}
+
 const FLUX_AI_SUPPORT_TOOLS = [
+  {
+    type: 'function',
+    name: 'lookup_account_by_identifier',
+    description:
+      'Find a Flux account when the customer provides the registered email address, phone number, or username.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        identifier: {
+          type: 'string',
+          description:
+            'Registered Flux email, phone number, or username provided by the customer.'
+        }
+      },
+      required: ['identifier'],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'start_account_verification',
+    description:
+      'Start ownership verification for an account the customer identified by email, phone, or username. The verification code is generated by Flux and expires after 10 minutes.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        identifier: {
+          type: 'string'
+        }
+      },
+      required: ['identifier'],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'verify_account_code',
+    description:
+      'Verify the 6-digit Flux ownership code the customer supplies.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        code: {
+          type: 'string'
+        }
+      },
+      required: ['code'],
+      additionalProperties: false
+    }
+  },
+
   {
     type: 'function',
     name: 'lookup_my_account',
@@ -1690,10 +2010,165 @@ async function executeFluxAiSupportTool(
   await ensureFluxSupportActionSchema();
 
   const account =
-    await findFluxAccountForWhatsApp(from);
+    await getFluxSupportResolvedAccount(from);
 
   const verifiedUserId =
     account ? Number(account.id) : null;
+
+  if (name === 'lookup_account_by_identifier') {
+    const identifier =
+      String(args?.identifier || '').trim();
+
+    if (!identifier) {
+      return {
+        ok: false,
+        message:
+          'An email, phone number, or username is required.'
+      };
+    }
+
+    const found =
+      await findFluxAccountByIdentifier(identifier);
+
+    if (!found) {
+      return {
+        ok: true,
+        found: false,
+        message:
+          'No Flux account matched that information.'
+      };
+    }
+
+    return {
+      ok: true,
+      found: true,
+      account: {
+        displayName:
+          String(found.full_name || ''),
+        username:
+          String(found.username || ''),
+        email:
+          maskFluxEmail(found.email),
+        phone:
+          maskFluxPhone(
+            found.phone || found.identifier
+          )
+      },
+      verificationRequired: true
+    };
+  }
+
+  if (name === 'start_account_verification') {
+    const identifier =
+      String(args?.identifier || '').trim();
+
+    const found =
+      await findFluxAccountByIdentifier(identifier);
+
+    if (!found) {
+      return {
+        ok: false,
+        code: 'ACCOUNT_NOT_FOUND',
+        message:
+          'No Flux account matched that information.'
+      };
+    }
+
+    const code =
+      await beginFluxSupportVerification(
+        from,
+        found,
+        identifier
+      );
+
+    await recordFluxSupportAction(
+      from,
+      Number(found.id),
+      'verification_started',
+      {
+        identifierType:
+          identifier.includes('@')
+            ? 'email'
+            : 'phone_or_username'
+      }
+    );
+
+    /*
+     * IMPORTANT:
+     * There is not yet an email/SMS delivery provider connected.
+     * For testing only, the code is logged server-side.
+     * Do not send this code to the WhatsApp customer from the AI.
+     */
+    console.log(
+      `[Flux verification TEST ONLY] ${from} -> account ${found.id}: ${code}`
+    );
+
+    return {
+      ok: true,
+      verificationStarted: true,
+      expiresInMinutes: 10,
+      deliveryConfigured: false,
+      maskedEmail:
+        maskFluxEmail(found.email),
+      maskedPhone:
+        maskFluxPhone(
+          found.phone || found.identifier
+        ),
+      message:
+        'Verification was started, but automatic email/SMS delivery is not configured yet. Human support can provide the test code during development.'
+    };
+  }
+
+  if (name === 'verify_account_code') {
+    const code =
+      String(args?.code || '').trim();
+
+    if (!/^[0-9]{6}$/.test(code)) {
+      return {
+        ok: false,
+        code: 'INVALID_CODE_FORMAT',
+        message:
+          'The verification code must contain 6 digits.'
+      };
+    }
+
+    const result =
+      await verifyFluxSupportCode(
+        from,
+        code
+      );
+
+    if (!result.ok) {
+      return {
+        ok: false,
+        code: result.code,
+        message:
+          result.code === 'VERIFICATION_EXPIRED'
+            ? 'The verification code has expired.'
+            : result.code === 'TOO_MANY_ATTEMPTS'
+            ? 'Too many incorrect verification attempts.'
+            : result.code === 'NO_VERIFICATION_STARTED'
+            ? 'No account verification is currently active.'
+            : 'The verification code is incorrect.'
+      };
+    }
+
+    await recordFluxSupportAction(
+      from,
+      result.userId,
+      'account_verified',
+      {}
+    );
+
+    return {
+      ok: true,
+      verified: true,
+      verifiedMinutes:
+        result.verifiedMinutes,
+      message:
+        'Account ownership has been verified successfully.'
+    };
+  }
 
   if (name === 'lookup_my_account') {
     if (!account) {
@@ -1730,6 +2205,20 @@ async function executeFluxAiSupportTool(
   }
 
   if (name === 'list_active_sessions') {
+    const verifiedAccount =
+      await getVerifiedFluxSupportAccount(from);
+
+    if (!verifiedAccount) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_REQUIRED',
+        message:
+          'Account ownership must be verified before login sessions can be viewed.'
+      };
+    }
+
+    const account = verifiedAccount;
+
     if (!account) {
       return {
         ok: false,
@@ -1793,6 +2282,20 @@ async function executeFluxAiSupportTool(
   }
 
   if (name === 'request_revoke_all_sessions') {
+    const verifiedAccount =
+      await getVerifiedFluxSupportAccount(from);
+
+    if (!verifiedAccount) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_REQUIRED',
+        message:
+          'Account ownership must be verified before sessions can be revoked.'
+      };
+    }
+
+    const account = verifiedAccount;
+
     if (!account) {
       return {
         ok: false,
@@ -1854,6 +2357,20 @@ async function executeFluxAiSupportTool(
   }
 
   if (name === 'confirm_revoke_all_sessions') {
+    const verifiedAccount =
+      await getVerifiedFluxSupportAccount(from);
+
+    if (!verifiedAccount) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_REQUIRED',
+        message:
+          'Account ownership must be verified before sessions can be revoked.'
+      };
+    }
+
+    const account = verifiedAccount;
+
     if (!account) {
       return {
         ok: false,
@@ -1967,6 +2484,20 @@ async function executeFluxAiSupportTool(
   }
 
   if (name === 'submit_suspension_appeal') {
+    const verifiedAccount =
+      await getVerifiedFluxSupportAccount(from);
+
+    if (!verifiedAccount) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_REQUIRED',
+        message:
+          'Account ownership must be verified before a suspension appeal can be submitted.'
+      };
+    }
+
+    const account = verifiedAccount;
+
     if (!account) {
       return {
         ok: false,
@@ -2058,6 +2589,20 @@ async function executeFluxAiSupportTool(
   }
 
   if (name === 'request_password_recovery') {
+    const verifiedAccount =
+      await getVerifiedFluxSupportAccount(from);
+
+    if (!verifiedAccount) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_REQUIRED',
+        message:
+          'Account ownership must be verified before password recovery can proceed.'
+      };
+    }
+
+    const account = verifiedAccount;
+
     if (!account) {
       return {
         ok: false,
@@ -2283,6 +2828,16 @@ You have real Flux support tools. Use them when the customer asks about somethin
 
 Tool rules:
 - Never claim an account was found, inspected, changed, appealed, signed out, or escalated unless a tool result confirms it.
+- First try the WhatsApp-linked account automatically.
+- If no account matches the WhatsApp number, ask the customer for the email address, phone number, or username registered on Flux.
+- Use lookup_account_by_identifier after the customer provides one of those identifiers.
+- An email, phone number, or username alone does NOT prove ownership.
+- Before viewing sessions, revoking sessions, submitting a suspension appeal, or beginning password recovery, ownership must be verified.
+- Use start_account_verification after identifying the intended account.
+- Use verify_account_code when the customer supplies the 6-digit verification code.
+- A successful verification remains valid temporarily for the current WhatsApp conversation.
+- Do not reveal the full registered email or phone number unless it was already supplied by the customer.
+- Never reveal a verification code yourself.
 - The WhatsApp phone number is the only automatic identity-verification method currently available.
 - Never reveal password hashes, session keys, raw IP addresses, access tokens, authentication cookies, database fields, or internal secrets.
 - If lookup_my_account says no linked account exists, do not guess account information.
