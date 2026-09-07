@@ -936,7 +936,6 @@ app.get('/api/admin/whatsapp/escalations', requireApiAuth, requireOwnerApi, asyn
         requested_at,
         updated_at
       FROM whatsapp_human_escalations
-      WHERE active = TRUE
       ORDER BY updated_at DESC
       LIMIT 100
     `);
@@ -1070,7 +1069,7 @@ app.get('/api/admin/whatsapp/escalations/:userKey/messages', requireApiAuth, req
 
     if (!conversationResult.rows.length) {
       return res.status(404).json({
-        error: 'Conversation not found'
+        error: 'Support conversation not found'
       });
     }
 
@@ -1224,7 +1223,7 @@ app.post('/api/admin/whatsapp/escalations/:userKey/resolve', requireApiAuth, req
 
     if (!phoneNumber) {
       return res.status(404).json({
-        error: 'Conversation not found'
+        error: 'Support conversation not found'
       });
     }
 
