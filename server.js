@@ -610,7 +610,7 @@ async function saveWhatsAppEscalationIdentity(userId, displayName) {
  * authentication before production use.
  */
 
-app.get('/api/admin/whatsapp/escalations', requireSupportInboxAuth, async (req, res) => {
+app.get('/api/admin/whatsapp/escalations', requireApiAuth, requireOwnerApi, async (req, res) => {
   try {
     if (!pool) {
       return res.status(503).json({
@@ -649,7 +649,7 @@ app.get('/api/admin/whatsapp/escalations', requireSupportInboxAuth, async (req, 
   }
 });
 
-app.get('/api/admin/whatsapp/escalations/:userKey/messages', requireSupportInboxAuth, async (req, res) => {
+app.get('/api/admin/whatsapp/escalations/:userKey/messages', requireApiAuth, requireOwnerApi, async (req, res) => {
   try {
     if (!pool) {
       return res.status(503).json({
@@ -717,7 +717,7 @@ app.get('/api/admin/whatsapp/escalations/:userKey/messages', requireSupportInbox
   }
 });
 
-app.post('/api/admin/whatsapp/escalations/:userKey/reply', requireSupportInboxAuth, async (req, res) => {
+app.post('/api/admin/whatsapp/escalations/:userKey/reply', requireApiAuth, requireOwnerApi, async (req, res) => {
   try {
     if (!pool) {
       return res.status(503).json({
@@ -804,7 +804,7 @@ app.post('/api/admin/whatsapp/escalations/:userKey/reply', requireSupportInboxAu
   }
 });
 
-app.post('/api/admin/whatsapp/escalations/:userKey/resolve', requireSupportInboxAuth, async (req, res) => {
+app.post('/api/admin/whatsapp/escalations/:userKey/resolve', requireApiAuth, requireOwnerApi, async (req, res) => {
   try {
     if (!pool) {
       return res.status(503).json({
