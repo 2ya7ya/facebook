@@ -517,6 +517,41 @@ async function sendWhatsAppSystemText(to, body) {
 }
 
 
+
+function requireSupportInboxAuth(req, res, next) {
+  const expected = String(
+    process.env.SUPPORT_INBOX_TOKEN || ''
+  ).trim();
+
+  const authorization = String(
+    req.headers.authorization || ''
+  ).trim();
+
+  const supplied = authorization.startsWith('Bearer ')
+    ? authorization.slice(7).trim()
+    : '';
+
+  if (!expected) {
+    return res.status(503).json({
+      error: 'Support inbox authentication is not configured'
+    });
+  }
+
+  const expectedBuffer = Buffer.from(expected);
+  const suppliedBuffer = Buffer.from(supplied);
+
+  if (
+    expectedBuffer.length !== suppliedBuffer.length ||
+    !crypto.timingSafeEqual(expectedBuffer, suppliedBuffer)
+  ) {
+    return res.status(401).json({
+      error: 'Unauthorized'
+    });
+  }
+
+  next();
+}
+
 async function ensureWhatsAppSupportInboxSchema() {
   if (!pool) throw new Error('Database is not configured');
 
@@ -569,7 +604,7 @@ async function saveWhatsAppEscalationIdentity(userId, displayName) {
  * authentication before production use.
  */
 
-app.get('/api/admin/whatsapp/escalations', async (req, res) => {
+app.get('/api/admin/whatsapp/escalations', requireSupportInboxAuth, async (req, res) => {
   try {
     if (!pool) {
       return res.status(503).json({
@@ -608,7 +643,7 @@ app.get('/api/admin/whatsapp/escalations', async (req, res) => {
   }
 });
 
-app.get('/api/admin/whatsapp/escalations/:userKey/messages', async (req, res) => {
+app.get('/api/admin/whatsapp/escalations/:userKey/messages', requireSupportInboxAuth, async (req, res) => {
   try {
     if (!pool) {
       return res.status(503).json({
@@ -675,7 +710,7 @@ app.get('/api/admin/whatsapp/escalations/:userKey/messages', async (req, res) =>
   }
 });
 
-app.post('/api/admin/whatsapp/escalations/:userKey/reply', async (req, res) => {
+app.post('/api/admin/whatsapp/escalations/:userKey/reply', requireSupportInboxAuth, async (req, res) => {
   try {
     if (!pool) {
       return res.status(503).json({
@@ -762,7 +797,7 @@ app.post('/api/admin/whatsapp/escalations/:userKey/reply', async (req, res) => {
   }
 });
 
-app.post('/api/admin/whatsapp/escalations/:userKey/resolve', async (req, res) => {
+app.post('/api/admin/whatsapp/escalations/:userKey/resolve', requireSupportInboxAuth, async (req, res) => {
   try {
     if (!pool) {
       return res.status(503).json({

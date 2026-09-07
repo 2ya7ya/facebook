@@ -17,6 +17,7 @@ jobs:
           USER: ${{ secrets.ORACLE_USER }}
           WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SUPPORT_INBOX_TOKEN: ${{ secrets.SUPPORT_INBOX_TOKEN }}
         run: |
           mkdir -p ~/.ssh
           printf '%s' "$SSH_KEY_B64" | base64 -d > ~/.ssh/oracle_deploy
@@ -24,11 +25,12 @@ jobs:
 
           WA_TOKEN_B64="$(printf '%s' "$WHATSAPP_ACCESS_TOKEN" | base64 -w0)"
           OPENAI_KEY_B64="$(printf '%s' "$OPENAI_API_KEY" | base64 -w0)"
+          SUPPORT_TOKEN_B64="$(printf '%s' "$SUPPORT_INBOX_TOKEN" | base64 -w0)"
 
           ssh -o StrictHostKeyChecking=accept-new \
               -i ~/.ssh/oracle_deploy \
               "$USER@$HOST" \
-              "WA_TOKEN_B64='$WA_TOKEN_B64' OPENAI_KEY_B64='$OPENAI_KEY_B64' bash -s" <<'REMOTE'
+              "WA_TOKEN_B64='$WA_TOKEN_B64' OPENAI_KEY_B64='$OPENAI_KEY_B64' SUPPORT_TOKEN_B64='$SUPPORT_TOKEN_B64' bash -s" <<'REMOTE'
             set -e
             cd /home/opc/facebook
             git fetch origin main
@@ -38,6 +40,7 @@ jobs:
             export WHATSAPP_ACCESS_TOKEN="$(printf '%s' "$WA_TOKEN_B64" | base64 -d)"
             export WHATSAPP_PHONE_NUMBER_ID="1265692673299937"
             export OPENAI_API_KEY="$(printf '%s' "$OPENAI_KEY_B64" | base64 -d)"
+            export SUPPORT_INBOX_TOKEN="$(printf '%s' "$SUPPORT_TOKEN_B64" | base64 -d)"
 
             pm2 restart facebook-backend --update-env
             pm2 save
