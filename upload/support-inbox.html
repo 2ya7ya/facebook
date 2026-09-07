@@ -351,9 +351,19 @@ body {
   <main class="chat">
 
     <div id="chatHeader" class="chat-header hidden">
-      <div>
-        <div id="chatName" class="chat-name"></div>
-        <div id="chatNumber" class="chat-number"></div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button
+          id="backButton"
+          class="refresh-button"
+          style="display:none;"
+        >
+          Back
+        </button>
+
+        <div>
+          <div id="chatName" class="chat-name"></div>
+          <div id="chatNumber" class="chat-number"></div>
+        </div>
       </div>
 
       <button id="resolveButton" class="resolve-button">
@@ -429,6 +439,9 @@ const refreshButton =
 
 const sidebar =
   document.getElementById('sidebar');
+
+const backButton =
+  document.getElementById('backButton');
 
 function apiHeaders(extra = {}) {
   return {
@@ -645,7 +658,11 @@ async function openConversation(userKey) {
     messagesElement.scrollHeight;
 
   if (window.innerWidth <= 760) {
-    sidebar.classList.add('mobile-hidden');
+    backButton.style.display = 'inline-block';
+
+    requestAnimationFrame(() => {
+      sidebar.classList.add('mobile-hidden');
+    });
   }
 }
 
@@ -761,6 +778,11 @@ replyInput.addEventListener('keydown', event => {
     event.preventDefault();
     sendReply();
   }
+});
+
+backButton.addEventListener('click', () => {
+  sidebar.classList.remove('mobile-hidden');
+  backButton.style.display = 'none';
 });
 
 resolveButton.addEventListener(
