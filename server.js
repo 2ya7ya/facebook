@@ -50,6 +50,32 @@ app.use((request, response, next) => {
 app.use(express.json({ limit: '72mb' }));
 app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 
+const WHATSAPP_VERIFY_TOKEN =
+  process.env.WHATSAPP_VERIFY_TOKEN || 'facetok-whatsapp-verify';
+
+app.get('/api/whatsapp/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  if (mode === 'subscribe' && token === WHATSAPP_VERIFY_TOKEN) {
+    console.log('WhatsApp webhook verified');
+    return res.status(200).send(challenge);
+  }
+
+  return res.sendStatus(403);
+});
+
+app.post('/api/whatsapp/webhook', (req, res) => {
+  console.log(
+    'WhatsApp webhook event:',
+    JSON.stringify(req.body, null, 2)
+  );
+
+  return res.sendStatus(200);
+});
+
+
 let pool = null;
 if (process.env.DATABASE_URL) {
   const ca = process.env.DATABASE_CA_CERT?.replace(/\\n/g, '\n');
@@ -8436,33 +8462,9 @@ app.use('/edit_profile_assets', requireAuth, express.static(path.join(publicDire
 }));
 
 // WhatsApp Business Platform webhook verification.
-app.get('/api/whatsapp/webhook', (request, response) => {
-  const verifyToken = String(process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || '').trim();
-  const mode = String(request.query['hub.mode'] || '');
-  const token = String(request.query['hub.verify_token'] || '');
-  const challenge = request.query['hub.challenge'];
-
-  if (!verifyToken) {
-    console.error('WHATSAPP_WEBHOOK_VERIFY_TOKEN is not configured.');
-    return response.sendStatus(503);
-  }
-
-  if (mode === 'subscribe' && token === verifyToken && challenge !== undefined) {
-    return response.status(200).send(String(challenge));
-  }
-
-  return response.sendStatus(403);
-});
 
 // Incoming WhatsApp events. Message processing will be added after
 // Meta webhook verification is confirmed.
-app.post('/api/whatsapp/webhook', (request, response) => {
-  if (request.body?.object !== 'whatsapp_business_account') {
-    return response.sendStatus(404);
-  }
-
-  response.sendStatus(200);
-});
 
 app.get('*splat', (request, response) => response.redirect(readSession(request) ? '/app' : '/'));
 

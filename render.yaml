@@ -15,3 +15,5 @@ services:
         sync: false
       - key: MAPBOX_ACCESS_TOKEN
         sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        value: facetok-whatsapp-verify
