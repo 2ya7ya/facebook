@@ -147,7 +147,15 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
       console.log('WhatsApp reply sent:', result);
     }
   } catch (error) {
-    console.error('WhatsApp webhook processing failed:', error.message);
+    lastWhatsAppReplyDebug = {
+      at: new Date().toISOString(),
+      ok: false,
+      reason: 'exception',
+      error: String(error?.message || error),
+      name: String(error?.name || '')
+    };
+
+    console.error('WhatsApp webhook processing failed:', error);
   }
 });
 
