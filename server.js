@@ -66,13 +66,25 @@ app.get('/api/whatsapp/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
+let lastWhatsAppWebhookEvent = null;
+
 app.post('/api/whatsapp/webhook', (req, res) => {
+  lastWhatsAppWebhookEvent = {
+    receivedAt: new Date().toISOString(),
+    body: req.body
+  };
+
   console.log(
     'WhatsApp webhook event:',
     JSON.stringify(req.body, null, 2)
   );
 
   return res.sendStatus(200);
+});
+
+app.get('/api/whatsapp/debug-last-event', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  return res.json(lastWhatsAppWebhookEvent || { receivedAt: null });
 });
 
 
