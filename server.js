@@ -244,6 +244,86 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000).unref();
 
+
+const whatsappProcessedFallback = new Map();
+let whatsappProcessedSchemaReady = false;
+let whatsappProcessedSchemaPromise = null;
+
+async function ensureWhatsAppProcessedSchema() {
+  if (!pool) return false;
+  if (whatsappProcessedSchemaReady) return true;
+
+  if (!whatsappProcessedSchemaPromise) {
+    whatsappProcessedSchemaPromise = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS whatsapp_processed_messages (
+          message_id TEXT PRIMARY KEY,
+          processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      whatsappProcessedSchemaReady = true;
+    })();
+  }
+
+  try {
+    await whatsappProcessedSchemaPromise;
+    return true;
+  } catch (error) {
+    whatsappProcessedSchemaPromise = null;
+    console.error(
+      'WhatsApp processed-message schema failed:',
+      error.message
+    );
+    return false;
+  }
+}
+
+async function claimWhatsAppMessage(messageId) {
+  const id = String(messageId || '').trim();
+  if (!id) return true;
+
+  if (pool) {
+    try {
+      const ready = await ensureWhatsAppProcessedSchema();
+
+      if (ready) {
+        const result = await pool.query(
+          `
+            INSERT INTO whatsapp_processed_messages (message_id)
+            VALUES ($1)
+            ON CONFLICT (message_id) DO NOTHING
+            RETURNING message_id
+          `,
+          [id]
+        );
+
+        return result.rowCount === 1;
+      }
+    } catch (error) {
+      console.error(
+        'WhatsApp duplicate check failed:',
+        error.message
+      );
+    }
+  }
+
+  const now = Date.now();
+
+  for (const [key, timestamp] of whatsappProcessedFallback.entries()) {
+    if (now - timestamp > 24 * 60 * 60 * 1000) {
+      whatsappProcessedFallback.delete(key);
+    }
+  }
+
+  if (whatsappProcessedFallback.has(id)) {
+    return false;
+  }
+
+  whatsappProcessedFallback.set(id, now);
+  return true;
+}
+
 app.post('/api/whatsapp/webhook', async (req, res) => {
   lastWhatsAppWebhookEvent = {
     receivedAt: new Date().toISOString(),
@@ -266,8 +346,19 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
 
     const from = String(message.from || '').trim();
     const text = String(message.text?.body || '').trim();
+    const messageId = String(message.id || '').trim();
 
     if (!from || !text) return;
+
+    const isNewMessage = await claimWhatsAppMessage(messageId);
+
+    if (!isNewMessage) {
+      console.log(
+        'Ignoring duplicate WhatsApp message:',
+        messageId
+      );
+      return;
+    }
 
     const accessToken = String(process.env.WHATSAPP_ACCESS_TOKEN || '').trim();
     const phoneNumberId = String(
