@@ -8466,6 +8466,89 @@ app.use('/edit_profile_assets', requireAuth, express.static(path.join(publicDire
 // Incoming WhatsApp events. Message processing will be added after
 // Meta webhook verification is confirmed.
 
+
+app.get('/whatsapp-coexistence-setup', (request, response) => {
+  response.type('html').send(`<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Flux Support WhatsApp Setup</title>
+</head>
+<body style="font-family:Arial,sans-serif;padding:24px;max-width:600px;margin:auto">
+  <h2>Flux Support — WhatsApp Coexistence</h2>
+  <p>Connect the existing WhatsApp Business App number to Cloud API.</p>
+
+  <button id="connect"
+    style="padding:14px 20px;font-size:16px;cursor:pointer">
+    Connect WhatsApp Business
+  </button>
+
+  <pre id="status" style="white-space:pre-wrap;margin-top:20px"></pre>
+
+  <script>
+    window.fbAsyncInit = function() {
+      FB.init({
+        appId: '1072293102198348',
+        cookie: true,
+        xfbml: false,
+        version: 'v25.0'
+      });
+    };
+
+    (function(d, s, id) {
+      var js, fjs = d.getElementsByTagName(s)[0];
+      if (d.getElementById(id)) return;
+      js = d.createElement(s);
+      js.id = id;
+      js.src = 'https://connect.facebook.net/en_US/sdk.js';
+      fjs.parentNode.insertBefore(js, fjs);
+    }(document, 'script', 'facebook-jssdk'));
+
+    window.addEventListener('message', function(event) {
+      if (!event.origin.endsWith('facebook.com')) return;
+
+      let data = event.data;
+      try {
+        if (typeof data === 'string') data = JSON.parse(data);
+      } catch (_) {
+        return;
+      }
+
+      if (data && data.type === 'WA_EMBEDDED_SIGNUP') {
+        document.getElementById('status').textContent =
+          'Embedded Signup event:\\n' + JSON.stringify(data, null, 2);
+      }
+    });
+
+    document.getElementById('connect').addEventListener('click', function() {
+      document.getElementById('status').textContent =
+        'Opening WhatsApp Embedded Signup...';
+
+      FB.login(function(response) {
+        if (response.authResponse && response.authResponse.code) {
+          document.getElementById('status').textContent +=
+            '\\n\\nAuthorization code received successfully.';
+        } else {
+          document.getElementById('status').textContent +=
+            '\\n\\nLogin result:\\n' + JSON.stringify(response, null, 2);
+        }
+      }, {
+        config_id: '1096512559387283',
+        response_type: 'code',
+        override_default_response_type: true,
+        extras: {
+          setup: {},
+          featureType: 'whatsapp_business_app_onboarding',
+          sessionInfoVersion: '3'
+        }
+      });
+    });
+  </script>
+</body>
+</html>`);
+});
+
 app.get('*splat', (request, response) => response.redirect(readSession(request) ? '/app' : '/'));
 
 const server = app.listen(port, '0.0.0.0', async () => {
