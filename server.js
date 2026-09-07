@@ -324,6 +324,198 @@ async function claimWhatsAppMessage(messageId) {
   return true;
 }
 
+
+let whatsappEscalationSchemaReady = false;
+let whatsappEscalationSchemaPromise = null;
+
+async function ensureWhatsAppEscalationSchema() {
+  if (!pool) return false;
+  if (whatsappEscalationSchemaReady) return true;
+
+  if (!whatsappEscalationSchemaPromise) {
+    whatsappEscalationSchemaPromise = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS whatsapp_human_escalations (
+          user_key VARCHAR(64) PRIMARY KEY,
+          active BOOLEAN NOT NULL DEFAULT TRUE,
+          requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+
+      whatsappEscalationSchemaReady = true;
+    })();
+  }
+
+  try {
+    await whatsappEscalationSchemaPromise;
+    return true;
+  } catch (error) {
+    whatsappEscalationSchemaPromise = null;
+    console.error(
+      'WhatsApp escalation schema failed:',
+      error.message
+    );
+    return false;
+  }
+}
+
+async function isWhatsAppHumanEscalated(userId) {
+  if (!pool) return false;
+
+  try {
+    const ready = await ensureWhatsAppEscalationSchema();
+    if (!ready) return false;
+
+    const userKey = whatsappMemoryUserKey(userId);
+
+    const result = await pool.query(
+      `
+        SELECT active
+        FROM whatsapp_human_escalations
+        WHERE user_key = $1
+        LIMIT 1
+      `,
+      [userKey]
+    );
+
+    return result.rows[0]?.active === true;
+  } catch (error) {
+    console.error(
+      'WhatsApp escalation check failed:',
+      error.message
+    );
+    return false;
+  }
+}
+
+async function setWhatsAppHumanEscalation(userId, active) {
+  if (!pool) return;
+
+  try {
+    const ready = await ensureWhatsAppEscalationSchema();
+    if (!ready) return;
+
+    const userKey = whatsappMemoryUserKey(userId);
+
+    await pool.query(
+      `
+        INSERT INTO whatsapp_human_escalations
+          (user_key, active, requested_at, updated_at)
+        VALUES ($1, $2, NOW(), NOW())
+        ON CONFLICT (user_key)
+        DO UPDATE SET
+          active = EXCLUDED.active,
+          updated_at = NOW(),
+          requested_at = CASE
+            WHEN EXCLUDED.active = TRUE
+            THEN NOW()
+            ELSE whatsapp_human_escalations.requested_at
+          END
+      `,
+      [userKey, Boolean(active)]
+    );
+  } catch (error) {
+    console.error(
+      'WhatsApp escalation update failed:',
+      error.message
+    );
+  }
+}
+
+function wantsHumanAgent(text) {
+  const value = String(text || '').toLowerCase().trim();
+
+  const phrases = [
+    'human',
+    'human agent',
+    'real person',
+    'talk to a person',
+    'talk to human',
+    'support agent',
+    'customer service',
+    'agent',
+    'موظف',
+    'موظف دعم',
+    'دعم بشري',
+    'شخص حقيقي',
+    'احكي مع موظف',
+    'اريد موظف',
+    'أريد موظف',
+    'بدي موظف',
+    'خدمة العملاء'
+  ];
+
+  return phrases.some(phrase => value.includes(phrase));
+}
+
+function wantsBotResume(text) {
+  const value = String(text || '').toLowerCase().trim();
+
+  const phrases = [
+    'resume bot',
+    'resume ai',
+    'back to bot',
+    'use bot',
+    'ارجع للبوت',
+    'ارجع للذكاء الاصطناعي',
+    'شغل البوت',
+    'شغّل البوت',
+    'كمل مع البوت'
+  ];
+
+  return phrases.some(phrase => value.includes(phrase));
+}
+
+async function sendWhatsAppSystemText(to, body) {
+  const accessToken = String(
+    process.env.WHATSAPP_ACCESS_TOKEN || ''
+  ).trim();
+
+  const phoneNumberId = String(
+    process.env.WHATSAPP_PHONE_NUMBER_ID || '1265692673299937'
+  ).trim();
+
+  if (!accessToken || !to || !body) return false;
+
+  try {
+    const response = await fetch(
+      `https://graph.facebook.com/v23.0/${phoneNumberId}/messages`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          to,
+          type: 'text',
+          text: {
+            body
+          }
+        })
+      }
+    );
+
+    if (!response.ok) {
+      console.error(
+        'WhatsApp system message failed:',
+        await response.text()
+      );
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.error(
+      'WhatsApp system message exception:',
+      error.message
+    );
+    return false;
+  }
+}
+
 app.post('/api/whatsapp/webhook', async (req, res) => {
   lastWhatsAppWebhookEvent = {
     receivedAt: new Date().toISOString(),
@@ -356,6 +548,39 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
       console.log(
         'Ignoring duplicate WhatsApp message:',
         messageId
+      );
+      return;
+    }
+
+    if (wantsBotResume(text)) {
+      await setWhatsAppHumanEscalation(from, false);
+
+      await sendWhatsAppSystemText(
+        from,
+        'AI support is active again. How can I help?'
+      );
+
+      return;
+    }
+
+    if (wantsHumanAgent(text)) {
+      await setWhatsAppHumanEscalation(from, true);
+
+      await sendWhatsAppSystemText(
+        from,
+        'Your conversation has been escalated to human support. The AI assistant will stop replying until you send "resume bot".'
+      );
+
+      return;
+    }
+
+    const humanEscalated =
+      await isWhatsAppHumanEscalated(from);
+
+    if (humanEscalated) {
+      console.log(
+        'AI reply skipped because conversation is escalated:',
+        from
       );
       return;
     }
