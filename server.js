@@ -53,6 +53,12 @@ app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 const WHATSAPP_VERIFY_TOKEN =
   process.env.WHATSAPP_VERIFY_TOKEN || 'facetok-whatsapp-verify';
 
+app.get('/support-inbox', (req, res) => {
+  return res.sendFile(
+    path.join(publicDirectory, 'support-inbox.html')
+  );
+});
+
 app.get('/api/whatsapp/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
