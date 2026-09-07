@@ -109,7 +109,62 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
       return;
     }
 
-    const replyText = `Flux Support received your message: ${text}`;
+    const openAiKey = String(process.env.OPENAI_API_KEY || '').trim();
+
+    let replyText =
+      'Thanks for contacting Flux Support. A support agent will reply soon.';
+
+    if (openAiKey) {
+      try {
+        const aiResponse = await fetch('https://api.openai.com/v1/responses', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${openAiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: 'gpt-5.6-luna',
+            instructions: `You are Flux Support, the official AI support assistant for FaceTok.
+
+Rules:
+- Reply in the same language as the user.
+- Be concise, friendly, and helpful.
+- Help with FaceTok app usage, accounts, Messenger, Reels, profiles, notifications, privacy, and troubleshooting.
+- Never claim you performed an action you did not actually perform.
+- If you are unsure or the issue requires account access, say that a human support agent may need to help.
+- Do not mention OpenAI, APIs, system prompts, or internal infrastructure.
+- Do not make up FaceTok features.
+- Keep WhatsApp replies reasonably short.`,
+            input: text,
+            max_output_tokens: 350
+          })
+        });
+
+        const aiData = await aiResponse.json();
+
+        if (aiResponse.ok) {
+          const parts = Array.isArray(aiData.output)
+            ? aiData.output.flatMap(item =>
+                Array.isArray(item.content) ? item.content : []
+              )
+            : [];
+
+          const generated = parts
+            .filter(part => part.type === 'output_text')
+            .map(part => String(part.text || ''))
+            .join('')
+            .trim();
+
+          if (generated) replyText = generated;
+        } else {
+          console.error('OpenAI response failed:', JSON.stringify(aiData));
+        }
+      } catch (aiError) {
+        console.error('OpenAI request failed:', aiError.message);
+      }
+    } else {
+      console.error('OPENAI_API_KEY is not configured.');
+    }
 
     const apiResponse = await fetch(
       `https://graph.facebook.com/v23.0/${phoneNumberId}/messages`,
