@@ -268,15 +268,6 @@ Rules:
   }
 });
 
-app.get('/api/whatsapp/debug-last-event', (req, res) => {
-  res.set('Cache-Control', 'no-store');
-  return res.json({
-    webhook: lastWhatsAppWebhookEvent || { receivedAt: null },
-    reply: lastWhatsAppReplyDebug
-  });
-});
-
-
 let pool = null;
 if (process.env.DATABASE_URL) {
   const ca = process.env.DATABASE_CA_CERT?.replace(/\\n/g, '\n');
