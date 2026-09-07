@@ -880,6 +880,7 @@ async function sendNotificationPush({
 
     let pushBody = notificationPushText(type, actorName);
     let mediaPreviewUrl = '';
+    let mediaPreviewType = '';
 
     if (type === 'post_comment' && cleanDetail) {
       pushBody = `commented: "${cleanDetail}"`;
@@ -888,27 +889,33 @@ async function sendNotificationPush({
     } else if (type === 'post_like' && postId) {
       const post = postResult.rows[0] || {};
       const mediaItems = Array.isArray(post.media_items) ? post.media_items : [];
-      const extras = post.post_extras && typeof post.post_extras === 'object' ? post.post_extras : {};
       const firstMedia = mediaItems[0] || null;
+
       if (firstMedia && String(firstMedia.type || '').toLowerCase() === 'image') {
         pushBody = 'liked your photo';
+        mediaPreviewType = 'photo';
         mediaPreviewUrl = `/api/posts/${encodeURIComponent(String(postId))}/media/0`;
       } else if (firstMedia && String(firstMedia.type || '').toLowerCase() === 'video') {
         pushBody = 'liked your reel';
+        mediaPreviewType = 'reel';
+
         const reel = await pool.query(
-          `SELECT id FROM reels WHERE source_post_id = $1 AND source_media_index = 0 ORDER BY id DESC LIMIT 1`,
+          `SELECT id
+             FROM reels
+            WHERE source_post_id = $1
+              AND source_media_index = 0
+            ORDER BY id DESC
+            LIMIT 1`,
           [postId]
         );
+
         if (reel.rows[0]?.id) {
           mediaPreviewUrl = `/api/reels/${encodeURIComponent(String(reel.rows[0].id))}/thumbnail`;
         }
       } else {
-        const stickers = Array.isArray(extras.stickers) ? extras.stickers : (extras.sticker ? [extras.sticker] : []);
-        const sticker = String(stickers[0] || '').trim();
-        if (sticker) {
-          pushBody = 'liked your sticker';
-          mediaPreviewUrl = sticker;
-        }
+        pushBody = 'liked your post';
+        mediaPreviewType = 'post';
+        mediaPreviewUrl = '';
       }
     }
 
@@ -925,7 +932,8 @@ async function sendNotificationPush({
         postId: String(postId || ''),
         commentId: String(commentId || ''),
         detail: cleanDetail,
-        mediaPreviewUrl: String(mediaPreviewUrl || '')
+        mediaPreviewUrl: String(mediaPreviewUrl || ''),
+        mediaPreviewType: String(mediaPreviewType || '')
       },
       android: {
         priority: 'high'
