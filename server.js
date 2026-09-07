@@ -1,3 +1,4 @@
+const nodemailer = require('nodemailer');
 const path = require('path');
 const crypto = require('crypto');
 const { promisify } = require('util');
@@ -1601,6 +1602,145 @@ function fluxSupportHashCode(code) {
     .digest('hex');
 }
 
+
+let fluxMailTransport = null;
+
+function getFluxMailTransport() {
+  const host =
+    String(process.env.SMTP_HOST || '').trim();
+
+  const port =
+    Number(process.env.SMTP_PORT || 0);
+
+  const user =
+    String(process.env.SMTP_USER || '').trim();
+
+  const pass =
+    String(process.env.SMTP_PASS || '');
+
+  const secure =
+    String(
+      process.env.SMTP_SECURE || ''
+    ).toLowerCase() === 'true';
+
+  if (
+    !host ||
+    !Number.isFinite(port) ||
+    port <= 0 ||
+    !user ||
+    !pass
+  ) {
+    return null;
+  }
+
+  if (!fluxMailTransport) {
+    fluxMailTransport =
+      nodemailer.createTransport({
+        host,
+        port,
+        secure,
+        auth: {
+          user,
+          pass
+        }
+      });
+  }
+
+  return fluxMailTransport;
+}
+
+function escapeFluxEmailHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+async function sendFluxVerificationEmail({
+  email,
+  code,
+  displayName = ''
+}) {
+  const transport =
+    getFluxMailTransport();
+
+  if (!transport) {
+    throw new Error(
+      'Flux email delivery is not configured.'
+    );
+  }
+
+  const to =
+    String(email || '').trim();
+
+  if (
+    !to ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)
+  ) {
+    throw new Error(
+      'The Flux account does not have a valid registered email address.'
+    );
+  }
+
+  const from =
+    String(
+      process.env.SMTP_FROM ||
+      process.env.SMTP_USER ||
+      ''
+    ).trim();
+
+  const name =
+    String(displayName || '').trim();
+
+  const greeting =
+    name
+      ? `Hi ${name},`
+      : 'Hello,';
+
+  await transport.sendMail({
+    from,
+    to,
+    subject:
+      `${code} is your Flux verification code`,
+    text:
+`${greeting}
+
+Your Flux verification code is:
+
+${code}
+
+This code expires in 10 minutes.
+
+If you did not request this code, you can ignore this email.
+
+Never share your password or verification code with anyone outside the official Flux verification flow.
+
+Flux Support`,
+    html:
+`<!doctype html>
+<html>
+  <body style="font-family:Arial,sans-serif;background:#f5f6f7;padding:24px;color:#111;">
+    <div style="max-width:520px;margin:auto;background:#fff;border-radius:14px;padding:28px;">
+      <h2 style="margin-top:0;">Flux verification</h2>
+      <p>${escapeFluxEmailHtml(greeting)}</p>
+      <p>Use this verification code to continue with Flux Support:</p>
+      <div style="font-size:32px;font-weight:700;letter-spacing:8px;margin:24px 0;">
+        ${escapeFluxEmailHtml(code)}
+      </div>
+      <p>This code expires in <strong>10 minutes</strong>.</p>
+      <p style="color:#65676b;font-size:13px;">
+        If you did not request this code, you can ignore this email.
+        Never share your password or verification code outside the official Flux verification flow.
+      </p>
+      <p>Flux Support</p>
+    </div>
+  </body>
+</html>`
+  });
+}
+
 async function beginFluxSupportVerification(from, account, identifier) {
   await ensureFluxSupportVerificationSchema();
 
@@ -2093,29 +2233,49 @@ async function executeFluxAiSupportTool(
       }
     );
 
-    /*
-     * IMPORTANT:
-     * There is not yet an email/SMS delivery provider connected.
-     * For testing only, the code is logged server-side.
-     * Do not send this code to the WhatsApp customer from the AI.
-     */
-    console.log(
-      `[Flux verification TEST ONLY] ${from} -> account ${found.id}: ${code}`
-    );
+    const registeredEmail =
+      String(found.email || '').trim();
+
+    if (!registeredEmail) {
+      return {
+        ok: false,
+        code: 'NO_REGISTERED_EMAIL',
+        message:
+          'This account does not have a registered email address available for verification.'
+      };
+    }
+
+    try {
+      await sendFluxVerificationEmail({
+        email: registeredEmail,
+        code,
+        displayName:
+          String(found.full_name || '')
+      });
+    } catch (mailError) {
+      console.error(
+        'Flux verification email failed:',
+        mailError.message
+      );
+
+      return {
+        ok: false,
+        code: 'VERIFICATION_DELIVERY_FAILED',
+        message:
+          'The verification email could not be delivered right now. Please try again or contact human support.'
+      };
+    }
 
     return {
       ok: true,
       verificationStarted: true,
+      deliveryConfigured: true,
+      deliveryMethod: 'email',
       expiresInMinutes: 10,
-      deliveryConfigured: false,
       maskedEmail:
-        maskFluxEmail(found.email),
-      maskedPhone:
-        maskFluxPhone(
-          found.phone || found.identifier
-        ),
+        maskFluxEmail(registeredEmail),
       message:
-        'Verification was started, but automatic email/SMS delivery is not configured yet. Human support can provide the test code during development.'
+        `A 6-digit verification code was sent to ${maskFluxEmail(registeredEmail)}. It expires in 10 minutes.`
     };
   }
 
@@ -2846,6 +3006,10 @@ Tool rules:
 - A successful verification remains valid temporarily for the current WhatsApp conversation.
 - Do not reveal the full registered email or phone number unless it was already supplied by the customer.
 - Never reveal a verification code yourself.
+- Verification codes are delivered automatically to the registered Flux email address.
+- After start_account_verification succeeds, tell the customer which masked email received the code and ask them to send the 6-digit code here.
+- Never claim an email was sent unless start_account_verification reports success.
+- If verification delivery fails, do not pretend the code was delivered.
 - The WhatsApp phone number is the only automatic identity-verification method currently available.
 - Never reveal password hashes, session keys, raw IP addresses, access tokens, authentication cookies, database fields, or internal secrets.
 - If lookup_my_account says no linked account exists, do not guess account information.

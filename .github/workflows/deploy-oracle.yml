@@ -18,6 +18,12 @@ jobs:
           WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SUPPORT_INBOX_TOKEN: ${{ secrets.SUPPORT_INBOX_TOKEN }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_SECURE: ${{ secrets.SMTP_SECURE }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
         run: |
           mkdir -p ~/.ssh
           printf '%s' "$SSH_KEY_B64" | base64 -d > ~/.ssh/oracle_deploy
@@ -26,11 +32,14 @@ jobs:
           WA_TOKEN_B64="$(printf '%s' "$WHATSAPP_ACCESS_TOKEN" | base64 -w0)"
           OPENAI_KEY_B64="$(printf '%s' "$OPENAI_API_KEY" | base64 -w0)"
           SUPPORT_TOKEN_B64="$(printf '%s' "$SUPPORT_INBOX_TOKEN" | base64 -w0)"
+          SMTP_USER_B64="$(printf '%s' "$SMTP_USER" | base64 -w0)"
+          SMTP_PASS_B64="$(printf '%s' "$SMTP_PASS" | base64 -w0)"
+          SMTP_FROM_B64="$(printf '%s' "$SMTP_FROM" | base64 -w0)"
 
           ssh -o StrictHostKeyChecking=accept-new \
               -i ~/.ssh/oracle_deploy \
               "$USER@$HOST" \
-              "WA_TOKEN_B64='$WA_TOKEN_B64' OPENAI_KEY_B64='$OPENAI_KEY_B64' SUPPORT_TOKEN_B64='$SUPPORT_TOKEN_B64' bash -s" <<'REMOTE'
+              "WA_TOKEN_B64='$WA_TOKEN_B64' OPENAI_KEY_B64='$OPENAI_KEY_B64' SUPPORT_TOKEN_B64='$SUPPORT_TOKEN_B64' SMTP_HOST='$SMTP_HOST' SMTP_PORT='$SMTP_PORT' SMTP_SECURE='$SMTP_SECURE' SMTP_USER_B64='$SMTP_USER_B64' SMTP_PASS_B64='$SMTP_PASS_B64' SMTP_FROM_B64='$SMTP_FROM_B64' bash -s" <<'REMOTE'
             set -e
             cd /home/opc/facebook
             git fetch origin main
@@ -41,6 +50,12 @@ jobs:
             export WHATSAPP_PHONE_NUMBER_ID="1265692673299937"
             export OPENAI_API_KEY="$(printf '%s' "$OPENAI_KEY_B64" | base64 -d)"
             export SUPPORT_INBOX_TOKEN="$(printf '%s' "$SUPPORT_TOKEN_B64" | base64 -d)"
+            export SMTP_HOST="$SMTP_HOST"
+            export SMTP_PORT="$SMTP_PORT"
+            export SMTP_SECURE="$SMTP_SECURE"
+            export SMTP_USER="$(printf '%s' "$SMTP_USER_B64" | base64 -d)"
+            export SMTP_PASS="$(printf '%s' "$SMTP_PASS_B64" | base64 -d)"
+            export SMTP_FROM="$(printf '%s' "$SMTP_FROM_B64" | base64 -d)"
 
             pm2 restart facebook-backend --update-env
             pm2 save
