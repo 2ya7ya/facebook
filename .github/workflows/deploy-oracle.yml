@@ -15,19 +15,27 @@ jobs:
           SSH_KEY_B64: ${{ secrets.ORACLE_SSH_KEY_B64 }}
           HOST: ${{ secrets.ORACLE_HOST }}
           USER: ${{ secrets.ORACLE_USER }}
+          WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
         run: |
           mkdir -p ~/.ssh
           printf '%s' "$SSH_KEY_B64" | base64 -d > ~/.ssh/oracle_deploy
           chmod 600 ~/.ssh/oracle_deploy
 
+          WA_TOKEN_B64="$(printf '%s' "$WHATSAPP_ACCESS_TOKEN" | base64 -w0)"
+
           ssh -o StrictHostKeyChecking=accept-new \
               -i ~/.ssh/oracle_deploy \
-              "$USER@$HOST" <<'REMOTE'
+              "$USER@$HOST" \
+              "WA_TOKEN_B64='$WA_TOKEN_B64' bash -s" <<'REMOTE'
             set -e
             cd /home/opc/facebook
             git fetch origin main
             git reset --hard origin/main
             npm install
-            pm2 restart facebook-backend
+
+            export WHATSAPP_ACCESS_TOKEN="$(printf '%s' "$WA_TOKEN_B64" | base64 -d)"
+            export WHATSAPP_PHONE_NUMBER_ID="1265692673299937"
+
+            pm2 restart facebook-backend --update-env
             pm2 save
           REMOTE
