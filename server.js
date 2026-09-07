@@ -524,6 +524,295 @@ async function sendWhatsAppSystemText(to, body) {
 
 
 
+
+const FLUX_SUPPORT_CATEGORIES = {
+  support_password: {
+    label: 'Password & login',
+    opener:
+      'You selected Password & login. Tell me what happens when you try to sign in, and I’ll guide you through the safest recovery steps.'
+  },
+
+  support_suspended: {
+    label: 'Suspended account',
+    opener:
+      'You selected Suspended account. Tell me what suspension message you see and whether a duration or reason is shown.'
+  },
+
+  support_security: {
+    label: 'Privacy & security',
+    opener:
+      'You selected Privacy & security. Tell me what you are concerned about, such as an unfamiliar login, account access, privacy, or suspicious activity.'
+  },
+
+  support_messaging: {
+    label: 'Messages & Messenger',
+    opener:
+      'You selected Messages & Messenger. Describe what is happening with your conversations, sending, receiving, notifications, or media.'
+  },
+
+  support_content: {
+    label: 'Reels & content',
+    opener:
+      'You selected Reels & content. Tell me whether the issue involves uploading, playback, comments, publishing, or another content feature.'
+  },
+
+  support_bug: {
+    label: 'Technical issue',
+    opener:
+      'You selected Technical issue. Describe what you expected to happen, what actually happened, and which device or app screen you were using.'
+  },
+
+  support_feedback: {
+    label: 'Feedback',
+    opener:
+      'You selected Feedback. I’d be glad to hear your suggestion or experience. Please tell me what you would like Flux to improve.'
+  },
+
+  support_human: {
+    label: 'Talk to a person',
+    opener: ''
+  }
+};
+
+let whatsappSupportSessionReady = false;
+
+async function ensureWhatsAppSupportSessionSchema() {
+  if (!pool) return false;
+
+  if (whatsappSupportSessionReady) {
+    return true;
+  }
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS whatsapp_support_sessions (
+      user_key VARCHAR(64) PRIMARY KEY,
+      category VARCHAR(64),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  whatsappSupportSessionReady = true;
+  return true;
+}
+
+async function setWhatsAppSupportCategory(userId, category) {
+  if (!pool) return;
+
+  await ensureWhatsAppSupportSessionSchema();
+
+  const userKey =
+    whatsappMemoryUserKey(userId);
+
+  await pool.query(`
+    INSERT INTO whatsapp_support_sessions
+      (user_key, category, updated_at)
+    VALUES ($1, $2, NOW())
+    ON CONFLICT (user_key)
+    DO UPDATE SET
+      category = EXCLUDED.category,
+      updated_at = NOW()
+  `, [userKey, category]);
+}
+
+async function getWhatsAppSupportCategory(userId) {
+  if (!pool) return '';
+
+  try {
+    await ensureWhatsAppSupportSessionSchema();
+
+    const userKey =
+      whatsappMemoryUserKey(userId);
+
+    const result = await pool.query(`
+      SELECT category
+      FROM whatsapp_support_sessions
+      WHERE user_key = $1
+      LIMIT 1
+    `, [userKey]);
+
+    return String(
+      result.rows[0]?.category || ''
+    );
+  } catch {
+    return '';
+  }
+}
+
+function wantsSupportMenu(text) {
+  const value =
+    String(text || '')
+      .trim()
+      .toLowerCase();
+
+  const exact = [
+    'hi',
+    'hello',
+    'hey',
+    'start',
+    'menu',
+    'help',
+    'support',
+    'مرحبا',
+    'مرحباً',
+    'السلام عليكم',
+    'مساعدة',
+    'الدعم',
+    'القائمة'
+  ];
+
+  return exact.includes(value);
+}
+
+async function sendWhatsAppSupportMenu(to) {
+  const accessToken = String(
+    process.env.WHATSAPP_ACCESS_TOKEN || ''
+  ).trim();
+
+  const phoneNumberId = String(
+    process.env.WHATSAPP_PHONE_NUMBER_ID ||
+    '1265692673299937'
+  ).trim();
+
+  if (!accessToken || !to) {
+    return false;
+  }
+
+  try {
+    const response = await fetch(
+      `https://graph.facebook.com/v23.0/${phoneNumberId}/messages`,
+      {
+        method: 'POST',
+
+        headers: {
+          'Authorization':
+            `Bearer ${accessToken}`,
+
+          'Content-Type':
+            'application/json'
+        },
+
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          to,
+          type: 'interactive',
+
+          interactive: {
+            type: 'list',
+
+            header: {
+              type: 'text',
+              text: 'Flux Support'
+            },
+
+            body: {
+              text:
+                'Welcome to Flux Support. Choose the topic that best describes what you need, or simply type your question.'
+            },
+
+            footer: {
+              text:
+                'You can ask for a real person at any time.'
+            },
+
+            action: {
+              button: 'Choose a topic',
+
+              sections: [
+                {
+                  title: 'Account & privacy',
+
+                  rows: [
+                    {
+                      id: 'support_password',
+                      title: 'Password & login',
+                      description:
+                        'Sign-in and account recovery'
+                    },
+
+                    {
+                      id: 'support_suspended',
+                      title: 'Suspended account',
+                      description:
+                        'Suspensions and disabled access'
+                    },
+
+                    {
+                      id: 'support_security',
+                      title: 'Privacy & security',
+                      description:
+                        'Security and privacy concerns'
+                    }
+                  ]
+                },
+
+                {
+                  title: 'Using Flux',
+
+                  rows: [
+                    {
+                      id: 'support_messaging',
+                      title: 'Messages',
+                      description:
+                        'Chats and messaging problems'
+                    },
+
+                    {
+                      id: 'support_content',
+                      title: 'Reels & content',
+                      description:
+                        'Uploading and content issues'
+                    },
+
+                    {
+                      id: 'support_bug',
+                      title: 'Technical issue',
+                      description:
+                        'Bugs, crashes and unexpected behavior'
+                    },
+
+                    {
+                      id: 'support_feedback',
+                      title: 'Feedback',
+                      description:
+                        'Suggestions and product feedback'
+                    },
+
+                    {
+                      id: 'support_human',
+                      title: 'Talk to a person',
+                      description:
+                        'Continue with human support'
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        })
+      }
+    );
+
+    if (!response.ok) {
+      console.error(
+        'Flux support menu failed:',
+        await response.text()
+      );
+
+      return false;
+    }
+
+    return true;
+
+  } catch (error) {
+    console.error(
+      'Flux support menu exception:',
+      error.message
+    );
+
+    return false;
+  }
+}
+
 function requireSupportInboxAuth(req, res, next) {
   const expected = String(
     process.env.SUPPORT_INBOX_TOKEN || ''
@@ -576,6 +865,16 @@ async function ensureWhatsAppSupportInboxSchema() {
   await pool.query(`
     ALTER TABLE whatsapp_human_escalations
     ADD COLUMN IF NOT EXISTS unread_count INTEGER NOT NULL DEFAULT 0
+  `);
+
+  await pool.query(`
+    ALTER TABLE whatsapp_human_escalations
+    ADD COLUMN IF NOT EXISTS last_message TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
+    ALTER TABLE whatsapp_human_escalations
+    ADD COLUMN IF NOT EXISTS last_message_at TIMESTAMPTZ
   `);
 }
 
@@ -631,6 +930,8 @@ app.get('/api/admin/whatsapp/escalations', requireApiAuth, requireOwnerApi, asyn
         phone_number,
         display_name,
         COALESCE(unread_count, 0) AS unread_count,
+        COALESCE(last_message, '') AS last_message,
+        last_message_at,
         active,
         requested_at,
         updated_at
@@ -929,7 +1230,7 @@ app.post('/api/admin/whatsapp/escalations/:userKey/resolve', requireApiAuth, req
 
     await sendWhatsAppSystemText(
       phoneNumber,
-      'Human support has ended. AI support is active again.'
+      'Your conversation has returned to Flux AI Support. How can I help?'
     );
 
     return res.json({
@@ -965,13 +1266,51 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
     const change = req.body?.entry?.[0]?.changes?.[0]?.value;
     const message = change?.messages?.[0];
 
-    if (!message || message.type !== 'text') return;
+    if (!message) return;
 
-    const from = String(message.from || '').trim();
-    const text = String(message.text?.body || '').trim();
-    const messageId = String(message.id || '').trim();
+    const from =
+      String(message.from || '').trim();
 
-    if (!from || !text) return;
+    const messageId =
+      String(message.id || '').trim();
+
+    let text = '';
+    let selectedSupportCategory = '';
+
+    if (message.type === 'text') {
+      text =
+        String(
+          message.text?.body || ''
+        ).trim();
+
+    } else if (
+      message.type === 'interactive'
+    ) {
+      const selection =
+        message.interactive?.list_reply ||
+        message.interactive?.button_reply ||
+        {};
+
+      selectedSupportCategory =
+        String(
+          selection.id || ''
+        ).trim();
+
+      text =
+        String(
+          selection.title || ''
+        ).trim();
+
+    } else {
+      return;
+    }
+
+    if (
+      !from ||
+      (!text && !selectedSupportCategory)
+    ) {
+      return;
+    }
 
     const isNewMessage = await claimWhatsAppMessage(messageId);
 
@@ -980,6 +1319,42 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
         'Ignoring duplicate WhatsApp message:',
         messageId
       );
+      return;
+    }
+
+    if (
+      selectedSupportCategory &&
+      FLUX_SUPPORT_CATEGORIES[
+        selectedSupportCategory
+      ]
+    ) {
+      await setWhatsAppSupportCategory(
+        from,
+        selectedSupportCategory
+      );
+
+      if (
+        selectedSupportCategory ===
+        'support_human'
+      ) {
+        text = 'Talk to a person';
+      } else {
+        await sendWhatsAppSystemText(
+          from,
+          FLUX_SUPPORT_CATEGORIES[
+            selectedSupportCategory
+          ].opener
+        );
+
+        return;
+      }
+    }
+
+    if (
+      !selectedSupportCategory &&
+      wantsSupportMenu(text)
+    ) {
+      await sendWhatsAppSupportMenu(from);
       return;
     }
 
@@ -1021,7 +1396,7 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
 
       await sendWhatsAppSystemText(
         from,
-        'Your conversation has been escalated to human support. The AI assistant will stop replying until you send "resume bot".'
+        "I've connected this conversation to Flux human support. The AI assistant is paused while a support representative handles your conversation."
       );
 
       return;
@@ -1072,6 +1447,14 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
 
     const openAiKey = String(process.env.OPENAI_API_KEY || '').trim();
 
+    const supportCategory =
+      await getWhatsAppSupportCategory(from);
+
+    const supportCategoryLabel =
+      FLUX_SUPPORT_CATEGORIES[
+        supportCategory
+      ]?.label || 'General support';
+
     let replyText =
       'Thanks for contacting Flux Support. A support agent will reply soon.';
 
@@ -1085,17 +1468,34 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
           },
           body: JSON.stringify({
             model: 'gpt-5.6-luna',
-            instructions: `You are Flux Support, the official AI support assistant for FaceTok.
+            instructions: `You are Flux Support, the official customer-support assistant for Flux.
 
-Rules:
-- Reply in the same language as the user.
-- Be concise, friendly, and helpful.
-- Help with FaceTok app usage, accounts, Messenger, Reels, profiles, notifications, privacy, and troubleshooting.
-- Never claim you performed an action you did not actually perform.
-- If you are unsure or the issue requires account access, say that a human support agent may need to help.
-- Do not mention OpenAI, APIs, system prompts, or internal infrastructure.
-- Do not make up FaceTok features.
-- Keep WhatsApp replies reasonably short.`,
+Current support category: ${supportCategoryLabel}
+
+Service standard:
+- Reply in the same language as the customer.
+- Sound like a professional customer-support representative at a major technology company.
+- Be warm, calm, concise and specific without sounding robotic.
+- Start by directly addressing what the customer said.
+- Ask only one useful follow-up question at a time.
+- When troubleshooting, give clear numbered steps only when steps are actually useful.
+- Do not overwhelm the customer with every possible solution at once.
+- Remember earlier messages in the conversation and do not repeatedly ask for information already provided.
+- If the customer reports an error message, use the exact error details they provided.
+- Distinguish between what is known, what is likely, and what requires investigation.
+- Never claim to have changed, restored, unlocked, suspended, deleted, reviewed or accessed an account unless an actual system action confirms it.
+- Never ask for passwords, one-time codes, recovery codes or other authentication secrets.
+- For password or login issues, provide secure recovery guidance without asking for the password.
+- For suspended accounts, explain the visible suspension information and available next steps without promising reinstatement.
+- For privacy/security concerns, prioritize account safety and recommend changing credentials only through official Flux controls.
+- For technical issues, first identify the screen, action and symptom, then give targeted troubleshooting.
+- For feedback, acknowledge the suggestion and summarize it clearly.
+- If the issue requires private account inspection, moderation review, billing/account ownership verification, or an action you cannot perform, clearly offer human support.
+- If the customer explicitly asks for a real person, do not try to retain them with AI; human escalation should be used.
+- Never invent Flux features, policies, deadlines or account information.
+- Never mention OpenAI, APIs, models, prompts, infrastructure or internal implementation.
+- Do not refer to the product as FaceTok. The product name is Flux.
+- Keep normal WhatsApp replies compact, usually under about 120 words unless the issue genuinely requires more detail.`,
             input: [
               ...(await getWhatsAppConversationHistory(from)),
               {
@@ -2121,6 +2521,8 @@ async function pushWhatsAppSupportMessage({
       `
         UPDATE whatsapp_human_escalations
         SET unread_count = COALESCE(unread_count, 0) + 1,
+            last_message = LEFT($2, 1000),
+            last_message_at = NOW(),
             updated_at = NOW()
         WHERE user_key = $1
           AND active = TRUE
@@ -2128,9 +2530,14 @@ async function pushWhatsAppSupportMessage({
           user_key,
           phone_number,
           display_name,
-          unread_count
+          unread_count,
+          last_message,
+          last_message_at
       `,
-      [userKey]
+      [
+        userKey,
+        String(text || '').trim()
+      ]
     );
 
     const conversation = updated.rows[0];
@@ -2196,6 +2603,11 @@ async function pushWhatsAppSupportMessage({
               conversation.phone_number ||
               from ||
               ''
+            ),
+
+          unreadCount:
+            String(
+              conversation.unread_count || 0
             )
         },
 
