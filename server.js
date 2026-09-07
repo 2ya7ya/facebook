@@ -68,7 +68,7 @@ app.get('/api/whatsapp/webhook', (req, res) => {
 
 let lastWhatsAppWebhookEvent = null;
 
-app.post('/api/whatsapp/webhook', (req, res) => {
+app.post('/api/whatsapp/webhook', async (req, res) => {
   lastWhatsAppWebhookEvent = {
     receivedAt: new Date().toISOString(),
     body: req.body
@@ -79,7 +79,61 @@ app.post('/api/whatsapp/webhook', (req, res) => {
     JSON.stringify(req.body, null, 2)
   );
 
-  return res.sendStatus(200);
+  // Reply immediately to Meta
+  res.sendStatus(200);
+
+  try {
+    const change = req.body?.entry?.[0]?.changes?.[0]?.value;
+    const message = change?.messages?.[0];
+
+    if (!message || message.type !== 'text') return;
+
+    const from = String(message.from || '').trim();
+    const text = String(message.text?.body || '').trim();
+
+    if (!from || !text) return;
+
+    const accessToken = String(process.env.WHATSAPP_ACCESS_TOKEN || '').trim();
+    const phoneNumberId = String(
+      process.env.WHATSAPP_PHONE_NUMBER_ID || '1265692673299937'
+    ).trim();
+
+    if (!accessToken) {
+      console.error('WHATSAPP_ACCESS_TOKEN is not configured.');
+      return;
+    }
+
+    const replyText = `Flux Support received your message: ${text}`;
+
+    const apiResponse = await fetch(
+      `https://graph.facebook.com/v23.0/${phoneNumberId}/messages`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          to: from,
+          type: 'text',
+          text: {
+            body: replyText
+          }
+        })
+      }
+    );
+
+    const result = await apiResponse.text();
+
+    if (!apiResponse.ok) {
+      console.error('WhatsApp reply failed:', result);
+    } else {
+      console.log('WhatsApp reply sent:', result);
+    }
+  } catch (error) {
+    console.error('WhatsApp webhook processing failed:', error.message);
+  }
 });
 
 app.get('/api/whatsapp/debug-last-event', (req, res) => {
