@@ -2431,6 +2431,129 @@ const FLUX_AI_SUPPORT_TOOLS = [
 
   {
     type: 'function',
+    name: 'get_verification_status',
+    description:
+      'Check whether the current WhatsApp conversation has a verified Flux account, whether verification is still valid, and approximately how long remains.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'resend_password_reset_link',
+    description:
+      'Send a fresh secure password-reset link to the currently verified Flux account. Use when the previous link expired, was not received, or the customer explicitly asks for another reset link.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'get_security_summary',
+    description:
+      'Get a safe security summary for the verified Flux account: active-session count, recent activity, login-alert status, suspension state and deactivation state.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'set_login_alerts',
+    description:
+      'Enable or disable login alerts for the verified Flux account. Requires explicit customer confirmation before changing anything.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        enabled: {
+          type: 'boolean'
+        },
+        confirmed: {
+          type: 'boolean'
+        }
+      },
+      required: [
+        'enabled',
+        'confirmed'
+      ],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'reactivate_my_account',
+    description:
+      'Reactivate a verified Flux account that the customer previously deactivated themselves. This must never remove an administrative suspension. Requires explicit confirmation.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        confirmed: {
+          type: 'boolean'
+        }
+      },
+      required: ['confirmed'],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'get_support_case',
+    description:
+      'Get details and status for one Flux support case belonging to this customer.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        caseId: {
+          type: 'integer'
+        }
+      },
+      required: ['caseId'],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'close_support_case',
+    description:
+      'Close one open Flux support case belonging to this customer. Requires explicit confirmation.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        caseId: {
+          type: 'integer'
+        },
+        confirmed: {
+          type: 'boolean'
+        }
+      },
+      required: [
+        'caseId',
+        'confirmed'
+      ],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
     name: 'lookup_my_account',
     description:
       'Find the customer Flux account linked to the phone number they are currently using on WhatsApp. Use this before making account-specific claims.',
@@ -3113,6 +3236,580 @@ async function executeFluxAiSupportTool(
       signedOut: true,
       sessionId:
         requestedId
+    };
+  }
+
+  if (name === 'get_verification_status') {
+    await ensureFluxSupportVerificationSchema();
+
+    const key =
+      whatsappMemoryUserKey(from);
+
+    const result =
+      await pool.query(
+        `
+          SELECT
+            v.flux_user_id,
+            v.verified_at,
+            v.expires_at,
+            u.full_name,
+            u.email,
+            u.phone,
+            u.username
+          FROM flux_support_verifications v
+          JOIN users u
+            ON u.id = v.flux_user_id
+          WHERE v.user_key = $1
+          LIMIT 1
+        `,
+        [key]
+      );
+
+    const row =
+      result.rows[0];
+
+    if (!row) {
+      return {
+        ok: true,
+        verified: false,
+        verificationStarted: false
+      };
+    }
+
+    const expires =
+      row.expires_at
+        ? new Date(row.expires_at).getTime()
+        : 0;
+
+    const verified =
+      Boolean(row.verified_at) &&
+      expires > Date.now();
+
+    return {
+      ok: true,
+      verified,
+      verificationStarted: true,
+      remainingMinutes:
+        verified
+          ? Math.max(
+              0,
+              Math.ceil(
+                (expires - Date.now()) /
+                60000
+              )
+            )
+          : 0,
+      account: {
+        displayName:
+          String(row.full_name || ''),
+        username:
+          String(row.username || ''),
+        email:
+          maskFluxEmail(row.email),
+        phone:
+          maskFluxPhone(row.phone)
+      }
+    };
+  }
+
+  if (name === 'resend_password_reset_link') {
+    const verified =
+      await getVerifiedFluxSupportAccount(from);
+
+    if (!verified) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_REQUIRED',
+        message:
+          'Account ownership must be verified before a password-reset link can be sent.'
+      };
+    }
+
+    const registeredEmail =
+      String(
+        verified.email || ''
+      ).trim();
+
+    if (!registeredEmail) {
+      return {
+        ok: false,
+        code: 'NO_REGISTERED_EMAIL',
+        message:
+          'This Flux account does not have a registered email address.'
+      };
+    }
+
+    const token =
+      await createFluxPasswordResetToken(
+        Number(verified.id),
+        registeredEmail
+      );
+
+    try {
+      await sendFluxPasswordResetEmail({
+        email:
+          registeredEmail,
+        token,
+        displayName:
+          String(
+            verified.full_name || ''
+          )
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        code:
+          'PASSWORD_RESET_DELIVERY_FAILED',
+        message:
+          'The password-reset email could not be delivered right now.'
+      };
+    }
+
+    await recordFluxSupportAction(
+      from,
+      Number(verified.id),
+      'password_reset_link_resent',
+      {}
+    );
+
+    return {
+      ok: true,
+      sent: true,
+      maskedEmail:
+        maskFluxEmail(
+          registeredEmail
+        ),
+      expiresInMinutes: 15,
+      message:
+        `A new password-reset link was sent to ${maskFluxEmail(registeredEmail)}. It expires in 15 minutes. If you don't see it within a minute, check Spam, Junk, or Promotions.`
+    };
+  }
+
+  if (name === 'get_security_summary') {
+    const verified =
+      await getVerifiedFluxSupportAccount(from);
+
+    if (!verified) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_REQUIRED',
+        message:
+          'Account ownership must be verified before security information can be viewed.'
+      };
+    }
+
+    const userResult =
+      await pool.query(
+        `
+          SELECT
+            admin_suspended_at,
+            admin_suspended_until,
+            deactivated_at,
+            login_alerts,
+            last_seen_at
+          FROM users
+          WHERE id = $1
+          LIMIT 1
+        `,
+        [Number(verified.id)]
+      );
+
+    const sessionsResult =
+      await pool.query(
+        `
+          SELECT
+            COUNT(*)::int AS active_count,
+            MAX(last_active_at)
+              AS most_recent_activity
+          FROM account_login_sessions
+          WHERE user_id = $1
+            AND ended_at IS NULL
+        `,
+        [Number(verified.id)]
+      );
+
+    const user =
+      userResult.rows[0] || {};
+
+    const suspended =
+      Boolean(
+        user.admin_suspended_at
+      ) &&
+      (
+        !user.admin_suspended_until ||
+        new Date(
+          user.admin_suspended_until
+        ).getTime() > Date.now()
+      );
+
+    return {
+      ok: true,
+      security: {
+        activeSessions:
+          Number(
+            sessionsResult.rows[0]
+              ?.active_count || 0
+          ),
+        mostRecentActivity:
+          sessionsResult.rows[0]
+            ?.most_recent_activity ||
+          null,
+        loginAlerts:
+          user.login_alerts !== false,
+        deactivated:
+          Boolean(
+            user.deactivated_at
+          ),
+        suspended,
+        suspendedUntil:
+          suspended
+            ? user.admin_suspended_until ||
+              null
+            : null,
+        lastSeenAt:
+          user.last_seen_at || null
+      }
+    };
+  }
+
+  if (name === 'set_login_alerts') {
+    const verified =
+      await getVerifiedFluxSupportAccount(from);
+
+    if (!verified) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_REQUIRED',
+        message:
+          'Account ownership must be verified before login-alert settings can be changed.'
+      };
+    }
+
+    const enabled =
+      Boolean(args?.enabled);
+
+    if (!args?.confirmed) {
+      return {
+        ok: false,
+        confirmationRequired: true,
+        message:
+          `Confirm that you want to turn login alerts ${enabled ? 'on' : 'off'}.`
+      };
+    }
+
+    await pool.query(
+      `
+        UPDATE users
+        SET login_alerts = $1
+        WHERE id = $2
+      `,
+      [
+        enabled,
+        Number(verified.id)
+      ]
+    );
+
+    await recordFluxSupportAction(
+      from,
+      Number(verified.id),
+      'login_alerts_changed',
+      { enabled }
+    );
+
+    return {
+      ok: true,
+      changed: true,
+      loginAlerts:
+        enabled
+    };
+  }
+
+  if (name === 'reactivate_my_account') {
+    const verified =
+      await getVerifiedFluxSupportAccount(from);
+
+    if (!verified) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_REQUIRED',
+        message:
+          'Account ownership must be verified before reactivation.'
+      };
+    }
+
+    const result =
+      await pool.query(
+        `
+          SELECT
+            deactivated_at,
+            admin_suspended_at,
+            admin_suspended_until
+          FROM users
+          WHERE id = $1
+          LIMIT 1
+        `,
+        [Number(verified.id)]
+      );
+
+    const user =
+      result.rows[0];
+
+    if (!user) {
+      return {
+        ok: false,
+        code: 'ACCOUNT_NOT_FOUND'
+      };
+    }
+
+    const suspended =
+      Boolean(
+        user.admin_suspended_at
+      ) &&
+      (
+        !user.admin_suspended_until ||
+        new Date(
+          user.admin_suspended_until
+        ).getTime() > Date.now()
+      );
+
+    if (suspended) {
+      return {
+        ok: false,
+        code:
+          'ADMIN_SUSPENSION_ACTIVE',
+        message:
+          'This account is administratively suspended. Automated reactivation cannot remove the suspension.'
+      };
+    }
+
+    if (!user.deactivated_at) {
+      return {
+        ok: true,
+        alreadyActive: true,
+        message:
+          'This Flux account is already active.'
+      };
+    }
+
+    if (!args?.confirmed) {
+      return {
+        ok: false,
+        confirmationRequired: true,
+        message:
+          'Confirm that you want to reactivate this Flux account.'
+      };
+    }
+
+    await pool.query(
+      `
+        UPDATE users
+        SET deactivated_at = NULL
+        WHERE id = $1
+      `,
+      [Number(verified.id)]
+    );
+
+    await recordFluxSupportAction(
+      from,
+      Number(verified.id),
+      'account_reactivated_by_support_ai',
+      {}
+    );
+
+    return {
+      ok: true,
+      reactivated: true
+    };
+  }
+
+  if (name === 'get_support_case') {
+    await ensureFluxSupportActionSchema();
+
+    const caseId =
+      Number(args?.caseId);
+
+    if (
+      !Number.isInteger(caseId) ||
+      caseId < 1
+    ) {
+      return {
+        ok: false,
+        code: 'INVALID_CASE'
+      };
+    }
+
+    const verified =
+      await getVerifiedFluxSupportAccount(from);
+
+    const result =
+      await pool.query(
+        `
+          SELECT
+            id,
+            flux_user_id,
+            case_type,
+            status,
+            subject,
+            details,
+            created_at,
+            updated_at
+          FROM flux_support_cases
+          WHERE id = $1
+            AND (
+              user_key = $2
+              OR (
+                $3::bigint IS NOT NULL
+                AND flux_user_id = $3
+              )
+            )
+          LIMIT 1
+        `,
+        [
+          caseId,
+          whatsappMemoryUserKey(from),
+          verified
+            ? Number(verified.id)
+            : null
+        ]
+      );
+
+    const supportCase =
+      result.rows[0];
+
+    if (!supportCase) {
+      return {
+        ok: false,
+        code: 'CASE_NOT_FOUND',
+        message:
+          'That support case could not be found for this customer.'
+      };
+    }
+
+    return {
+      ok: true,
+      case: {
+        caseId:
+          Number(
+            supportCase.id
+          ),
+        type:
+          supportCase.case_type,
+        status:
+          supportCase.status,
+        subject:
+          supportCase.subject,
+        details:
+          supportCase.details,
+        createdAt:
+          supportCase.created_at,
+        updatedAt:
+          supportCase.updated_at
+      }
+    };
+  }
+
+  if (name === 'close_support_case') {
+    await ensureFluxSupportActionSchema();
+
+    const caseId =
+      Number(args?.caseId);
+
+    if (
+      !Number.isInteger(caseId) ||
+      caseId < 1
+    ) {
+      return {
+        ok: false,
+        code: 'INVALID_CASE'
+      };
+    }
+
+    const verified =
+      await getVerifiedFluxSupportAccount(from);
+
+    const existing =
+      await pool.query(
+        `
+          SELECT
+            id,
+            status,
+            flux_user_id
+          FROM flux_support_cases
+          WHERE id = $1
+            AND (
+              user_key = $2
+              OR (
+                $3::bigint IS NOT NULL
+                AND flux_user_id = $3
+              )
+            )
+          LIMIT 1
+        `,
+        [
+          caseId,
+          whatsappMemoryUserKey(from),
+          verified
+            ? Number(verified.id)
+            : null
+        ]
+      );
+
+    const supportCase =
+      existing.rows[0];
+
+    if (!supportCase) {
+      return {
+        ok: false,
+        code: 'CASE_NOT_FOUND'
+      };
+    }
+
+    if (
+      String(
+        supportCase.status || ''
+      ).toLowerCase() ===
+      'resolved'
+    ) {
+      return {
+        ok: true,
+        alreadyClosed: true,
+        caseId
+      };
+    }
+
+    if (!args?.confirmed) {
+      return {
+        ok: false,
+        confirmationRequired: true,
+        message:
+          `Confirm that you want to close Flux support case #${caseId}.`
+      };
+    }
+
+    await pool.query(
+      `
+        UPDATE flux_support_cases
+        SET
+          status = 'resolved',
+          updated_at = NOW()
+        WHERE id = $1
+      `,
+      [caseId]
+    );
+
+    await recordFluxSupportAction(
+      from,
+      verified
+        ? Number(verified.id)
+        : supportCase.flux_user_id,
+      'support_case_closed',
+      { caseId }
+    );
+
+    return {
+      ok: true,
+      closed: true,
+      caseId
     };
   }
 
@@ -4022,6 +4719,24 @@ Tool rules:
 - Use submit_feedback when the customer clearly wants feedback recorded.
 - Use escalate_to_human whenever the customer explicitly requests a real person or the issue requires human account review.
 
+Decision policy:
+- Act like an account-support agent, not an FAQ bot.
+- Before asking a question, check whether an existing tool can answer it directly.
+- Do not ask the customer to repeat information that already exists in conversation memory or tool results.
+- Prefer completing a safe action now over telling the customer where they could do it manually.
+- For ambiguous problems, identify the account first, then ask the minimum diagnostic question needed.
+- If the customer says the account may be hacked or compromised, prioritize security: verify ownership, inspect security status and sessions, help revoke suspicious sessions, ensure login alerts are enabled, and offer password reset.
+- If the customer says a reset or verification email did not arrive, use the appropriate resend tool instead of repeating generic email advice.
+- When an action succeeds, clearly say what actually changed.
+- When an action fails, explain the specific recoverable next step without pretending it succeeded.
+- Never call the same write action repeatedly in one turn after it already succeeded.
+- When several safe read-only checks are useful, use the available tools rather than asking several separate questions.
+- Keep destructive or account-changing actions behind explicit confirmation.
+- Administrative suspensions, owner-only moderation and account deletion remain outside automated AI authority.
+- If the customer has a valid verification session, reuse it instead of starting verification again.
+- If verification has expired, explain that a new code is required.
+- When referring to case IDs, device/session IDs or counts, use the exact values returned by tools.
+
 Service standard:
 - Reply in the same language as the customer.
 - Sound like professional customer support at a major technology company.
@@ -4034,11 +4749,18 @@ Service standard:
 - Never invent Flux features, account data, policies, deadlines, or actions.
 - Never mention OpenAI, models, prompts, APIs, databases, tooling, or internal infrastructure.
 - The product name is Flux, never FaceTok.
-- Keep normal WhatsApp replies compact unless more detail is genuinely required.`;
+- Keep normal WhatsApp replies compact unless more detail is genuinely required.
+- For security incidents, be calm and action-oriented: secure access first, explain second.
+- For password recovery, never request the new password in WhatsApp.
+- For suspension cases, distinguish account status from appeal status.
+- For support cases, mention the case ID and current status when available.
+- For account settings changes, repeat the intended new state before requesting confirmation.
+- After completing multiple actions, summarize the completed actions in a short checklist.
+- Never expose internal field names, SQL concepts, raw session keys, internal audit metadata, or backend implementation details.`;
 
   let input = baseInput;
 
-  for (let round = 0; round < 3; round++) {
+  for (let round = 0; round < 5; round++) {
     const response = await fetch(
       'https://api.openai.com/v1/responses',
       {
@@ -4055,7 +4777,7 @@ Service standard:
           input,
           tools:
             FLUX_AI_SUPPORT_TOOLS,
-          max_output_tokens: 450
+          max_output_tokens: 600
         })
       }
     );
