@@ -1381,7 +1381,71 @@ app.get(
       let supportCase = null;
       let notes = [];
 
-      if (state?.case_id) {
+      let resolvedCaseId =
+        Number(
+          state?.case_id || 0
+        );
+
+      /*
+       * Older support conversations may have cases that
+       * predate flux_support_state. Recover the newest
+       * customer case automatically.
+       */
+      if (!resolvedCaseId) {
+        const fallbackCase =
+          await pool.query(
+            `
+              SELECT id
+              FROM flux_support_cases
+              WHERE user_key = $1
+              ORDER BY
+                CASE
+                  WHEN LOWER(COALESCE(status,'')) IN
+                    ('resolved','closed')
+                  THEN 1
+                  ELSE 0
+                END ASC,
+                updated_at DESC,
+                created_at DESC,
+                id DESC
+              LIMIT 1
+            `,
+            [userKey]
+          );
+
+        resolvedCaseId =
+          Number(
+            fallbackCase.rows[0]?.id || 0
+          );
+
+        if (resolvedCaseId) {
+          await pool.query(
+            `
+              INSERT INTO flux_support_state
+                (
+                  user_key,
+                  case_id,
+                  updated_at
+                )
+              VALUES (
+                $1,
+                $2,
+                NOW()
+              )
+              ON CONFLICT (user_key)
+              DO UPDATE SET
+                case_id = EXCLUDED.case_id,
+                updated_at = NOW()
+            `,
+            [
+              userKey,
+              resolvedCaseId
+            ]
+          );
+        }
+      }
+
+      if (resolvedCaseId) {
         const caseResult =
           await pool.query(
             `
@@ -1402,7 +1466,7 @@ app.get(
               WHERE id = $1
               LIMIT 1
             `,
-            [Number(state.case_id)]
+            [resolvedCaseId]
           );
 
         supportCase =
@@ -1420,7 +1484,7 @@ app.get(
               ORDER BY created_at DESC, id DESC
               LIMIT 50
             `,
-            [Number(state.case_id)]
+            [resolvedCaseId]
           );
 
         notes = notesResult.rows;
