@@ -504,6 +504,110 @@ async function setWhatsAppHumanEscalation(userId, active) {
   }
 }
 
+
+function isFluxSupportGreeting(text) {
+  const value =
+    String(text || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[!?.،]+$/g, '')
+      .trim();
+
+  const greetings = new Set([
+    'hi',
+    'hello',
+    'hey',
+    'hiya',
+    'good morning',
+    'good afternoon',
+    'good evening',
+    'مرحبا',
+    'مرحباً',
+    'اهلا',
+    'أهلا',
+    'اهلين',
+    'أهلين',
+    'السلام عليكم',
+    'سلام',
+    'هاي',
+    'هلا'
+  ]);
+
+  return greetings.has(value);
+}
+
+
+function fluxSupportWelcomeMessage(text = '') {
+  const arabic =
+    /[\u0600-\u06FF]/.test(
+      String(text || '')
+    );
+
+  if (arabic) {
+    return `مرحباً بك في دعم Flux 👋
+
+كيف يمكنني مساعدتك اليوم؟
+
+اختر أحد الأقسام أو اكتب مشكلتك مباشرة:
+
+1. 🔐 تسجيل الدخول والتحقق من الحساب
+2. 🔑 كلمة المرور واسترداد الحساب
+3. 🛡️ الأمان والأجهزة والجلسات
+4. 🚫 الحساب الموقوف أو المعطّل
+5. 👤 إعدادات ومعلومات الحساب
+6. 🐞 الإبلاغ عن مشكلة أو خطأ
+7. 💬 إرسال ملاحظات أو اقتراح
+8. 👨‍💼 التحدث مع موظف دعم
+
+أرسل رقم القسم أو اشرح المشكلة.`;
+  }
+
+  return `Welcome to Flux Support 👋
+
+How can I help you today?
+
+Choose a category or describe your issue directly:
+
+1. 🔐 Login & account verification
+2. 🔑 Password & account recovery
+3. 🛡️ Security, devices & sessions
+4. 🚫 Suspended or deactivated account
+5. 👤 Account settings & profile
+6. 🐞 Report a bug
+7. 💬 Feedback or suggestions
+8. 👨‍💼 Talk to human support
+
+Reply with a category number or tell me what you need help with.`;
+}
+
+
+function fluxSupportCategoryFromChoice(text) {
+  const value =
+    String(text || '').trim();
+
+  const categories = {
+    '1':
+      'I need help with login or account verification.',
+    '2':
+      'I need help with my password or account recovery.',
+    '3':
+      'I need help with account security, devices, or active sessions.',
+    '4':
+      'I need help with a suspended or deactivated account.',
+    '5':
+      'I need help with my Flux account settings or profile.',
+    '6':
+      'I want to report a Flux bug or technical problem.',
+    '7':
+      'I want to send feedback or a suggestion.',
+    '8':
+      'I want to talk to a human support representative.'
+  };
+
+  return categories[value] || '';
+}
+
+
 function wantsHumanAgent(text) {
   const value = String(text || '').toLowerCase().trim();
 
@@ -8686,7 +8790,7 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
       ]?.label || 'General support';
 
     let replyText =
-      'Thanks for contacting Flux Support. Tell me what you need help with, and I’ll help you resolve it.';
+      fluxSupportWelcomeMessage(text);
 
     if (openAiKey) {
       try {
