@@ -360,6 +360,11 @@ async function ensureWhatsAppEscalationSchema() {
         ADD COLUMN IF NOT EXISTS human_last_reply_at TIMESTAMPTZ
       `);
 
+      await pool.query(`
+        ALTER TABLE whatsapp_human_escalations
+        ADD COLUMN IF NOT EXISTS human_wait_ack_at TIMESTAMPTZ
+      `);
+
       whatsappEscalationSchemaReady = true;
     })();
   }
@@ -1187,10 +1192,31 @@ app.get('/api/admin/whatsapp/escalations/:userKey/messages', requireApiAuth, req
       [userKey]
     );
 
+    const phoneNumber =
+      String(
+        conversationResult.rows[0]?.phone_number || ''
+      ).trim();
+
+    const state =
+      phoneNumber
+        ? await getFluxSupportState(phoneNumber)
+        : null;
+
+    const verification =
+      phoneNumber
+        ? await getFluxVerificationSummary(phoneNumber)
+        : {
+            verified: false,
+            remainingMinutes: 0,
+            userId: null
+          };
+
     return res.json({
       conversation: conversationResult.rows[0],
       messages: messagesResult.rows,
-      actions: actionsResult.rows
+      actions: actionsResult.rows,
+      state,
+      verification
     });
   } catch (error) {
     console.error(
@@ -2248,6 +2274,316 @@ function wantsReturnToFluxAi(text) {
   );
 }
 
+
+/* ============================================================
+ * Flux Support state engine
+ * ============================================================ */
+
+async function ensureFluxSupportStateSchema() {
+  await ensureDatabase();
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS flux_support_state (
+      user_key VARCHAR(64) PRIMARY KEY,
+      flux_user_id BIGINT,
+      issue_type VARCHAR(64) NOT NULL DEFAULT '',
+      case_id BIGINT,
+      pending_confirmation VARCHAR(80) NOT NULL DEFAULT '',
+      pending_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      pending_external_action VARCHAR(80) NOT NULL DEFAULT '',
+      last_real_action VARCHAR(80) NOT NULL DEFAULT '',
+      preferred_language VARCHAR(12) NOT NULL DEFAULT '',
+      priority VARCHAR(16) NOT NULL DEFAULT 'normal',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    ALTER TABLE flux_support_cases
+    ADD COLUMN IF NOT EXISTS priority VARCHAR(16) NOT NULL DEFAULT 'normal'
+  `);
+
+  await pool.query(`
+    ALTER TABLE flux_support_cases
+    ADD COLUMN IF NOT EXISTS waiting_for VARCHAR(24) NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
+    ALTER TABLE flux_support_cases
+    ADD COLUMN IF NOT EXISTS resolution TEXT NOT NULL DEFAULT ''
+  `);
+
+  await pool.query(`
+    ALTER TABLE flux_support_cases
+    ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS flux_support_internal_notes (
+      id BIGSERIAL PRIMARY KEY,
+      user_key VARCHAR(64) NOT NULL,
+      case_id BIGINT,
+      note TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+}
+
+async function getFluxSupportState(from) {
+  await ensureFluxSupportStateSchema();
+
+  const key = whatsappMemoryUserKey(from);
+
+  const result = await pool.query(
+    `
+      SELECT *
+      FROM flux_support_state
+      WHERE user_key = $1
+      LIMIT 1
+    `,
+    [key]
+  );
+
+  return result.rows[0] || {
+    user_key: key,
+    flux_user_id: null,
+    issue_type: '',
+    case_id: null,
+    pending_confirmation: '',
+    pending_payload: {},
+    pending_external_action: '',
+    last_real_action: '',
+    preferred_language: '',
+    priority: 'normal'
+  };
+}
+
+async function patchFluxSupportState(from, values = {}) {
+  await ensureFluxSupportStateSchema();
+
+  const key = whatsappMemoryUserKey(from);
+  const existing = await getFluxSupportState(from);
+
+  const merged = {
+    fluxUserId:
+      values.fluxUserId !== undefined
+        ? values.fluxUserId
+        : existing.flux_user_id,
+
+    issueType:
+      values.issueType !== undefined
+        ? values.issueType
+        : existing.issue_type,
+
+    caseId:
+      values.caseId !== undefined
+        ? values.caseId
+        : existing.case_id,
+
+    pendingConfirmation:
+      values.pendingConfirmation !== undefined
+        ? values.pendingConfirmation
+        : existing.pending_confirmation,
+
+    pendingPayload:
+      values.pendingPayload !== undefined
+        ? values.pendingPayload
+        : existing.pending_payload,
+
+    pendingExternalAction:
+      values.pendingExternalAction !== undefined
+        ? values.pendingExternalAction
+        : existing.pending_external_action,
+
+    lastRealAction:
+      values.lastRealAction !== undefined
+        ? values.lastRealAction
+        : existing.last_real_action,
+
+    preferredLanguage:
+      values.preferredLanguage !== undefined
+        ? values.preferredLanguage
+        : existing.preferred_language,
+
+    priority:
+      values.priority !== undefined
+        ? values.priority
+        : existing.priority
+  };
+
+  await pool.query(
+    `
+      INSERT INTO flux_support_state
+        (
+          user_key,
+          flux_user_id,
+          issue_type,
+          case_id,
+          pending_confirmation,
+          pending_payload,
+          pending_external_action,
+          last_real_action,
+          preferred_language,
+          priority,
+          updated_at
+        )
+      VALUES (
+        $1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,NOW()
+      )
+      ON CONFLICT (user_key)
+      DO UPDATE SET
+        flux_user_id = EXCLUDED.flux_user_id,
+        issue_type = EXCLUDED.issue_type,
+        case_id = EXCLUDED.case_id,
+        pending_confirmation = EXCLUDED.pending_confirmation,
+        pending_payload = EXCLUDED.pending_payload,
+        pending_external_action = EXCLUDED.pending_external_action,
+        last_real_action = EXCLUDED.last_real_action,
+        preferred_language = EXCLUDED.preferred_language,
+        priority = EXCLUDED.priority,
+        updated_at = NOW()
+    `,
+    [
+      key,
+      merged.fluxUserId,
+      String(merged.issueType || ''),
+      merged.caseId,
+      String(merged.pendingConfirmation || ''),
+      JSON.stringify(merged.pendingPayload || {}),
+      String(merged.pendingExternalAction || ''),
+      String(merged.lastRealAction || ''),
+      String(merged.preferredLanguage || ''),
+      String(merged.priority || 'normal')
+    ]
+  );
+}
+
+async function clearFluxSupportPendingState(from) {
+  await patchFluxSupportState(from, {
+    pendingConfirmation: '',
+    pendingPayload: {},
+    pendingExternalAction: ''
+  });
+}
+
+function detectFluxSupportLanguage(text) {
+  return /[\u0600-\u06FF]/.test(String(text || ''))
+    ? 'ar'
+    : 'en';
+}
+
+function fluxSupportRisk(action) {
+  const high = new Set([
+    'password_reset',
+    'revoke_all_sessions',
+    'change_email',
+    'change_phone'
+  ]);
+
+  const medium = new Set([
+    'revoke_session',
+    'username_change',
+    'privacy_change',
+    'login_alerts_change',
+    'reactivate_account'
+  ]);
+
+  if (high.has(action)) return 'high';
+  if (medium.has(action)) return 'medium';
+  return 'low';
+}
+
+async function getFluxVerificationSummary(from) {
+  await ensureFluxSupportVerificationSchema();
+
+  const result = await pool.query(
+    `
+      SELECT
+        flux_user_id,
+        verified_at,
+        expires_at
+      FROM flux_support_verifications
+      WHERE user_key = $1
+      LIMIT 1
+    `,
+    [whatsappMemoryUserKey(from)]
+  );
+
+  const row = result.rows[0];
+
+  if (!row || !row.verified_at || !row.expires_at) {
+    return {
+      verified: false,
+      remainingMinutes: 0,
+      userId: null
+    };
+  }
+
+  const remainingMs =
+    new Date(row.expires_at).getTime() - Date.now();
+
+  return {
+    verified: remainingMs > 0,
+    remainingMinutes:
+      Math.max(0, Math.ceil(remainingMs / 60000)),
+    userId:
+      remainingMs > 0
+        ? Number(row.flux_user_id)
+        : null
+  };
+}
+
+async function findOpenFluxSupportCase(from, userId, type) {
+  await ensureFluxSupportActionSchema();
+
+  const result = await pool.query(
+    `
+      SELECT *
+      FROM flux_support_cases
+      WHERE
+        (
+          user_key = $1
+          OR ($2::bigint IS NOT NULL AND flux_user_id = $2)
+        )
+        AND case_type = $3
+        AND LOWER(COALESCE(status,'')) NOT IN ('resolved','closed')
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    [
+      whatsappMemoryUserKey(from),
+      userId || null,
+      String(type || '')
+    ]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function getFluxSupportConversationSummary(from) {
+  const state = await getFluxSupportState(from);
+  const verification = await getFluxVerificationSummary(from);
+  const handling =
+    (await isWhatsAppHumanEscalated(from))
+      ? 'human'
+      : 'ai';
+
+  return {
+    handling,
+    verification,
+    issueType: state.issue_type || '',
+    caseId: state.case_id || null,
+    pendingConfirmation:
+      state.pending_confirmation || '',
+    pendingExternalAction:
+      state.pending_external_action || '',
+    lastRealAction:
+      state.last_real_action || '',
+    priority:
+      state.priority || 'normal'
+  };
+}
+
 const FLUX_AI_SUPPORT_TOOLS = [
   {
     type: 'function',
@@ -2548,6 +2884,187 @@ const FLUX_AI_SUPPORT_TOOLS = [
         'caseId',
         'confirmed'
       ],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'get_support_state',
+    description:
+      'Return the current Flux support workflow state, including AI/human handling, verification status, current case, pending confirmation and last completed action.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'get_verification_status',
+    description:
+      'Check whether account ownership is currently verified and how long verification remains valid.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'get_security_summary',
+    description:
+      'Return a safe security summary for the verified account including active sessions, login alerts, deactivation, suspension and recent activity.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'set_login_alerts',
+    description:
+      'Enable or disable login alerts for a verified account. Requires explicit confirmation.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        enabled: { type: 'boolean' },
+        confirmed: { type: 'boolean' }
+      },
+      required: ['enabled','confirmed'],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'reactivate_my_account',
+    description:
+      'Reactivate a verified account that the customer deactivated themselves. Never removes an administrative suspension. Requires confirmation.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        confirmed: { type: 'boolean' }
+      },
+      required: ['confirmed'],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'resend_password_reset_link',
+    description:
+      'Send a fresh password reset link to the verified account registered email.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'get_support_case',
+    description:
+      'Get one support case belonging to this customer.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        caseId: { type: 'integer' }
+      },
+      required: ['caseId'],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'close_support_case',
+    description:
+      'Close one support case belonging to this customer. Requires confirmation.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        caseId: { type: 'integer' },
+        confirmed: { type: 'boolean' }
+      },
+      required: ['caseId','confirmed'],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'change_display_name',
+    description:
+      'Change the verified account display name. Requires explicit confirmation.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        displayName: { type: 'string' },
+        confirmed: { type: 'boolean' }
+      },
+      required: ['displayName','confirmed'],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'change_bio',
+    description:
+      'Change the verified account bio. Requires explicit confirmation.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        bio: { type: 'string' },
+        confirmed: { type: 'boolean' }
+      },
+      required: ['bio','confirmed'],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'suggest_usernames',
+    description:
+      'Suggest available usernames when a requested username is taken.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        base: { type: 'string' }
+      },
+      required: ['base'],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'get_recent_support_actions',
+    description:
+      'Get recent real support actions performed for this customer.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {},
       additionalProperties: false
     }
   },
@@ -3813,6 +4330,663 @@ async function executeFluxAiSupportTool(
     };
   }
 
+  if (name === 'get_support_state') {
+    return {
+      ok: true,
+      state:
+        await getFluxSupportConversationSummary(from)
+    };
+  }
+
+  if (name === 'get_verification_status') {
+    return {
+      ok: true,
+      ...(await getFluxVerificationSummary(from))
+    };
+  }
+
+  if (name === 'get_security_summary') {
+    const account =
+      await getVerifiedFluxSupportAccount(from);
+
+    if (!account) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_REQUIRED',
+        message:
+          'Account ownership must be verified before security information can be viewed.'
+      };
+    }
+
+    const [userResult, sessionsResult] =
+      await Promise.all([
+        pool.query(
+          `
+            SELECT
+              login_alerts,
+              deactivated_at,
+              admin_suspended_at,
+              admin_suspended_until,
+              last_seen_at
+            FROM users
+            WHERE id = $1
+            LIMIT 1
+          `,
+          [Number(account.id)]
+        ),
+
+        pool.query(
+          `
+            SELECT
+              COUNT(*)::int AS count,
+              MAX(last_active_at) AS last_active_at
+            FROM account_login_sessions
+            WHERE user_id = $1
+              AND ended_at IS NULL
+          `,
+          [Number(account.id)]
+        )
+      ]);
+
+    const user = userResult.rows[0] || {};
+
+    const suspended =
+      Boolean(user.admin_suspended_at) &&
+      (
+        !user.admin_suspended_until ||
+        new Date(
+          user.admin_suspended_until
+        ).getTime() > Date.now()
+      );
+
+    return {
+      ok: true,
+      security: {
+        activeSessions:
+          Number(sessionsResult.rows[0]?.count || 0),
+        lastSessionActivity:
+          sessionsResult.rows[0]?.last_active_at || null,
+        loginAlerts:
+          user.login_alerts !== false,
+        deactivated:
+          Boolean(user.deactivated_at),
+        suspended,
+        suspendedUntil:
+          suspended
+            ? user.admin_suspended_until || null
+            : null,
+        lastSeenAt:
+          user.last_seen_at || null
+      }
+    };
+  }
+
+  if (name === 'set_login_alerts') {
+    const account =
+      await getVerifiedFluxSupportAccount(from);
+
+    if (!account) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_REQUIRED'
+      };
+    }
+
+    const enabled = Boolean(args?.enabled);
+
+    if (!args?.confirmed) {
+      await patchFluxSupportState(from, {
+        pendingConfirmation:
+          'login_alerts_change',
+        pendingPayload: { enabled }
+      });
+
+      return {
+        ok: false,
+        confirmationRequired: true,
+        risk: 'medium',
+        message:
+          `Confirm that you want to turn login alerts ${enabled ? 'on' : 'off'}.`
+      };
+    }
+
+    await pool.query(
+      `
+        UPDATE users
+        SET login_alerts = $1
+        WHERE id = $2
+      `,
+      [enabled, Number(account.id)]
+    );
+
+    await recordFluxSupportAction(
+      from,
+      Number(account.id),
+      'login_alerts_changed',
+      { enabled }
+    );
+
+    await patchFluxSupportState(from, {
+      lastRealAction:
+        'login_alerts_changed',
+      pendingConfirmation: '',
+      pendingPayload: {}
+    });
+
+    return {
+      ok: true,
+      changed: true,
+      loginAlerts: enabled
+    };
+  }
+
+  if (name === 'reactivate_my_account') {
+    const account =
+      await getVerifiedFluxSupportAccount(from);
+
+    if (!account) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_REQUIRED'
+      };
+    }
+
+    const result = await pool.query(
+      `
+        SELECT
+          deactivated_at,
+          admin_suspended_at,
+          admin_suspended_until
+        FROM users
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [Number(account.id)]
+    );
+
+    const user = result.rows[0] || {};
+
+    const suspended =
+      Boolean(user.admin_suspended_at) &&
+      (
+        !user.admin_suspended_until ||
+        new Date(
+          user.admin_suspended_until
+        ).getTime() > Date.now()
+      );
+
+    if (suspended) {
+      return {
+        ok: false,
+        code: 'ADMIN_SUSPENSION_ACTIVE',
+        message:
+          'This account is administratively suspended and cannot be reactivated automatically.'
+      };
+    }
+
+    if (!user.deactivated_at) {
+      return {
+        ok: true,
+        alreadyActive: true
+      };
+    }
+
+    if (!args?.confirmed) {
+      await patchFluxSupportState(from, {
+        pendingConfirmation:
+          'reactivate_account'
+      });
+
+      return {
+        ok: false,
+        confirmationRequired: true,
+        risk: 'medium',
+        message:
+          'Confirm that you want to reactivate this Flux account.'
+      };
+    }
+
+    await pool.query(
+      `
+        UPDATE users
+        SET deactivated_at = NULL
+        WHERE id = $1
+      `,
+      [Number(account.id)]
+    );
+
+    await recordFluxSupportAction(
+      from,
+      Number(account.id),
+      'account_reactivated_by_ai',
+      {}
+    );
+
+    await patchFluxSupportState(from, {
+      lastRealAction:
+        'account_reactivated',
+      pendingConfirmation: ''
+    });
+
+    return {
+      ok: true,
+      reactivated: true
+    };
+  }
+
+  if (name === 'resend_password_reset_link') {
+    const account =
+      await getVerifiedFluxSupportAccount(from);
+
+    if (!account) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_REQUIRED'
+      };
+    }
+
+    const email =
+      String(account.email || '').trim();
+
+    if (!email) {
+      return {
+        ok: false,
+        code: 'NO_REGISTERED_EMAIL'
+      };
+    }
+
+    const token =
+      await createFluxPasswordResetToken(
+        Number(account.id),
+        email
+      );
+
+    await sendFluxPasswordResetEmail({
+      email,
+      token,
+      displayName:
+        String(account.full_name || '')
+    });
+
+    await recordFluxSupportAction(
+      from,
+      Number(account.id),
+      'password_reset_link_resent',
+      {}
+    );
+
+    await patchFluxSupportState(from, {
+      pendingExternalAction:
+        'password_reset',
+      lastRealAction:
+        'password_reset_link_sent'
+    });
+
+    return {
+      ok: true,
+      sent: true,
+      maskedEmail:
+        maskFluxEmail(email),
+      expiresInMinutes: 15,
+      message:
+        `A fresh password-reset link was sent to ${maskFluxEmail(email)}. It expires in 15 minutes. Check Spam, Junk or Promotions if it does not arrive within about a minute.`
+    };
+  }
+
+  if (name === 'get_support_case') {
+    await ensureFluxSupportActionSchema();
+
+    const caseId = Number(args?.caseId);
+
+    const verification =
+      await getFluxVerificationSummary(from);
+
+    const result = await pool.query(
+      `
+        SELECT
+          id,
+          case_type,
+          status,
+          priority,
+          waiting_for,
+          subject,
+          details,
+          resolution,
+          created_at,
+          updated_at,
+          closed_at
+        FROM flux_support_cases
+        WHERE id = $1
+          AND (
+            user_key = $2
+            OR (
+              $3::bigint IS NOT NULL
+              AND flux_user_id = $3
+            )
+          )
+        LIMIT 1
+      `,
+      [
+        caseId,
+        whatsappMemoryUserKey(from),
+        verification.userId
+      ]
+    );
+
+    if (!result.rowCount) {
+      return {
+        ok: false,
+        code: 'CASE_NOT_FOUND'
+      };
+    }
+
+    return {
+      ok: true,
+      case: result.rows[0]
+    };
+  }
+
+  if (name === 'close_support_case') {
+    const caseId = Number(args?.caseId);
+
+    const verification =
+      await getFluxVerificationSummary(from);
+
+    const result = await pool.query(
+      `
+        SELECT id, status, flux_user_id
+        FROM flux_support_cases
+        WHERE id = $1
+          AND (
+            user_key = $2
+            OR (
+              $3::bigint IS NOT NULL
+              AND flux_user_id = $3
+            )
+          )
+        LIMIT 1
+      `,
+      [
+        caseId,
+        whatsappMemoryUserKey(from),
+        verification.userId
+      ]
+    );
+
+    if (!result.rowCount) {
+      return {
+        ok: false,
+        code: 'CASE_NOT_FOUND'
+      };
+    }
+
+    if (!args?.confirmed) {
+      await patchFluxSupportState(from, {
+        pendingConfirmation:
+          'close_support_case',
+        pendingPayload: { caseId }
+      });
+
+      return {
+        ok: false,
+        confirmationRequired: true,
+        message:
+          `Confirm that you want to close support case #${caseId}.`
+      };
+    }
+
+    await pool.query(
+      `
+        UPDATE flux_support_cases
+        SET
+          status = 'resolved',
+          waiting_for = '',
+          closed_at = NOW(),
+          updated_at = NOW()
+        WHERE id = $1
+      `,
+      [caseId]
+    );
+
+    await recordFluxSupportAction(
+      from,
+      verification.userId ||
+        result.rows[0].flux_user_id,
+      'support_case_closed',
+      { caseId }
+    );
+
+    await patchFluxSupportState(from, {
+      lastRealAction:
+        'support_case_closed',
+      pendingConfirmation: '',
+      pendingPayload: {}
+    });
+
+    return {
+      ok: true,
+      closed: true,
+      caseId
+    };
+  }
+
+  if (name === 'change_display_name') {
+    const account =
+      await getVerifiedFluxSupportAccount(from);
+
+    if (!account) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_REQUIRED'
+      };
+    }
+
+    const displayName =
+      String(args?.displayName || '').trim();
+
+    if (
+      displayName.length < 2 ||
+      displayName.length > 120
+    ) {
+      return {
+        ok: false,
+        code: 'INVALID_DISPLAY_NAME'
+      };
+    }
+
+    if (!args?.confirmed) {
+      await patchFluxSupportState(from, {
+        pendingConfirmation:
+          'display_name_change',
+        pendingPayload: { displayName }
+      });
+
+      return {
+        ok: false,
+        confirmationRequired: true,
+        message:
+          `Confirm that you want your Flux display name changed to "${displayName}".`
+      };
+    }
+
+    await pool.query(
+      `
+        UPDATE users
+        SET
+          full_name = $1,
+          name_changed_at = NOW()
+        WHERE id = $2
+      `,
+      [
+        displayName,
+        Number(account.id)
+      ]
+    );
+
+    await recordFluxSupportAction(
+      from,
+      Number(account.id),
+      'display_name_changed',
+      { displayName }
+    );
+
+    await patchFluxSupportState(from, {
+      lastRealAction:
+        'display_name_changed',
+      pendingConfirmation: '',
+      pendingPayload: {}
+    });
+
+    return {
+      ok: true,
+      changed: true,
+      displayName
+    };
+  }
+
+  if (name === 'change_bio') {
+    const account =
+      await getVerifiedFluxSupportAccount(from);
+
+    if (!account) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_REQUIRED'
+      };
+    }
+
+    const bio =
+      String(args?.bio || '').trim();
+
+    if (bio.length > 101) {
+      return {
+        ok: false,
+        code: 'BIO_TOO_LONG',
+        maxLength: 101
+      };
+    }
+
+    if (!args?.confirmed) {
+      await patchFluxSupportState(from, {
+        pendingConfirmation:
+          'bio_change',
+        pendingPayload: { bio }
+      });
+
+      return {
+        ok: false,
+        confirmationRequired: true,
+        message:
+          `Confirm that you want to update your Flux bio to: "${bio}".`
+      };
+    }
+
+    await pool.query(
+      `
+        UPDATE users
+        SET bio = $1
+        WHERE id = $2
+      `,
+      [
+        bio,
+        Number(account.id)
+      ]
+    );
+
+    await recordFluxSupportAction(
+      from,
+      Number(account.id),
+      'bio_changed',
+      {}
+    );
+
+    await patchFluxSupportState(from, {
+      lastRealAction:
+        'bio_changed',
+      pendingConfirmation: '',
+      pendingPayload: {}
+    });
+
+    return {
+      ok: true,
+      changed: true,
+      bio
+    };
+  }
+
+  if (name === 'suggest_usernames') {
+    const base =
+      String(args?.base || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9._]/g, '')
+        .slice(0, 22);
+
+    if (base.length < 3) {
+      return {
+        ok: false,
+        code: 'INVALID_USERNAME_BASE'
+      };
+    }
+
+    const candidates = [
+      base,
+      `${base}_1`,
+      `${base}.official`,
+      `${base}_${Math.floor(10 + Math.random() * 90)}`,
+      `${base}_${new Date().getFullYear()}`
+    ].slice(0, 5);
+
+    const result = await pool.query(
+      `
+        SELECT LOWER(username) AS username
+        FROM users
+        WHERE LOWER(username) = ANY($1::text[])
+      `,
+      [candidates]
+    );
+
+    const taken =
+      new Set(
+        result.rows.map(
+          row => String(row.username || '')
+        )
+      );
+
+    return {
+      ok: true,
+      suggestions:
+        candidates
+          .filter(
+            candidate => !taken.has(candidate)
+          )
+          .slice(0, 3)
+    };
+  }
+
+  if (name === 'get_recent_support_actions') {
+    await ensureFluxSupportActionSchema();
+
+    const result = await pool.query(
+      `
+        SELECT
+          action,
+          details,
+          created_at
+        FROM flux_support_action_audit
+        WHERE user_key = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT 15
+      `,
+      [whatsappMemoryUserKey(from)]
+    );
+
+    return {
+      ok: true,
+      actions: result.rows
+    };
+  }
+
   if (name === 'lookup_account_by_identifier') {
     const identifier =
       String(args?.identifier || '').trim();
@@ -4737,6 +5911,28 @@ Decision policy:
 - If verification has expired, explain that a new code is required.
 - When referring to case IDs, device/session IDs or counts, use the exact values returned by tools.
 
+Agent operating policy:
+- You are a stateful Flux account-support agent, not an FAQ bot.
+- Check support state before restarting a workflow.
+- Reuse valid verification instead of asking the customer to verify again.
+- Never ask for information already available in conversation history, support state or tool results.
+- Prefer safe real actions over manual instructions when an appropriate tool exists.
+- When several read-only checks can resolve the problem, perform them before asking another question.
+- Ask only the minimum useful follow-up question.
+- Keep write actions behind explicit confirmation.
+- Explain the exact effect before confirmation.
+- After a successful action, state exactly what changed.
+- If an action fails, give the recoverable next step and do not pretend it succeeded.
+- Avoid duplicate cases. Check for an existing appropriate open case before creating another.
+- For compromised-account reports, treat the issue as high priority: verify ownership, inspect sessions, revoke suspicious access, enable login alerts when requested, and offer password reset.
+- For missing verification/reset emails, use resend actions and remind the customer to check Spam, Junk or Promotions.
+- For support cases, distinguish status, priority and who the case is waiting for.
+- Never remove administrative suspensions automatically.
+- Never delete accounts automatically.
+- Never expose raw session keys, passwords, codes, tokens, IP addresses, database identifiers or internal implementation.
+- Summarize multiple completed actions briefly at the end of the workflow.
+- Maintain the customer's language throughout the conversation unless they switch languages.
+
 Service standard:
 - Reply in the same language as the customer.
 - Sound like professional customer support at a major technology company.
@@ -4760,7 +5956,7 @@ Service standard:
 
   let input = baseInput;
 
-  for (let round = 0; round < 5; round++) {
+  for (let round = 0; round < 6; round++) {
     const response = await fetch(
       'https://api.openai.com/v1/responses',
       {
@@ -4777,7 +5973,7 @@ Service standard:
           input,
           tools:
             FLUX_AI_SUPPORT_TOOLS,
-          max_output_tokens: 600
+          max_output_tokens: 700
         })
       }
     );
@@ -5147,6 +6343,14 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
         const contactName = String(
           change?.contacts?.[0]?.profile?.name || ''
         ).trim();
+
+        await patchFluxSupportState(
+          from,
+          {
+            preferredLanguage:
+              detectFluxSupportLanguage(text)
+          }
+        );
 
         const aiResult =
           await callFluxSupportAi({
