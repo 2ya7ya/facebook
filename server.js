@@ -13963,7 +13963,7 @@ app.get('/api/search', requireApiAuth, async (request, response) => {
     await ensureDatabase();
     const pattern = `%${query}%`;
     const usersResult = await pool.query(
-      `SELECT u.id, u.full_name, u.profile_photo,
+      `SELECT u.id, u.full_name, u.profile_photo, u.identifier,
               EXISTS(
                 SELECT 1 FROM friendships f
                 WHERE (f.user_one_id = $1 AND f.user_two_id = u.id)
@@ -13972,7 +13972,9 @@ app.get('/api/search', requireApiAuth, async (request, response) => {
               (SELECT id FROM friend_requests fr WHERE fr.sender_id = $1 AND fr.receiver_id = u.id LIMIT 1) AS outgoing_request_id,
               (SELECT id FROM friend_requests fr WHERE fr.sender_id = u.id AND fr.receiver_id = $1 LIMIT 1) AS incoming_request_id
        FROM users u
-       WHERE u.full_name ILIKE $2 OR u.id::text ILIKE $2
+       WHERE u.full_name ILIKE $2
+          OR COALESCE(u.identifier, '') ILIKE $2
+          OR u.id::text ILIKE $2
        ORDER BY CASE WHEN u.id = $1 THEN 0 ELSE 1 END, u.full_name ASC
        LIMIT 40`,
       [request.user.id, pattern]
@@ -13980,6 +13982,7 @@ app.get('/api/search', requireApiAuth, async (request, response) => {
     const users = usersResult.rows.map(user => ({
       id: String(user.id),
       name: user.full_name,
+      username: user.identifier || '',
       profilePhoto: user.profile_photo || '',
       friendState: String(user.id) === String(request.user.id)
         ? 'self'
@@ -15624,22 +15627,99 @@ app.get('/api/stories', requireApiAuth, async (_request, response) => {
 
 app.post('/api/stories', requireApiAuth, async (request, response) => {
   const image = request.body?.image || '';
-  const visibility = String(request.body?.visibility || 'public').trim().toLowerCase();
-  const caption = String(request.body?.caption || '').trim();
-  if (!image || !validImageData(image)) return response.status(400).json({ error: 'Choose a valid story photo smaller than 6 MB.' });
-  if (caption.length > 500) return response.status(400).json({ error: 'Story text is too long.' });
+  const visibility = String(
+    request.body?.visibility || 'public'
+  ).trim().toLowerCase();
+
+  const caption = String(
+    request.body?.caption || ''
+  ).trim();
+
+  const requestedMentions = Array.isArray(request.body?.mentions)
+    ? [
+        ...new Set(
+          request.body.mentions
+            .map(value => String(value || '').trim())
+            .filter(validNumericId)
+        )
+      ].slice(0, 30)
+    : [];
+
+  if (!image || !validImageData(image)) {
+    return response.status(400).json({
+      error: 'Choose a valid story photo smaller than 6 MB.'
+    });
+  }
+
+  if (caption.length > 500) {
+    return response.status(400).json({
+      error: 'Story text is too long.'
+    });
+  }
+
   try {
     await ensureDatabase();
+
     const result = await pool.query(
-      `INSERT INTO stories (user_id, image_data, caption)
+      `INSERT INTO stories (
+         user_id,
+         image_data,
+         caption
+       )
        VALUES ($1, $2, $3)
-       RETURNING id, user_id, image_data, caption, created_at`,
-      [request.user.id, image, caption]
+       RETURNING
+         id,
+         user_id,
+         image_data,
+         caption,
+         created_at`,
+      [
+        request.user.id,
+        image,
+        caption
+      ]
     );
-    response.status(201).json({ ok: true, story: result.rows[0] });
+
+    if (requestedMentions.length) {
+      /*
+       * Never trust user IDs supplied by the Android client.
+       * Only accounts that currently exist are allowed to receive
+       * a mention notification.
+       */
+      const verified = await pool.query(
+        `SELECT id
+           FROM users
+          WHERE id = ANY($1::bigint[])
+            AND id <> $2`,
+        [
+          requestedMentions,
+          request.user.id
+        ]
+      );
+
+      for (const mentioned of verified.rows) {
+        await createNotification(pool, {
+          userId: mentioned.id,
+          actorId: request.user.id,
+          type: 'mention',
+          detail: caption || 'Story mention'
+        });
+      }
+    }
+
+    response.status(201).json({
+      ok: true,
+      story: result.rows[0]
+    });
   } catch (error) {
-    console.error('Story creation failed:', error.message);
-    response.status(500).json({ error: 'Could not publish the story.' });
+    console.error(
+      'Story creation failed:',
+      error.message
+    );
+
+    response.status(500).json({
+      error: 'Could not publish the story.'
+    });
   }
 });
 
