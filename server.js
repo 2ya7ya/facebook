@@ -1321,6 +1321,91 @@ app.post('/api/admin/whatsapp/escalations/:userKey/reply', requireApiAuth, requi
   }
 });
 
+
+app.post(
+  '/api/admin/whatsapp/escalations/:userKey/takeover',
+  requireApiAuth,
+  requireOwnerApi,
+  async (req, res) => {
+    try {
+      await ensureWhatsAppSupportInboxSchema();
+
+      const userKey =
+        String(
+          req.params.userKey || ''
+        ).trim();
+
+      if (!/^[a-f0-9]{64}$/.test(userKey)) {
+        return res.status(400).json({
+          error: 'Invalid conversation'
+        });
+      }
+
+      const result =
+        await pool.query(
+          `
+            UPDATE whatsapp_human_escalations
+            SET
+              active = TRUE,
+              requested_at = NOW(),
+              updated_at = NOW(),
+              human_expires_at =
+                NOW() + INTERVAL '2 hours'
+            WHERE user_key = $1
+            RETURNING phone_number
+          `,
+          [userKey]
+        );
+
+      if (!result.rowCount) {
+        return res.status(404).json({
+          error:
+            'Support conversation not found'
+        });
+      }
+
+      const phoneNumber =
+        String(
+          result.rows[0]?.phone_number || ''
+        ).trim();
+
+      if (phoneNumber) {
+        await recordFluxSupportAction(
+          phoneNumber,
+          null,
+          'human_support_started',
+          {
+            source: 'owner',
+            expiresInHours: 2
+          }
+        );
+
+        await sendWhatsAppSystemText(
+          phoneNumber,
+          'A Flux support representative has joined the conversation. AI Support is paused while they assist you.'
+        );
+      }
+
+      return res.json({
+        ok: true,
+        handlingMode: 'human',
+        expiresInHours: 2
+      });
+
+    } catch (error) {
+      console.error(
+        'WhatsApp owner takeover failed:',
+        error.message
+      );
+
+      return res.status(500).json({
+        error:
+          'Could not take over conversation'
+      });
+    }
+  }
+);
+
 app.post('/api/admin/whatsapp/escalations/:userKey/resolve', requireApiAuth, requireOwnerApi, async (req, res) => {
   try {
     if (!pool) {
