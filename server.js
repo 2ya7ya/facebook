@@ -8485,7 +8485,7 @@ Accuracy and privacy:
 - Never mention OpenAI, prompts, models, APIs, databases or internal implementation.
 - The product name is Halo. Never call it Flux or FaceTok.
 
-Keep ordinary WhatsApp replies compact.`
+Keep ordinary WhatsApp replies compact.`;
 
   let input = baseInput;
 
