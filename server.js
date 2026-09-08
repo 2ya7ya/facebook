@@ -641,19 +641,19 @@ const FLUX_SUPPORT_CATEGORIES = {
   support_bug: {
     label: 'Technical problems',
     opener:
-      'Tell me what you expected to happen, what actually happened, and which Flux screen or feature you were using.'
+      'Tell me what you expected to happen, what actually happened, and which Halo screen or feature you were using.'
   },
 
   support_feedback: {
     label: 'Feedback',
     opener:
-      'Tell me what you would like Flux to improve. I can record your feedback for the team.'
+      'Tell me what you would like Halo to improve. I can record your feedback for the team.'
   },
 
   support_cases: {
     label: 'My support cases',
     opener:
-      'I can check your existing Flux support cases, appeals, and their current status.'
+      'I can check your existing Halo support cases, appeals, and their current status.'
   },
 
   support_human: {
@@ -759,22 +759,22 @@ function fluxSupportWelcomeText(text = '') {
     );
 
   if (arabic) {
-    return `مرحباً بك في دعم Flux 👋
+    return `مرحباً بك في دعم Halo 👋
 
-أنا هنا لمساعدتك في حل مشاكل حسابك واستخدام Flux، بما في ذلك تسجيل الدخول، استرداد الحساب، الأمان، الأجهزة، الحسابات الموقوفة، الرسائل، المحتوى والمشاكل التقنية.
+أنا هنا لمساعدتك في حل مشاكل حسابك واستخدام Halo، بما في ذلك تسجيل الدخول، استرداد الحساب، الأمان، الأجهزة، الحسابات الموقوفة، الرسائل، المحتوى والمشاكل التقنية.
 
 يمكنك اختيار القسم المناسب من القائمة التالية، أو ببساطة اكتب مشكلتك بطريقتك وسأساعدك خطوة بخطوة.
 
-🔒 لحماية حسابك، لن يطلب منك دعم Flux إرسال كلمة المرور أو رموز التحقق الخاصة بك.`;
+🔒 لحماية حسابك، لن يطلب منك دعم Halo إرسال كلمة المرور أو رموز التحقق الخاصة بك.`;
   }
 
-  return `Welcome to Flux Support 👋
+  return `Welcome to Halo Support 👋
 
-I’m here to help you resolve problems with your Flux account and the app, including sign-in, account recovery, security, devices, suspended accounts, messaging, content, and technical issues.
+I’m here to help you resolve problems with your Halo account and the app, including sign-in, account recovery, security, devices, suspended accounts, messaging, content, and technical issues.
 
 You can choose the most relevant topic from the menu below, or simply describe what’s happening in your own words and I’ll guide you through it step by step.
 
-🔒 For your security, Flux Support will never ask you to send your password or private verification codes.`;
+🔒 For your security, Halo Support will never ask you to send your password or private verification codes.`;
 }
 
 
@@ -816,7 +816,7 @@ async function sendWhatsAppSupportMenu(to) {
 
             header: {
               type: 'text',
-              text: 'Flux Support'
+              text: 'Halo Support'
             },
 
             body: {
@@ -854,7 +854,7 @@ async function sendWhatsAppSupportMenu(to) {
                   ]
                 },
                 {
-                  title: 'Help using Flux',
+                  title: 'Help using Halo',
                   rows: [
                     {
                       id: 'support_messaging',
@@ -882,7 +882,7 @@ async function sendWhatsAppSupportMenu(to) {
 
     if (!response.ok) {
       console.error(
-        'Flux support menu failed:',
+        'Halo support menu failed:',
         await response.text()
       );
 
@@ -893,13 +893,121 @@ async function sendWhatsAppSupportMenu(to) {
 
   } catch (error) {
     console.error(
-      'Flux support menu exception:',
+      'Halo support menu exception:',
       error.message
     );
 
     return false;
   }
 }
+
+
+async function ensureWhatsAppConversationVisible(
+  userId,
+  displayName = '',
+  text = ''
+) {
+  try {
+    await ensureWhatsAppSupportInboxSchema();
+
+    const userKey =
+      whatsappMemoryUserKey(userId);
+
+    const phone =
+      String(userId || '').trim();
+
+    const name =
+      String(displayName || '').trim();
+
+    const message =
+      String(text || '').trim();
+
+    /*
+     * Every WhatsApp sender gets an inbox row.
+     *
+     * IMPORTANT:
+     * - New ordinary conversations start with active=FALSE.
+     * - Existing human-handled conversations keep their
+     *   current active state.
+     * - This does not turn AI chats into human chats.
+     */
+    await pool.query(
+      `
+        INSERT INTO whatsapp_human_escalations
+          (
+            user_key,
+            active,
+            requested_at,
+            updated_at,
+            phone_number,
+            display_name,
+            unread_count,
+            last_message,
+            last_message_at
+          )
+        VALUES (
+          $1,
+          FALSE,
+          NOW(),
+          NOW(),
+          $2,
+          $3,
+          0,
+          $4,
+          NOW()
+        )
+        ON CONFLICT (user_key)
+        DO UPDATE SET
+          phone_number =
+            CASE
+              WHEN EXCLUDED.phone_number <> ''
+              THEN EXCLUDED.phone_number
+              ELSE whatsapp_human_escalations.phone_number
+            END,
+
+          display_name =
+            CASE
+              WHEN EXCLUDED.display_name <> ''
+              THEN EXCLUDED.display_name
+              ELSE whatsapp_human_escalations.display_name
+            END,
+
+          last_message =
+            CASE
+              WHEN EXCLUDED.last_message <> ''
+              THEN EXCLUDED.last_message
+              ELSE whatsapp_human_escalations.last_message
+            END,
+
+          last_message_at =
+            CASE
+              WHEN EXCLUDED.last_message <> ''
+              THEN NOW()
+              ELSE whatsapp_human_escalations.last_message_at
+            END,
+
+          updated_at = NOW()
+      `,
+      [
+        userKey,
+        phone,
+        name,
+        message
+      ]
+    );
+
+    return true;
+
+  } catch (error) {
+    console.error(
+      'WhatsApp conversation visibility update failed:',
+      error.message
+    );
+
+    return false;
+  }
+}
+
 
 function requireSupportInboxAuth(req, res, next) {
   const expected = String(
@@ -1506,7 +1614,7 @@ app.get(
 
     } catch (error) {
       console.error(
-        'Flux owner case load failed:',
+        'Halo owner case load failed:',
         error.message
       );
 
@@ -1742,7 +1850,7 @@ app.post(
 
     } catch (error) {
       console.error(
-        'Flux owner case update failed:',
+        'Halo owner case update failed:',
         error.message
       );
 
@@ -1845,7 +1953,7 @@ app.post(
 
     } catch (error) {
       console.error(
-        'Flux owner case note failed:',
+        'Halo owner case note failed:',
         error.message
       );
 
@@ -1918,7 +2026,7 @@ app.post(
 
         await sendWhatsAppSystemText(
           phoneNumber,
-          'A Flux support representative has joined the conversation. Flux AI Support will continue helping you as well.'
+          'A Halo support representative has joined the conversation. Halo AI Support will continue helping you as well.'
         );
       }
 
@@ -1985,7 +2093,7 @@ app.post('/api/admin/whatsapp/escalations/:userKey/resolve', requireApiAuth, req
 
     await sendWhatsAppSystemText(
       phoneNumber,
-      'Your conversation has returned to Flux AI Support. How can I help?'
+      'Your conversation has returned to Halo AI Support. How can I help?'
     );
 
     return res.json({
@@ -2005,7 +2113,7 @@ app.post('/api/admin/whatsapp/escalations/:userKey/resolve', requireApiAuth, req
 
 
 /* ============================================================
- * Flux AI Support actions
+ * Halo AI Support actions
  * The model never receives arbitrary database access.
  * Every action is explicitly defined and permission checked.
  * ============================================================ */
@@ -2214,7 +2322,7 @@ async function recordFluxSupportAction(
     );
   } catch (error) {
     console.error(
-      'Flux support audit failed:',
+      'Halo support audit failed:',
       error.message
     );
   }
@@ -2258,7 +2366,7 @@ async function createFluxSupportCase({
 
 
 /* ============================================================
- * Flux support account lookup + verification
+ * Halo support account lookup + verification
  * ============================================================ */
 
 async function ensureFluxSupportVerificationSchema() {
@@ -2512,7 +2620,7 @@ async function sendFluxPasswordResetEmail({
 
   if (!transport) {
     throw new Error(
-      'Flux email delivery is not configured.'
+      'Halo email delivery is not configured.'
     );
   }
 
@@ -2547,30 +2655,30 @@ async function sendFluxPasswordResetEmail({
   await transport.sendMail({
     from,
     to,
-    subject: 'Reset your Flux password',
+    subject: 'Reset your Halo password',
     text:
 `${greeting}
 
-We received a request to reset your Flux password.
+We received a request to reset your Halo password.
 
 Open this secure link:
 ${resetUrl}
 
 This link expires in 15 minutes and can only be used once.
 
-If you don't see Flux security emails normally, check your Spam, Junk, or Promotions folder and mark Flux Support as not spam.
+If you don't see Halo security emails normally, check your Spam, Junk, or Promotions folder and mark Halo Support as not spam.
 
 If you did not request this password reset, ignore this email.
 
-Flux Support`,
+Halo Support`,
     html:
 `<!doctype html>
 <html>
 <body style="font-family:Arial,sans-serif;background:#f5f6f7;padding:24px;color:#111;">
   <div style="max-width:520px;margin:auto;background:#fff;border-radius:14px;padding:28px;">
-    <h2 style="margin-top:0;">Reset your Flux password</h2>
+    <h2 style="margin-top:0;">Reset your Halo password</h2>
     <p>${escapeFluxEmailHtml(greeting)}</p>
-    <p>We received a request to reset your Flux password.</p>
+    <p>We received a request to reset your Halo password.</p>
 
     <p style="margin:28px 0;">
       <a
@@ -2588,7 +2696,7 @@ Flux Support`,
 
     <p style="color:#65676b;font-size:13px;">
       If this email appeared in Spam, Junk, or Promotions,
-      mark Flux Support as not spam so future security emails arrive normally.
+      mark Halo Support as not spam so future security emails arrive normally.
     </p>
 
     <p style="color:#65676b;font-size:13px;">
@@ -2596,7 +2704,7 @@ Flux Support`,
       you can ignore this email.
     </p>
 
-    <p>Flux Support</p>
+    <p>Halo Support</p>
   </div>
 </body>
 </html>`
@@ -2613,7 +2721,7 @@ async function sendFluxVerificationEmail({
 
   if (!transport) {
     throw new Error(
-      'Flux email delivery is not configured.'
+      'Halo email delivery is not configured.'
     );
   }
 
@@ -2625,7 +2733,7 @@ async function sendFluxVerificationEmail({
     !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)
   ) {
     throw new Error(
-      'The Flux account does not have a valid registered email address.'
+      'The Halo account does not have a valid registered email address.'
     );
   }
 
@@ -2648,44 +2756,44 @@ async function sendFluxVerificationEmail({
     from,
     to,
     subject:
-      `${code} is your Flux verification code`,
+      `${code} is your Halo verification code`,
     text:
 `${greeting}
 
-Your Flux verification code is:
+Your Halo verification code is:
 
 ${code}
 
 This code expires in 10 minutes.
 
-If this email was difficult to find, check your Spam, Junk, or Promotions folder and mark Flux Support as not spam.
+If this email was difficult to find, check your Spam, Junk, or Promotions folder and mark Halo Support as not spam.
 
 If you did not request this code, you can ignore this email.
 
-Never share your password or verification code with anyone outside the official Flux verification flow.
+Never share your password or verification code with anyone outside the official Halo verification flow.
 
-Flux Support`,
+Halo Support`,
     html:
 `<!doctype html>
 <html>
   <body style="font-family:Arial,sans-serif;background:#f5f6f7;padding:24px;color:#111;">
     <div style="max-width:520px;margin:auto;background:#fff;border-radius:14px;padding:28px;">
-      <h2 style="margin-top:0;">Flux verification</h2>
+      <h2 style="margin-top:0;">Halo verification</h2>
       <p>${escapeFluxEmailHtml(greeting)}</p>
-      <p>Use this verification code to continue with Flux Support:</p>
+      <p>Use this verification code to continue with Halo Support:</p>
       <div style="font-size:32px;font-weight:700;letter-spacing:8px;margin:24px 0;">
         ${escapeFluxEmailHtml(code)}
       </div>
       <p>This code expires in <strong>10 minutes</strong>.</p>
       <p style="font-size:13px;color:#65676b;">
         If this email appeared in Spam, Junk, or Promotions,
-        mark Flux Support as not spam so future security emails arrive normally.
+        mark Halo Support as not spam so future security emails arrive normally.
       </p>
       <p style="color:#65676b;font-size:13px;">
         If you did not request this code, you can ignore this email.
-        Never share your password or verification code outside the official Flux verification flow.
+        Never share your password or verification code outside the official Halo verification flow.
       </p>
-      <p>Flux Support</p>
+      <p>Halo Support</p>
     </div>
   </body>
 </html>`
@@ -2787,7 +2895,7 @@ async function sendFluxEmailChangeCode({
 
   if (!transport) {
     throw new Error(
-      'Flux email delivery is not configured.'
+      'Halo email delivery is not configured.'
     );
   }
 
@@ -2819,11 +2927,11 @@ async function sendFluxEmailChangeCode({
     from,
     to,
     subject:
-      `${code} is your Flux email verification code`,
+      `${code} is your Halo email verification code`,
     text:
 `${greeting}
 
-You requested to use this email address with your Flux account.
+You requested to use this email address with your Halo account.
 
 Your verification code is:
 
@@ -2835,19 +2943,19 @@ If you don't see this email within a minute, check your Spam, Junk, or Promotion
 
 If you did not request this change, you can ignore this email.
 
-Flux Support`,
+Halo Support`,
     html:
 `<!doctype html>
 <html>
 <body style="font-family:Arial,sans-serif;background:#f5f6f7;padding:24px;color:#111;">
   <div style="max-width:520px;margin:auto;background:#fff;border-radius:14px;padding:28px;">
-    <h2 style="margin-top:0;">Verify your new Flux email</h2>
+    <h2 style="margin-top:0;">Verify your new Halo email</h2>
 
     <p>${escapeFluxEmailHtml(greeting)}</p>
 
     <p>
       You requested to use this email address
-      with your Flux account.
+      with your Halo account.
     </p>
 
     <div style="font-size:32px;font-weight:700;letter-spacing:8px;margin:24px 0;">
@@ -2869,7 +2977,7 @@ Flux Support`,
       you can ignore this email.
     </p>
 
-    <p>Flux Support</p>
+    <p>Halo Support</p>
   </div>
 </body>
 </html>`
@@ -2922,7 +3030,7 @@ async function beginFluxEmailChange(
       ok: false,
       code: 'EMAIL_UNCHANGED',
       message:
-        'That is already the email address on this Flux account.'
+        'That is already the email address on this Halo account.'
     };
   }
 
@@ -2936,7 +3044,7 @@ async function beginFluxEmailChange(
       ok: false,
       code: 'EMAIL_IN_USE',
       message:
-        'That email address is already associated with another Flux account.'
+        'That email address is already associated with another Halo account.'
     };
   }
 
@@ -3068,7 +3176,7 @@ async function completeFluxEmailChange(
       ok: false,
       code: 'VERIFICATION_REQUIRED',
       message:
-        'Your Flux account verification expired. Verify account ownership again before completing the email change.'
+        'Your Halo account verification expired. Verify account ownership again before completing the email change.'
     };
   }
 
@@ -3192,7 +3300,7 @@ async function completeFluxEmailChange(
       ok: false,
       code: 'EMAIL_IN_USE',
       message:
-        'That email address became associated with another Flux account before verification completed.'
+        'That email address became associated with another Halo account before verification completed.'
     };
   }
 
@@ -3221,7 +3329,7 @@ async function completeFluxEmailChange(
 
     if (!current) {
       throw new Error(
-        'Flux account no longer exists.'
+        'Halo account no longer exists.'
       );
     }
 
@@ -3304,7 +3412,7 @@ async function completeFluxEmailChange(
         ok: false,
         code: 'EMAIL_IN_USE',
         message:
-          'That email address is already associated with another Flux account.'
+          'That email address is already associated with another Halo account.'
       };
     }
 
@@ -3350,7 +3458,7 @@ async function completeFluxEmailChange(
         newEmail
       ),
     message:
-      `Your Flux email has been changed to ${maskFluxEmail(newEmail)}.`
+      `Your Halo email has been changed to ${maskFluxEmail(newEmail)}.`
   };
 }
 
@@ -3560,7 +3668,7 @@ function wantsReturnToFluxAi(text) {
 
 
 /* ============================================================
- * Flux Support state engine
+ * Halo Support state engine
  * ============================================================ */
 
 async function ensureFluxSupportStateSchema() {
@@ -4090,7 +4198,7 @@ async function syncFluxSupportStateFromAction(
 
   } catch (error) {
     console.error(
-      'Flux support state synchronization failed:',
+      'Halo support state synchronization failed:',
       error.message
     );
   }
@@ -4153,7 +4261,7 @@ async function buildFluxEscalationSummary(
         .slice(-8)
         .map(
           item =>
-            `${item.role === 'assistant' ? 'Flux' : 'Customer'}: ${String(item.content || '').slice(0, 240)}`
+            `${item.role === 'assistant' ? 'Halo' : 'Customer'}: ${String(item.content || '').slice(0, 240)}`
         )
         .join('\n');
 
@@ -4206,7 +4314,7 @@ async function buildFluxEscalationSummary(
 
   } catch (error) {
     console.error(
-      'Flux escalation summary failed:',
+      'Halo escalation summary failed:',
       error.message
     );
 
@@ -4253,7 +4361,7 @@ async function saveFluxEscalationSummary(
 
   } catch (error) {
     console.error(
-      'Flux escalation summary save failed:',
+      'Halo escalation summary save failed:',
       error.message
     );
 
@@ -4463,11 +4571,11 @@ async function notifyFluxCaseUpdateByUserKey(
 
       if (caseId) {
         parts.push(
-          `Flux support case #${caseId}`
+          `Halo support case #${caseId}`
         );
       } else {
         parts.push(
-          'Your Flux support case'
+          'Your Halo support case'
         );
       }
 
@@ -4495,7 +4603,7 @@ async function notifyFluxCaseUpdateByUserKey(
 
   } catch (error) {
     console.error(
-      'Flux case notification failed:',
+      'Halo case notification failed:',
       error.message
     );
 
@@ -4655,7 +4763,7 @@ async function autoSyncFluxCaseLifecycle(
 
   } catch (error) {
     console.error(
-      'Flux automatic case lifecycle failed:',
+      'Halo automatic case lifecycle failed:',
       error.message
     );
   }
@@ -4666,7 +4774,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'lookup_account_by_identifier',
     description:
-      'Find a Flux account when the customer provides the registered email address, phone number, or username.',
+      'Find a Halo account when the customer provides the registered email address, phone number, or username.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4674,7 +4782,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
         identifier: {
           type: 'string',
           description:
-            'Registered Flux email, phone number, or username provided by the customer.'
+            'Registered Halo email, phone number, or username provided by the customer.'
         }
       },
       required: ['identifier'],
@@ -4686,7 +4794,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'start_account_verification',
     description:
-      'Start ownership verification for an account the customer identified by email, phone, or username. The verification code is generated by Flux and expires after 10 minutes.',
+      'Start ownership verification for an account the customer identified by email, phone, or username. The verification code is generated by Halo and expires after 10 minutes.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4704,7 +4812,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'verify_account_code',
     description:
-      'Verify the 6-digit Flux ownership code the customer supplies.',
+      'Verify the 6-digit Halo ownership code the customer supplies.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4735,7 +4843,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'get_support_cases',
     description:
-      'List the customer recent Flux support cases and their status.',
+      'List the customer recent Halo support cases and their status.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4748,7 +4856,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'get_account_settings',
     description:
-      'Read safe account settings for the verified Flux account, including username, privacy setting, login-alert setting and masked contact information.',
+      'Read safe account settings for the verified Halo account, including username, privacy setting, login-alert setting and masked contact information.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4761,7 +4869,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'update_username',
     description:
-      'Change the verified Flux account username. Only execute after the customer explicitly requests the new username and confirms the change.',
+      'Change the verified Halo account username. Only execute after the customer explicitly requests the new username and confirms the change.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4785,7 +4893,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'update_account_privacy',
     description:
-      'Turn the verified Flux account private or public. Only execute after explicit customer confirmation.',
+      'Turn the verified Halo account private or public. Only execute after explicit customer confirmation.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4809,7 +4917,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'revoke_specific_session',
     description:
-      'Sign one verified Flux account device/session out using the safe session ID returned by list_active_sessions. Requires explicit confirmation.',
+      'Sign one verified Halo account device/session out using the safe session ID returned by list_active_sessions. Requires explicit confirmation.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4833,7 +4941,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'get_support_mode',
     description:
-      'Check whether the current WhatsApp support conversation is being handled by Flux AI or human support.',
+      'Check whether the current WhatsApp support conversation is being handled by Halo AI or human support.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4846,7 +4954,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'get_verification_status',
     description:
-      'Check whether the current WhatsApp conversation has a verified Flux account, whether verification is still valid, and approximately how long remains.',
+      'Check whether the current WhatsApp conversation has a verified Halo account, whether verification is still valid, and approximately how long remains.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4859,7 +4967,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'resend_password_reset_link',
     description:
-      'Send a fresh secure password-reset link to the currently verified Flux account. Use when the previous link expired, was not received, or the customer explicitly asks for another reset link.',
+      'Send a fresh secure password-reset link to the currently verified Halo account. Use when the previous link expired, was not received, or the customer explicitly asks for another reset link.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4872,7 +4980,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'revoke_session',
     description:
-      'Sign the verified Flux account out of one specific active device/session using the safe session ID returned by list_active_sessions. Requires explicit confirmation.',
+      'Sign the verified Halo account out of one specific active device/session using the safe session ID returned by list_active_sessions. Requires explicit confirmation.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4896,7 +5004,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'get_security_summary',
     description:
-      'Get a safe security summary for the verified Flux account: active-session count, recent activity, login-alert status, suspension state and deactivation state.',
+      'Get a safe security summary for the verified Halo account: active-session count, recent activity, login-alert status, suspension state and deactivation state.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4909,7 +5017,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'set_login_alerts',
     description:
-      'Enable or disable login alerts for the verified Flux account. Requires explicit customer confirmation before changing anything.',
+      'Enable or disable login alerts for the verified Halo account. Requires explicit customer confirmation before changing anything.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4933,7 +5041,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'reactivate_my_account',
     description:
-      'Reactivate a verified Flux account that the customer previously deactivated themselves. This must never remove an administrative suspension. Requires explicit confirmation.',
+      'Reactivate a verified Halo account that the customer previously deactivated themselves. This must never remove an administrative suspension. Requires explicit confirmation.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4951,7 +5059,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'get_support_case',
     description:
-      'Get details and status for one Flux support case belonging to this customer.',
+      'Get details and status for one Halo support case belonging to this customer.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4969,7 +5077,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'close_support_case',
     description:
-      'Close one open Flux support case belonging to this customer. Requires explicit confirmation.',
+      'Close one open Halo support case belonging to this customer. Requires explicit confirmation.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4993,7 +5101,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'start_security_recovery',
     description:
-      'Start the structured Flux compromised-account recovery workflow when the customer says their account may be hacked, stolen, compromised, or accessed by someone else. Creates or reuses an urgent security case and returns the correct next security actions.',
+      'Start the structured Halo compromised-account recovery workflow when the customer says their account may be hacked, stolen, compromised, or accessed by someone else. Creates or reuses an urgent security case and returns the correct next security actions.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5006,7 +5114,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'start_email_change',
     description:
-      'Start a secure email-address change for the currently verified Flux account. Sends a 6-digit code to the NEW email address. Use only when the customer explicitly wants to change their account email.',
+      'Start a secure email-address change for the currently verified Halo account. Sends a 6-digit code to the NEW email address. Use only when the customer explicitly wants to change their account email.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5026,7 +5134,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'verify_new_email_code',
     description:
-      'Verify the 6-digit code sent to the new email address and complete the pending Flux email-address change.',
+      'Verify the 6-digit code sent to the new email address and complete the pending Halo email-address change.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5046,7 +5154,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'get_support_state',
     description:
-      'Return the current Flux support workflow state, including AI/human handling, verification status, current case, pending confirmation and last completed action.',
+      'Return the current Halo support workflow state, including AI/human handling, verification status, current case, pending confirmation and last completed action.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5227,7 +5335,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'lookup_my_account',
     description:
-      'Find the customer Flux account linked to the phone number they are currently using on WhatsApp. Use this before making account-specific claims.',
+      'Find the customer Halo account linked to the phone number they are currently using on WhatsApp. Use this before making account-specific claims.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5240,7 +5348,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'get_account_status',
     description:
-      'Check the real current status of the Flux account linked to this WhatsApp number, including whether it is suspended or deactivated.',
+      'Check the real current status of the Halo account linked to this WhatsApp number, including whether it is suspended or deactivated.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5253,7 +5361,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'list_active_sessions',
     description:
-      'List active Flux login sessions for the verified account linked to this WhatsApp number. Returns safe device, platform, location and activity information.',
+      'List active Halo login sessions for the verified account linked to this WhatsApp number. Returns safe device, platform, location and activity information.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5266,7 +5374,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'request_revoke_all_sessions',
     description:
-      'Prepare the action to sign the customer out of all Flux devices. This DOES NOT revoke sessions yet. Use it first, then ask the customer to explicitly confirm.',
+      'Prepare the action to sign the customer out of all Halo devices. This DOES NOT revoke sessions yet. Use it first, then ask the customer to explicitly confirm.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5279,7 +5387,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'confirm_revoke_all_sessions',
     description:
-      'Actually revoke all Flux sessions after a pending revoke request exists and the customer explicitly confirms in a later message.',
+      'Actually revoke all Halo sessions after a pending revoke request exists and the customer explicitly confirms in a later message.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5292,7 +5400,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'submit_suspension_appeal',
     description:
-      'Create a real suspension appeal case for the verified Flux account.',
+      'Create a real suspension appeal case for the verified Halo account.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5312,7 +5420,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'request_password_recovery',
     description:
-      'Send a secure one-time password-reset link to the verified Flux account registered email. Use only when the customer clearly says they forgot their password, need to reset it, or explicitly requests password recovery.',
+      'Send a secure one-time password-reset link to the verified Halo account registered email. Use only when the customer clearly says they forgot their password, need to reset it, or explicitly requests password recovery.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5332,7 +5440,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'submit_bug_report',
     description:
-      'Create a real technical support case for a Flux bug or malfunction.',
+      'Create a real technical support case for a Halo bug or malfunction.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5356,7 +5464,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'submit_feedback',
     description:
-      'Save real product feedback from the customer for the Flux team.',
+      'Save real product feedback from the customer for the Halo team.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5374,7 +5482,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'escalate_to_human',
     description:
-      'Transfer the current WhatsApp conversation to Flux human support.',
+      'Transfer the current WhatsApp conversation to Halo human support.',
     strict: true,
     parameters: {
       type: 'object',
@@ -6006,7 +6114,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'NO_REGISTERED_EMAIL',
         message:
-          'This Flux account does not have a registered email address.'
+          'This Halo account does not have a registered email address.'
       };
     }
 
@@ -6160,7 +6268,7 @@ async function executeFluxAiSupportTool(
             null
         },
         message:
-          'Confirm that you want to sign this device out of Flux.'
+          'Confirm that you want to sign this device out of Halo.'
       };
     }
 
@@ -6427,7 +6535,7 @@ async function executeFluxAiSupportTool(
         ok: true,
         alreadyActive: true,
         message:
-          'This Flux account is already active.'
+          'This Halo account is already active.'
       };
     }
 
@@ -6436,7 +6544,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         confirmationRequired: true,
         message:
-          'Confirm that you want to reactivate this Flux account.'
+          'Confirm that you want to reactivate this Halo account.'
       };
     }
 
@@ -6622,7 +6730,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         confirmationRequired: true,
         message:
-          `Confirm that you want to close Flux support case #${caseId}.`
+          `Confirm that you want to close Halo support case #${caseId}.`
       };
     }
 
@@ -6888,7 +6996,7 @@ async function executeFluxAiSupportTool(
         confirmationRequired: true,
         risk: 'medium',
         message:
-          'Confirm that you want to reactivate this Flux account.'
+          'Confirm that you want to reactivate this Halo account.'
       };
     }
 
@@ -7151,7 +7259,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         confirmationRequired: true,
         message:
-          `Confirm that you want your Flux display name changed to "${displayName}".`
+          `Confirm that you want your Halo display name changed to "${displayName}".`
       };
     }
 
@@ -7223,7 +7331,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         confirmationRequired: true,
         message:
-          `Confirm that you want to update your Flux bio to: "${bio}".`
+          `Confirm that you want to update your Halo bio to: "${bio}".`
       };
     }
 
@@ -7353,7 +7461,7 @@ async function executeFluxAiSupportTool(
         ok: true,
         found: false,
         message:
-          'No Flux account matched that information.'
+          'No Halo account matched that information.'
       };
     }
 
@@ -7388,7 +7496,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'ACCOUNT_NOT_FOUND',
         message:
-          'No Flux account matched that information.'
+          'No Halo account matched that information.'
       };
     }
 
@@ -7432,7 +7540,7 @@ async function executeFluxAiSupportTool(
       });
     } catch (mailError) {
       console.error(
-        'Flux verification email failed:',
+        'Halo verification email failed:',
         mailError.message
       );
 
@@ -7514,7 +7622,7 @@ async function executeFluxAiSupportTool(
         ok: true,
         found: false,
         message:
-          'No Flux account is linked to this WhatsApp number.'
+          'No Halo account is linked to this WhatsApp number.'
       };
     }
 
@@ -7531,7 +7639,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'ACCOUNT_NOT_VERIFIED',
         message:
-          'I could not verify a Flux account from this WhatsApp number.'
+          'I could not verify a Halo account from this WhatsApp number.'
       };
     }
 
@@ -7562,7 +7670,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'ACCOUNT_NOT_VERIFIED',
         message:
-          'A Flux account must be verified from this WhatsApp number before sessions can be viewed.'
+          'A Halo account must be verified from this WhatsApp number before sessions can be viewed.'
       };
     }
 
@@ -7642,7 +7750,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'ACCOUNT_NOT_VERIFIED',
         message:
-          'A Flux account must be verified before sessions can be revoked.'
+          'A Halo account must be verified before sessions can be revoked.'
       };
     }
 
@@ -7651,7 +7759,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'OWNER_REQUIRES_HUMAN',
         message:
-          'Automated session revocation is disabled for the Flux owner account. Human support is required.'
+          'Automated session revocation is disabled for the Halo owner account. Human support is required.'
       };
     }
 
@@ -7693,7 +7801,7 @@ async function executeFluxAiSupportTool(
       confirmationRequired: true,
       expiresInMinutes: 15,
       message:
-        'The sign-out action is ready but has NOT been executed. Ask the customer to explicitly confirm that they want to be signed out of all Flux devices.'
+        'The sign-out action is ready but has NOT been executed. Ask the customer to explicitly confirm that they want to be signed out of all Halo devices.'
     };
   }
 
@@ -7717,7 +7825,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'ACCOUNT_NOT_VERIFIED',
         message:
-          'A Flux account must be verified before sessions can be revoked.'
+          'A Halo account must be verified before sessions can be revoked.'
       };
     }
 
@@ -7726,7 +7834,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'OWNER_REQUIRES_HUMAN',
         message:
-          'Automated session revocation is disabled for the Flux owner account.'
+          'Automated session revocation is disabled for the Halo owner account.'
       };
     }
 
@@ -7812,7 +7920,7 @@ async function executeFluxAiSupportTool(
         revokedSessions:
           ended.rowCount,
         message:
-          'All active Flux sessions have been revoked.'
+          'All active Halo sessions have been revoked.'
       };
 
     } catch (error) {
@@ -7844,7 +7952,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'ACCOUNT_NOT_VERIFIED',
         message:
-          'A Flux account must be verified before an appeal can be submitted.'
+          'A Halo account must be verified before an appeal can be submitted.'
       };
     }
 
@@ -7856,7 +7964,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'NOT_SUSPENDED',
         message:
-          'This Flux account is not currently suspended.'
+          'This Halo account is not currently suspended.'
       };
     }
 
@@ -7953,7 +8061,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'NO_REGISTERED_EMAIL',
         message:
-          'This Flux account does not have a registered email address for password recovery.'
+          'This Halo account does not have a registered email address for password recovery.'
       };
     }
 
@@ -7973,7 +8081,7 @@ async function executeFluxAiSupportTool(
 
     } catch (error) {
       console.error(
-        'Flux password reset email failed:',
+        'Halo password reset email failed:',
         error.message
       );
 
@@ -8161,7 +8269,7 @@ async function executeFluxAiSupportTool(
   return {
     ok: false,
     error:
-      'Unsupported Flux support action.'
+      'Unsupported Halo support action.'
   };
 }
 
@@ -8182,24 +8290,24 @@ async function callFluxSupportAi({
     }
   ];
 
-  const instructions = `You are Flux Support, the official customer-support assistant for Flux.
+  const instructions = `You are Halo Support, the official customer-support assistant for Halo.
 
 Current support category: ${supportCategoryLabel}
 
-You have real Flux support tools. Use them when the customer asks about something the backend can actually inspect or perform.
+You have real Halo support tools. Use them when the customer asks about something the backend can actually inspect or perform.
 
 Tool rules:
 - Never claim an account was found, inspected, changed, appealed, signed out, or escalated unless a tool result confirms it.
 - A generic statement such as "I can't access my account", "I can't log in", "my account won't open", or equivalent wording is NOT automatically a password-recovery request and is NOT automatically a human-support request.
-- For a generic account-access problem, first determine which Flux account the customer means.
+- For a generic account-access problem, first determine which Halo account the customer means.
 - First try lookup_my_account for the WhatsApp-linked account.
-- If no Flux account is linked to the WhatsApp number, ask the customer for the registered email address, phone number, or username, then use lookup_account_by_identifier.
+- If no Halo account is linked to the WhatsApp number, ask the customer for the registered email address, phone number, or username, then use lookup_account_by_identifier.
 - Once the intended account is identified, ask one diagnostic question about what happens during sign-in, such as incorrect password, suspension message, verification problem, or another error.
 - Use request_password_recovery only when the customer clearly indicates a forgotten password, password reset, or password recovery.
 - Do not use escalate_to_human merely because the customer reports trouble accessing an account.
-- Use escalate_to_human only when the customer explicitly requests a person, a tool says human review is required, or the issue genuinely cannot be completed by the available Flux tools.
+- Use escalate_to_human only when the customer explicitly requests a person, a tool says human review is required, or the issue genuinely cannot be completed by the available Halo tools.
 - First try the WhatsApp-linked account automatically.
-- If no account matches the WhatsApp number, ask the customer for the email address, phone number, or username registered on Flux.
+- If no account matches the WhatsApp number, ask the customer for the email address, phone number, or username registered on Halo.
 - Use lookup_account_by_identifier after the customer provides one of those identifiers.
 - An email, phone number, or username alone does NOT prove ownership.
 - Before viewing sessions, revoking sessions, submitting a suspension appeal, or beginning password recovery, ownership must be verified.
@@ -8215,12 +8323,12 @@ Tool rules:
 - Use get_account_settings when the customer asks what email, phone, username, privacy setting, or login-alert setting is currently attached to the verified account.
 - If the customer asks whether AI or a person is handling the conversation, use get_support_mode.
 - Do not create duplicate support cases when an appropriate open case already exists.
-- Prefer performing an available Flux action over merely explaining how the customer could do it manually.
-- Verification codes are delivered automatically to the registered Flux email address.
+- Prefer performing an available Halo action over merely explaining how the customer could do it manually.
+- Verification codes are delivered automatically to the registered Halo email address.
 - After start_account_verification succeeds, tell the customer which masked email received the code and ask them to send the 6-digit code here.
-- Never claim an email was sent unless the relevant Flux email tool reports success.
+- Never claim an email was sent unless the relevant Halo email tool reports success.
 - Whenever a verification code or password-reset link is sent by email, tell the customer to check Spam, Junk, or Promotions if it does not arrive within about a minute.
-- Human support uses co-pilot mode: a human representative may reply, but Flux AI remains active and continues responding unless explicitly disabled by a future dedicated control.
+- Human support uses co-pilot mode: a human representative may reply, but Halo AI remains active and continues responding unless explicitly disabled by a future dedicated control.
 - If verification delivery fails, do not pretend the code was delivered.
 - The WhatsApp phone number is the only automatic identity-verification method currently available.
 - Never reveal password hashes, session keys, raw IP addresses, access tokens, authentication cookies, database fields, or internal secrets.
@@ -8228,9 +8336,9 @@ Tool rules:
 - Never ask the customer for a password, OTP, recovery code, authentication cookie, or secret.
 - Password recovery sends a secure one-time reset link to the verified account's registered email.
 - Never ask the customer to send their new password through WhatsApp.
-- The customer chooses the new password only on the Flux reset page opened from the email.
+- The customer chooses the new password only on the Halo reset page opened from the email.
 - Password-reset links expire after 15 minutes and can be used only once.
-- After the password is successfully changed, existing Flux login sessions are signed out.
+- After the password is successfully changed, existing Halo login sessions are signed out.
 - Do not transfer password recovery to human support when the automated reset-link flow succeeds.
 - Never call confirm_revoke_all_sessions unless request_revoke_all_sessions was previously completed and the customer has explicitly confirmed in a later message.
 - If a destructive or sensitive action has not been confirmed, explain what will happen and ask for confirmation.
@@ -8238,7 +8346,7 @@ Tool rules:
 - Use submit_bug_report when the customer clearly wants a technical problem reported.
 - Use submit_feedback when the customer clearly wants feedback recorded.
 - Use escalate_to_human whenever the customer explicitly requests a real person or the issue requires human account review.
-- Human support is co-pilot support. Even while a human representative is attached to the conversation, continue answering the customer normally and continue using safe Flux tools.
+- Human support is co-pilot support. Even while a human representative is attached to the conversation, continue answering the customer normally and continue using safe Halo tools.
 - Do not tell the customer that AI is paused during human support.
 - When a human reply and an AI reply may overlap, keep the AI response concise and do not repeat information already supplied by the human representative.
 - For suspicious-device reports, use list_active_sessions first, then revoke_session only after the customer confirms the exact safe session/device.
@@ -8262,7 +8370,7 @@ Decision policy:
 - When referring to case IDs, device/session IDs or counts, use the exact values returned by tools.
 
 Agent operating policy:
-- You are a stateful Flux account-support agent, not an FAQ bot.
+- You are a stateful Halo account-support agent, not an FAQ bot.
 - Check support state before restarting a workflow.
 - Reuse valid verification instead of asking the customer to verify again.
 - Never ask for information already available in conversation history, support state or tool results.
@@ -8296,16 +8404,16 @@ Service standard:
 - Use numbered troubleshooting steps only when useful.
 - Remember details already supplied.
 - Distinguish confirmed backend facts from general guidance.
-- Never invent Flux features, account data, policies, deadlines, or actions.
+- Never invent Halo features, account data, policies, deadlines, or actions.
 - Never mention OpenAI, models, prompts, APIs, databases, tooling, or internal infrastructure.
-- The product name is Flux, never FaceTok.
+- The product name is Halo, never Halo.
 - Keep normal WhatsApp replies compact unless more detail is genuinely required.
 - For security incidents, be calm and action-oriented: secure access first, explain second.
 - For password recovery, never request the new password in WhatsApp.
-- For an email-address change, first require an already verified Flux account.
+- For an email-address change, first require an already verified Halo account.
 - Never change an email immediately from a WhatsApp message. Use start_email_change, send the code to the NEW email, then use verify_new_email_code only after the customer provides that code.
 - Never reveal the full old or new email after the change; use the masked email returned by the tools.
-- A code sent to the new email proves control of that new address; the existing Flux verification proves ownership of the account.
+- A code sent to the new email proves control of that new address; the existing Halo verification proves ownership of the account.
 - If the new-email code expires or reaches the attempt limit, start a new email-change verification instead of bypassing verification.
 - For suspension cases, distinguish account status from appeal status.
 - For support cases, mention the case ID and current status when available.
@@ -8437,7 +8545,7 @@ Service standard:
 
   return {
     text:
-      'I could not complete that support action automatically. I can connect you with a Flux support representative.',
+      'I could not complete that support action automatically. I can connect you with a Halo support representative.',
     usedTools: true
   };
 }
@@ -8517,6 +8625,34 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
       return;
     }
 
+
+    /*
+     * All users who message the Halo WhatsApp support number
+     * belong in the owner's support inbox, whether the
+     * conversation is AI-only or human-assisted.
+     */
+    const inboxContactName =
+      String(
+        change?.contacts?.[0]?.profile?.name || ''
+      ).trim();
+
+    const inboxPreview =
+      text ||
+      (
+        selectedSupportCategory &&
+        FLUX_SUPPORT_CATEGORIES[
+          selectedSupportCategory
+        ]?.label
+      ) ||
+      'WhatsApp support message';
+
+    await ensureWhatsAppConversationVisible(
+      from,
+      inboxContactName,
+      inboxPreview
+    );
+
+
     if (
       selectedSupportCategory &&
       FLUX_SUPPORT_CATEGORIES[
@@ -8590,7 +8726,7 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
 
       await sendWhatsAppSystemText(
         from,
-        'Flux AI Support is active again. How can I help?'
+        'Halo AI Support is active again. How can I help?'
       );
 
       return;
@@ -8632,7 +8768,7 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
 
       await sendWhatsAppSystemText(
         from,
-        "I've added Flux human support to this conversation. The AI assistant will continue helping you, and a support representative can also reply when needed."
+        "I've added Halo human support to this conversation. The AI assistant will continue helping you, and a support representative can also reply when needed."
       );
 
       return;
@@ -8657,12 +8793,12 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
         await addWhatsAppMemoryMessage(
           from,
           'assistant',
-          'Human support has left the conversation. Flux AI Support remains active.'
+          'Human support has left the conversation. Halo AI Support remains active.'
         );
 
         await sendWhatsAppSystemText(
           from,
-          'Human support has left the conversation. Flux AI Support is still active. How can I help?'
+          'Human support has left the conversation. Halo AI Support is still active. How can I help?'
         );
 
         return;
@@ -8686,7 +8822,7 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
       });
 
       console.log(
-        'Flux human co-pilot active; AI will also reply:',
+        'Halo human co-pilot active; AI will also reply:',
         from
       );
     }
@@ -8780,7 +8916,7 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
 
       } catch (aiError) {
         console.error(
-          'Flux AI support request failed:',
+          'Halo AI support request failed:',
           aiError.message
         );
 
@@ -11691,7 +11827,7 @@ app.get('/reset-password', async (request, response) => {
 <html>
 <head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Flux password reset</title>
+<title>Halo password reset</title>
 </head>
 <body style="font-family:Arial,sans-serif;background:#f5f6f7;padding:24px;">
 <div style="max-width:480px;margin:60px auto;background:white;padding:28px;border-radius:14px;">
@@ -11725,7 +11861,7 @@ app.get('/reset-password', async (request, response) => {
 <html>
 <head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Flux password reset</title>
+<title>Halo password reset</title>
 </head>
 <body style="font-family:Arial,sans-serif;background:#f5f6f7;padding:24px;">
 <div style="max-width:480px;margin:60px auto;background:white;padding:28px;border-radius:14px;">
@@ -11741,13 +11877,13 @@ app.get('/reset-password', async (request, response) => {
 <html>
 <head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Reset your Flux password</title>
+<title>Reset your Halo password</title>
 </head>
 <body style="font-family:Arial,sans-serif;background:#f5f6f7;margin:0;padding:24px;color:#111;">
 <div style="max-width:480px;margin:60px auto;background:#fff;border-radius:16px;padding:28px;box-shadow:0 2px 12px rgba(0,0,0,.08);">
 
 <h2 style="margin-top:0;">
-Reset your Flux password
+Reset your Halo password
 </h2>
 
 <form method="post" action="/api/password-reset/complete">
@@ -11894,7 +12030,7 @@ app.post(
 
       /*
        * IMPORTANT:
-       * Keep the existing Flux password-storage behavior.
+       * Keep the existing Halo password-storage behavior.
        * The new password is stored exactly the same way
        * the existing system currently stores passwords.
        */
@@ -11962,9 +12098,9 @@ app.post(
 <body style="font-family:Arial,sans-serif;background:#f5f6f7;padding:24px;color:#111;">
 <div style="max-width:480px;margin:60px auto;background:#fff;border-radius:16px;padding:28px;">
 <h2>Password changed</h2>
-<p>Your Flux password has been reset successfully.</p>
-<p>For security, all previous Flux sessions have been signed out.</p>
-<p>You can now return to Flux and sign in using your new password.</p>
+<p>Your Halo password has been reset successfully.</p>
+<p>For security, all previous Halo sessions have been signed out.</p>
+<p>You can now return to Halo and sign in using your new password.</p>
 </div>
 </body>
 </html>`);
@@ -11975,7 +12111,7 @@ app.post(
       } catch {}
 
       console.error(
-        'Flux password reset failed:',
+        'Halo password reset failed:',
         error.message
       );
 
@@ -17717,10 +17853,10 @@ app.get('/whatsapp-coexistence-setup', (request, response) => {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Flux Support WhatsApp Setup</title>
+  <title>Halo Support WhatsApp Setup</title>
 </head>
 <body style="font-family:Arial,sans-serif;padding:24px;max-width:600px;margin:auto">
-  <h2>Flux Support — WhatsApp Coexistence</h2>
+  <h2>Halo Support — WhatsApp Coexistence</h2>
   <p>Connect the existing WhatsApp Business App number to Cloud API.</p>
 
   <button id="connect"
