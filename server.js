@@ -350,6 +350,16 @@ async function ensureWhatsAppEscalationSchema() {
         )
       `);
 
+      await pool.query(`
+        ALTER TABLE whatsapp_human_escalations
+        ADD COLUMN IF NOT EXISTS human_expires_at TIMESTAMPTZ
+      `);
+
+      await pool.query(`
+        ALTER TABLE whatsapp_human_escalations
+        ADD COLUMN IF NOT EXISTS human_last_reply_at TIMESTAMPTZ
+      `);
+
       whatsappEscalationSchemaReady = true;
     })();
   }
@@ -378,7 +388,9 @@ async function isWhatsAppHumanEscalated(userId) {
 
     const result = await pool.query(
       `
-        SELECT active
+        SELECT
+          active,
+          human_expires_at
         FROM whatsapp_human_escalations
         WHERE user_key = $1
         LIMIT 1
@@ -386,7 +398,32 @@ async function isWhatsAppHumanEscalated(userId) {
       [userKey]
     );
 
-    return result.rows[0]?.active === true;
+    const row = result.rows[0];
+
+    if (!row?.active) {
+      return false;
+    }
+
+    if (
+      row.human_expires_at &&
+      new Date(row.human_expires_at).getTime() <= Date.now()
+    ) {
+      await pool.query(
+        `
+          UPDATE whatsapp_human_escalations
+          SET
+            active = FALSE,
+            human_expires_at = NULL,
+            updated_at = NOW()
+          WHERE user_key = $1
+        `,
+        [userKey]
+      );
+
+      return false;
+    }
+
+    return true;
   } catch (error) {
     console.error(
       'WhatsApp escalation check failed:',
@@ -408,12 +445,33 @@ async function setWhatsAppHumanEscalation(userId, active) {
     await pool.query(
       `
         INSERT INTO whatsapp_human_escalations
-          (user_key, active, requested_at, updated_at)
-        VALUES ($1, $2, NOW(), NOW())
+          (
+            user_key,
+            active,
+            requested_at,
+            updated_at,
+            human_expires_at
+          )
+        VALUES (
+          $1,
+          $2,
+          NOW(),
+          NOW(),
+          CASE
+            WHEN $2 = TRUE
+            THEN NOW() + INTERVAL '2 hours'
+            ELSE NULL
+          END
+        )
         ON CONFLICT (user_key)
         DO UPDATE SET
           active = EXCLUDED.active,
           updated_at = NOW(),
+          human_expires_at = CASE
+            WHEN EXCLUDED.active = TRUE
+            THEN NOW() + INTERVAL '2 hours'
+            ELSE NULL
+          END,
           requested_at = CASE
             WHEN EXCLUDED.active = TRUE
             THEN NOW()
@@ -940,7 +998,18 @@ app.get('/api/admin/whatsapp/escalations', requireApiAuth, requireOwnerApi, asyn
         last_message_at,
         active,
         requested_at,
-        updated_at
+        updated_at,
+        human_expires_at,
+        human_last_reply_at,
+        CASE
+          WHEN active = TRUE
+            AND (
+              human_expires_at IS NULL
+              OR human_expires_at > NOW()
+            )
+          THEN 'human'
+          ELSE 'ai'
+        END AS handling_mode
       FROM whatsapp_human_escalations
       ORDER BY updated_at DESC
       LIMIT 100
@@ -1065,7 +1134,18 @@ app.get('/api/admin/whatsapp/escalations/:userKey/messages', requireApiAuth, req
           display_name,
           active,
           requested_at,
-          updated_at
+          updated_at,
+          human_expires_at,
+          human_last_reply_at,
+          CASE
+            WHEN active = TRUE
+              AND (
+                human_expires_at IS NULL
+                OR human_expires_at > NOW()
+              )
+            THEN 'human'
+            ELSE 'ai'
+          END AS handling_mode
         FROM whatsapp_human_escalations
         WHERE user_key = $1
         LIMIT 1
@@ -1090,9 +1170,27 @@ app.get('/api/admin/whatsapp/escalations/:userKey/messages', requireApiAuth, req
       [userKey]
     );
 
+    await ensureFluxSupportActionSchema();
+
+    const actionsResult = await pool.query(
+      `
+        SELECT
+          id,
+          action,
+          details,
+          created_at
+        FROM flux_support_action_audit
+        WHERE user_key = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT 50
+      `,
+      [userKey]
+    );
+
     return res.json({
       conversation: conversationResult.rows[0],
-      messages: messagesResult.rows
+      messages: messagesResult.rows,
+      actions: actionsResult.rows
     });
   } catch (error) {
     console.error(
@@ -1172,7 +1270,11 @@ app.post('/api/admin/whatsapp/escalations/:userKey/reply', requireApiAuth, requi
     await pool.query(
       `
         UPDATE whatsapp_human_escalations
-        SET updated_at = NOW()
+        SET
+          updated_at = NOW(),
+          human_last_reply_at = NOW(),
+          human_expires_at =
+            NOW() + INTERVAL '2 hours'
         WHERE user_key = $1
       `,
       [userKey]
@@ -1216,6 +1318,7 @@ app.post('/api/admin/whatsapp/escalations/:userKey/resolve', requireApiAuth, req
         UPDATE whatsapp_human_escalations
         SET active = FALSE,
             unread_count = 0,
+            human_expires_at = NULL,
             updated_at = NOW()
         WHERE user_key = $1
         RETURNING phone_number
@@ -1808,6 +1911,8 @@ ${resetUrl}
 
 This link expires in 15 minutes and can only be used once.
 
+If you don't see Flux security emails normally, check your Spam, Junk, or Promotions folder and mark Flux Support as not spam.
+
 If you did not request this password reset, ignore this email.
 
 Flux Support`,
@@ -1832,6 +1937,11 @@ Flux Support`,
     <p>
       This link expires in <strong>15 minutes</strong>
       and can only be used once.
+    </p>
+
+    <p style="color:#65676b;font-size:13px;">
+      If this email appeared in Spam, Junk, or Promotions,
+      mark Flux Support as not spam so future security emails arrive normally.
     </p>
 
     <p style="color:#65676b;font-size:13px;">
@@ -1901,6 +2011,8 @@ ${code}
 
 This code expires in 10 minutes.
 
+If this email was difficult to find, check your Spam, Junk, or Promotions folder and mark Flux Support as not spam.
+
 If you did not request this code, you can ignore this email.
 
 Never share your password or verification code with anyone outside the official Flux verification flow.
@@ -1918,6 +2030,10 @@ Flux Support`,
         ${escapeFluxEmailHtml(code)}
       </div>
       <p>This code expires in <strong>10 minutes</strong>.</p>
+      <p style="font-size:13px;color:#65676b;">
+        If this email appeared in Spam, Junk, or Promotions,
+        mark Flux Support as not spam so future security emails arrive normally.
+      </p>
       <p style="color:#65676b;font-size:13px;">
         If you did not request this code, you can ignore this email.
         Never share your password or verification code outside the official Flux verification flow.
@@ -2631,7 +2747,7 @@ async function executeFluxAiSupportTool(
         maskFluxEmail(account.email),
       expiresInMinutes: 10,
       message:
-        `A new verification code was sent to ${maskFluxEmail(account.email)}.`
+        `A new verification code was sent to ${maskFluxEmail(account.email)}. If you don't see it within a minute, check your Spam, Junk, or Promotions folder.`
     };
   }
 
@@ -3120,7 +3236,7 @@ async function executeFluxAiSupportTool(
       maskedEmail:
         maskFluxEmail(registeredEmail),
       message:
-        `A 6-digit verification code was sent to ${maskFluxEmail(registeredEmail)}. It expires in 10 minutes.`
+        `A 6-digit verification code was sent to ${maskFluxEmail(registeredEmail)}. It expires in 10 minutes. If you don't see it within a minute, check your Spam, Junk, or Promotions folder.`
     };
   }
 
@@ -3684,7 +3800,7 @@ async function executeFluxAiSupportTool(
       caseId:
         Number(supportCase.id),
       message:
-        `A secure password-reset link was sent to ${maskFluxEmail(registeredEmail)}. It expires in 15 minutes.`
+        `A secure password-reset link was sent to ${maskFluxEmail(registeredEmail)}. It expires in 15 minutes. If you don't see it within a minute, check your Spam, Junk, or Promotions folder.`
     };
   }
 
@@ -3885,7 +4001,9 @@ Tool rules:
 - Prefer performing an available Flux action over merely explaining how the customer could do it manually.
 - Verification codes are delivered automatically to the registered Flux email address.
 - After start_account_verification succeeds, tell the customer which masked email received the code and ask them to send the 6-digit code here.
-- Never claim an email was sent unless start_account_verification reports success.
+- Never claim an email was sent unless the relevant Flux email tool reports success.
+- Whenever a verification code or password-reset link is sent by email, tell the customer to check Spam, Junk, or Promotions if it does not arrive within about a minute.
+- Human support takeover is temporary. AI is the default support mode outside an active human-support window.
 - If verification delivery fails, do not pretend the code was delivered.
 - The WhatsApp phone number is the only automatic identity-verification method currently available.
 - Never reveal password hashes, session keys, raw IP addresses, access tokens, authentication cookies, database fields, or internal secrets.
@@ -4161,9 +4279,18 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
     if (wantsBotResume(text)) {
       await setWhatsAppHumanEscalation(from, false);
 
+      await recordFluxSupportAction(
+        from,
+        null,
+        'returned_to_ai',
+        {
+          source: 'customer'
+        }
+      );
+
       await sendWhatsAppSystemText(
         from,
-        'AI support is active again. How can I help?'
+        'Flux AI Support is active again. How can I help?'
       );
 
       return;
@@ -4179,6 +4306,15 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
       await saveWhatsAppEscalationIdentity(
         from,
         contactName
+      );
+
+      await recordFluxSupportAction(
+        from,
+        null,
+        'human_support_started',
+        {
+          expiresInHours: 2
+        }
       );
 
       await addWhatsAppMemoryMessage(
@@ -4282,7 +4418,7 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
       ]?.label || 'General support';
 
     let replyText =
-      'Thanks for contacting Flux Support. A support agent will reply soon.';
+      'Thanks for contacting Flux Support. Tell me what you need help with, and I’ll help you resolve it.';
 
     if (openAiKey) {
       try {
