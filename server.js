@@ -1709,10 +1709,27 @@ app.post(
         ]
       );
 
+      const updatedCase =
+        updateResult.rows[0];
+
+      await notifyFluxCaseUpdateByUserKey(
+        userKey,
+        {
+          caseId:
+            Number(
+              updatedCase?.id ||
+              state.case_id
+            ),
+          status:
+            updatedCase?.status || '',
+          priority:
+            updatedCase?.priority || ''
+        }
+      );
+
       return res.json({
         ok: true,
-        case:
-          updateResult.rows[0]
+        case: updatedCase
       });
 
     } catch (error) {
@@ -1893,7 +1910,7 @@ app.post(
 
         await sendWhatsAppSystemText(
           phoneNumber,
-          'A Flux support representative has joined the conversation. AI Support is paused while they assist you.'
+          'A Flux support representative has joined the conversation. Flux AI Support will continue helping you as well.'
         );
       }
 
@@ -3722,8 +3739,231 @@ recordFluxSupportAction =
       details
     );
 
+    await autoSyncFluxCaseLifecycle(
+      from,
+      action,
+      details
+    );
+
     return result;
   };
+
+
+async function notifyFluxCaseUpdateByUserKey(
+  userKey,
+  {
+    caseId = null,
+    status = '',
+    priority = '',
+    message = ''
+  } = {}
+) {
+  try {
+    await ensureWhatsAppSupportInboxSchema();
+
+    const result = await pool.query(
+      `
+        SELECT phone_number
+        FROM whatsapp_human_escalations
+        WHERE user_key = $1
+        LIMIT 1
+      `,
+      [String(userKey || '').trim()]
+    );
+
+    const phoneNumber =
+      String(
+        result.rows[0]?.phone_number || ''
+      ).trim();
+
+    if (!phoneNumber) {
+      return false;
+    }
+
+    let body =
+      String(message || '').trim();
+
+    if (!body) {
+      const parts = [];
+
+      if (caseId) {
+        parts.push(
+          `Flux support case #${caseId}`
+        );
+      } else {
+        parts.push(
+          'Your Flux support case'
+        );
+      }
+
+      if (status) {
+        parts.push(
+          `is now ${String(status).replace(/_/g, ' ')}`
+        );
+      }
+
+      if (priority) {
+        parts.push(
+          `Priority: ${priority}`
+        );
+      }
+
+      body = parts.join('. ') + '.';
+    }
+
+    await sendWhatsAppSystemText(
+      phoneNumber,
+      body
+    );
+
+    return true;
+
+  } catch (error) {
+    console.error(
+      'Flux case notification failed:',
+      error.message
+    );
+
+    return false;
+  }
+}
+
+
+async function autoSyncFluxCaseLifecycle(
+  from,
+  action,
+  details = {}
+) {
+  try {
+    const state =
+      await getFluxSupportState(from);
+
+    const caseId =
+      Number(
+        details?.caseId ||
+        details?.case_id ||
+        state?.case_id ||
+        0
+      );
+
+    if (!caseId) return;
+
+    const actionName =
+      String(action || '');
+
+    let status = '';
+    let waitingFor = '';
+
+    if (
+      actionName === 'verification_started'
+    ) {
+      status =
+        'waiting_for_user';
+
+      waitingFor =
+        'user';
+    }
+
+    if (
+      actionName === 'account_verified'
+    ) {
+      status =
+        'open';
+
+      waitingFor = '';
+    }
+
+    if (
+      actionName === 'password_reset_link_sent' ||
+      actionName === 'password_reset_link_resent'
+    ) {
+      status =
+        'waiting_for_user';
+
+      waitingFor =
+        'user';
+    }
+
+    if (
+      actionName === 'suspension_appeal_submitted'
+    ) {
+      status =
+        'waiting_for_support';
+
+      waitingFor =
+        'support';
+    }
+
+    if (
+      actionName === 'security_recovery_started'
+    ) {
+      status =
+        'open';
+
+      waitingFor = '';
+
+      await pool.query(
+        `
+          UPDATE flux_support_cases
+          SET
+            priority = 'urgent',
+            updated_at = NOW()
+          WHERE id = $1
+        `,
+        [caseId]
+      );
+    }
+
+    if (
+      actionName === 'support_case_closed'
+    ) {
+      status =
+        'resolved';
+
+      waitingFor = '';
+    }
+
+    if (!status) return;
+
+    const result =
+      await pool.query(
+        `
+          UPDATE flux_support_cases
+          SET
+            status = $1,
+            waiting_for = $2,
+            closed_at =
+              CASE
+                WHEN $1 = 'resolved'
+                THEN COALESCE(
+                  closed_at,
+                  NOW()
+                )
+                ELSE NULL
+              END,
+            updated_at = NOW()
+          WHERE id = $3
+          RETURNING
+            id,
+            status,
+            priority
+        `,
+        [
+          status,
+          waitingFor,
+          caseId
+        ]
+      );
+
+    if (!result.rowCount) return;
+
+  } catch (error) {
+    console.error(
+      'Flux automatic case lifecycle failed:',
+      error.message
+    );
+  }
+}
 
 const FLUX_AI_SUPPORT_TOOLS = [
   {
@@ -3928,6 +4168,30 @@ const FLUX_AI_SUPPORT_TOOLS = [
     parameters: {
       type: 'object',
       properties: {},
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'revoke_session',
+    description:
+      'Sign the verified Flux account out of one specific active device/session using the safe session ID returned by list_active_sessions. Requires explicit confirmation.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        sessionId: {
+          type: 'string'
+        },
+        confirmed: {
+          type: 'boolean'
+        }
+      },
+      required: [
+        'sessionId',
+        'confirmed'
+      ],
       additionalProperties: false
     }
   },
@@ -5053,6 +5317,175 @@ async function executeFluxAiSupportTool(
       expiresInMinutes: 15,
       message:
         `A new password-reset link was sent to ${maskFluxEmail(registeredEmail)}. It expires in 15 minutes. If you don't see it within a minute, check Spam, Junk, or Promotions.`
+    };
+  }
+
+  if (name === 'revoke_session') {
+    const account =
+      await getVerifiedFluxSupportAccount(from);
+
+    if (!account) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_REQUIRED',
+        message:
+          'Account ownership must be verified before a device can be signed out.'
+      };
+    }
+
+    const safeId =
+      String(
+        args?.sessionId || ''
+      ).trim();
+
+    if (
+      !/^[a-f0-9]{12}$/i.test(
+        safeId
+      )
+    ) {
+      return {
+        ok: false,
+        code: 'INVALID_SESSION_ID',
+        message:
+          'That session ID is not valid.'
+      };
+    }
+
+    const sessions =
+      await pool.query(
+        `
+          SELECT
+            session_key,
+            device_model,
+            platform_name,
+            location,
+            last_active_at
+          FROM account_login_sessions
+          WHERE user_id = $1
+            AND ended_at IS NULL
+          ORDER BY last_active_at DESC
+          LIMIT 50
+        `,
+        [Number(account.id)]
+      );
+
+    const selected =
+      sessions.rows.find(
+        row =>
+          fluxSafeSessionId(
+            row.session_key
+          ) === safeId
+      );
+
+    if (!selected) {
+      return {
+        ok: false,
+        code: 'SESSION_NOT_FOUND',
+        message:
+          'That active session could not be found. Refresh the session list and try again.'
+      };
+    }
+
+    if (!args?.confirmed) {
+      await patchFluxSupportState(
+        from,
+        {
+          pendingConfirmation:
+            'revoke_session',
+          pendingPayload: {
+            sessionId: safeId
+          }
+        }
+      );
+
+      return {
+        ok: false,
+        confirmationRequired: true,
+        risk: 'medium',
+        session: {
+          sessionId: safeId,
+          device:
+            String(
+              selected.device_model ||
+              'Unknown device'
+            ),
+          platform:
+            String(
+              selected.platform_name ||
+              ''
+            ),
+          location:
+            String(
+              selected.location ||
+              ''
+            ),
+          lastActiveAt:
+            selected.last_active_at ||
+            null
+        },
+        message:
+          'Confirm that you want to sign this device out of Flux.'
+      };
+    }
+
+    const result =
+      await pool.query(
+        `
+          UPDATE account_login_sessions
+          SET ended_at = NOW()
+          WHERE user_id = $1
+            AND session_key = $2
+            AND ended_at IS NULL
+          RETURNING session_key
+        `,
+        [
+          Number(account.id),
+          selected.session_key
+        ]
+      );
+
+    if (!result.rowCount) {
+      return {
+        ok: false,
+        code: 'SESSION_ALREADY_ENDED'
+      };
+    }
+
+    await recordFluxSupportAction(
+      from,
+      Number(account.id),
+      'session_revoked',
+      {
+        sessionId: safeId,
+        device:
+          String(
+            selected.device_model ||
+            'Unknown device'
+          )
+      }
+    );
+
+    await patchFluxSupportState(
+      from,
+      {
+        lastRealAction:
+          'session_revoked',
+        pendingConfirmation: '',
+        pendingPayload: {},
+        issueType:
+          'security'
+      }
+    );
+
+    return {
+      ok: true,
+      revoked: true,
+      sessionId: safeId,
+      device:
+        String(
+          selected.device_model ||
+          'Unknown device'
+        )
     };
   }
 
@@ -7037,7 +7470,7 @@ Tool rules:
 - After start_account_verification succeeds, tell the customer which masked email received the code and ask them to send the 6-digit code here.
 - Never claim an email was sent unless the relevant Flux email tool reports success.
 - Whenever a verification code or password-reset link is sent by email, tell the customer to check Spam, Junk, or Promotions if it does not arrive within about a minute.
-- Human support takeover is temporary. AI is the default support mode outside an active human-support window.
+- Human support uses co-pilot mode: a human representative may reply, but Flux AI remains active and continues responding unless explicitly disabled by a future dedicated control.
 - If verification delivery fails, do not pretend the code was delivered.
 - The WhatsApp phone number is the only automatic identity-verification method currently available.
 - Never reveal password hashes, session keys, raw IP addresses, access tokens, authentication cookies, database fields, or internal secrets.
@@ -7055,6 +7488,10 @@ Tool rules:
 - Use submit_bug_report when the customer clearly wants a technical problem reported.
 - Use submit_feedback when the customer clearly wants feedback recorded.
 - Use escalate_to_human whenever the customer explicitly requests a real person or the issue requires human account review.
+- Human support is co-pilot support. Even while a human representative is attached to the conversation, continue answering the customer normally and continue using safe Flux tools.
+- Do not tell the customer that AI is paused during human support.
+- When a human reply and an AI reply may overlap, keep the AI response concise and do not repeat information already supplied by the human representative.
+- For suspicious-device reports, use list_active_sessions first, then revoke_session only after the customer confirms the exact safe session/device.
 
 Decision policy:
 - Act like an account-support agent, not an FAQ bot.
@@ -7417,7 +7854,7 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
 
       await sendWhatsAppSystemText(
         from,
-        "I've connected this conversation to Flux human support. The AI assistant is paused while a support representative handles your conversation."
+        "I've added Flux human support to this conversation. The AI assistant will continue helping you, and a support representative can also reply when needed."
       );
 
       return;
@@ -7442,23 +7879,23 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
         await addWhatsAppMemoryMessage(
           from,
           'assistant',
-          'Your conversation has returned to Flux AI Support.'
+          'Human support has left the conversation. Flux AI Support remains active.'
         );
 
         await sendWhatsAppSystemText(
           from,
-          'Your conversation has returned to Flux AI Support. How can I help?'
+          'Human support has left the conversation. Flux AI Support is still active. How can I help?'
         );
 
         return;
       }
 
-      await addWhatsAppMemoryMessage(
-        from,
-        'user',
-        text
-      );
-
+      /*
+       * Human support is now co-pilot mode:
+       * send the customer's message to the owner inbox,
+       * but DO NOT return here. The normal AI pipeline below
+       * continues and replies to the customer too.
+       */
       const contactName = String(
         change?.contacts?.[0]?.profile?.name || ''
       ).trim();
@@ -7471,10 +7908,9 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
       });
 
       console.log(
-        'AI reply skipped because conversation is escalated:',
+        'Flux human co-pilot active; AI will also reply:',
         from
       );
-      return;
     }
 
     const accessToken = String(process.env.WHATSAPP_ACCESS_TOKEN || '').trim();
