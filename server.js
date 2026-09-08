@@ -1322,6 +1322,438 @@ app.post('/api/admin/whatsapp/escalations/:userKey/reply', requireApiAuth, requi
 });
 
 
+
+app.get(
+  '/api/admin/whatsapp/escalations/:userKey/case',
+  requireApiAuth,
+  requireOwnerApi,
+  async (req, res) => {
+    try {
+      await ensureFluxSupportStateSchema();
+
+      const userKey =
+        String(req.params.userKey || '').trim();
+
+      if (!/^[a-f0-9]{64}$/.test(userKey)) {
+        return res.status(400).json({
+          error: 'Invalid conversation'
+        });
+      }
+
+      const stateResult =
+        await pool.query(
+          `
+            SELECT
+              flux_user_id,
+              case_id,
+              issue_type,
+              priority,
+              pending_confirmation,
+              pending_external_action,
+              last_real_action,
+              preferred_language,
+              updated_at
+            FROM flux_support_state
+            WHERE user_key = $1
+            LIMIT 1
+          `,
+          [userKey]
+        );
+
+      const state =
+        stateResult.rows[0] || null;
+
+      let supportCase = null;
+      let notes = [];
+
+      if (state?.case_id) {
+        const caseResult =
+          await pool.query(
+            `
+              SELECT
+                id,
+                flux_user_id,
+                case_type,
+                status,
+                priority,
+                waiting_for,
+                subject,
+                details,
+                resolution,
+                created_at,
+                updated_at,
+                closed_at
+              FROM flux_support_cases
+              WHERE id = $1
+              LIMIT 1
+            `,
+            [Number(state.case_id)]
+          );
+
+        supportCase =
+          caseResult.rows[0] || null;
+
+        const notesResult =
+          await pool.query(
+            `
+              SELECT
+                id,
+                note,
+                created_at
+              FROM flux_support_internal_notes
+              WHERE case_id = $1
+              ORDER BY created_at DESC, id DESC
+              LIMIT 50
+            `,
+            [Number(state.case_id)]
+          );
+
+        notes = notesResult.rows;
+      }
+
+      return res.json({
+        state,
+        case: supportCase,
+        notes
+      });
+
+    } catch (error) {
+      console.error(
+        'Flux owner case load failed:',
+        error.message
+      );
+
+      return res.status(500).json({
+        error:
+          'Could not load support case'
+      });
+    }
+  }
+);
+
+
+app.post(
+  '/api/admin/whatsapp/escalations/:userKey/case/update',
+  requireApiAuth,
+  requireOwnerApi,
+  async (req, res) => {
+    try {
+      await ensureFluxSupportStateSchema();
+
+      const userKey =
+        String(req.params.userKey || '').trim();
+
+      if (!/^[a-f0-9]{64}$/.test(userKey)) {
+        return res.status(400).json({
+          error: 'Invalid conversation'
+        });
+      }
+
+      const stateResult =
+        await pool.query(
+          `
+            SELECT
+              flux_user_id,
+              case_id
+            FROM flux_support_state
+            WHERE user_key = $1
+            LIMIT 1
+          `,
+          [userKey]
+        );
+
+      const state =
+        stateResult.rows[0];
+
+      if (!state?.case_id) {
+        return res.status(404).json({
+          error:
+            'This conversation does not have an active support case'
+        });
+      }
+
+      const status =
+        String(req.body?.status || '')
+          .trim()
+          .toLowerCase();
+
+      const priority =
+        String(req.body?.priority || '')
+          .trim()
+          .toLowerCase();
+
+      const validStatuses =
+        new Set([
+          '',
+          'open',
+          'waiting_for_user',
+          'waiting_for_support',
+          'resolved'
+        ]);
+
+      const validPriorities =
+        new Set([
+          '',
+          'normal',
+          'high',
+          'urgent'
+        ]);
+
+      if (!validStatuses.has(status)) {
+        return res.status(400).json({
+          error: 'Invalid case status'
+        });
+      }
+
+      if (!validPriorities.has(priority)) {
+        return res.status(400).json({
+          error: 'Invalid case priority'
+        });
+      }
+
+      const currentResult =
+        await pool.query(
+          `
+            SELECT *
+            FROM flux_support_cases
+            WHERE id = $1
+            LIMIT 1
+          `,
+          [Number(state.case_id)]
+        );
+
+      const current =
+        currentResult.rows[0];
+
+      if (!current) {
+        return res.status(404).json({
+          error: 'Support case not found'
+        });
+      }
+
+      const nextStatus =
+        status || current.status || 'open';
+
+      const nextPriority =
+        priority ||
+        current.priority ||
+        'normal';
+
+      let waitingFor = '';
+
+      if (
+        nextStatus ===
+        'waiting_for_user'
+      ) {
+        waitingFor = 'user';
+      }
+
+      if (
+        nextStatus ===
+        'waiting_for_support'
+      ) {
+        waitingFor = 'support';
+      }
+
+      const updateResult =
+        await pool.query(
+          `
+            UPDATE flux_support_cases
+            SET
+              status = $1,
+              priority = $2,
+              waiting_for = $3,
+              closed_at =
+                CASE
+                  WHEN $1 = 'resolved'
+                  THEN COALESCE(
+                    closed_at,
+                    NOW()
+                  )
+                  ELSE NULL
+                END,
+              updated_at = NOW()
+            WHERE id = $4
+            RETURNING *
+          `,
+          [
+            nextStatus,
+            nextPriority,
+            waitingFor,
+            Number(state.case_id)
+          ]
+        );
+
+      await pool.query(
+        `
+          UPDATE flux_support_state
+          SET
+            priority = $1,
+            updated_at = NOW()
+          WHERE user_key = $2
+        `,
+        [
+          nextPriority,
+          userKey
+        ]
+      );
+
+      await pool.query(
+        `
+          INSERT INTO flux_support_action_audit
+            (
+              user_key,
+              flux_user_id,
+              action,
+              details,
+              created_at
+            )
+          VALUES (
+            $1,
+            $2,
+            'owner_case_updated',
+            $3::jsonb,
+            NOW()
+          )
+        `,
+        [
+          userKey,
+          state.flux_user_id || null,
+          JSON.stringify({
+            caseId:
+              Number(state.case_id),
+            status:
+              nextStatus,
+            priority:
+              nextPriority
+          })
+        ]
+      );
+
+      return res.json({
+        ok: true,
+        case:
+          updateResult.rows[0]
+      });
+
+    } catch (error) {
+      console.error(
+        'Flux owner case update failed:',
+        error.message
+      );
+
+      return res.status(500).json({
+        error:
+          'Could not update support case'
+      });
+    }
+  }
+);
+
+
+app.post(
+  '/api/admin/whatsapp/escalations/:userKey/case/note',
+  requireApiAuth,
+  requireOwnerApi,
+  async (req, res) => {
+    try {
+      await ensureFluxSupportStateSchema();
+
+      const userKey =
+        String(req.params.userKey || '').trim();
+
+      const note =
+        String(req.body?.note || '').trim();
+
+      if (!/^[a-f0-9]{64}$/.test(userKey)) {
+        return res.status(400).json({
+          error: 'Invalid conversation'
+        });
+      }
+
+      if (
+        !note ||
+        note.length > 4000
+      ) {
+        return res.status(400).json({
+          error:
+            'Note must contain 1-4000 characters'
+        });
+      }
+
+      const stateResult =
+        await pool.query(
+          `
+            SELECT case_id
+            FROM flux_support_state
+            WHERE user_key = $1
+            LIMIT 1
+          `,
+          [userKey]
+        );
+
+      const caseId =
+        Number(
+          stateResult.rows[0]?.case_id || 0
+        );
+
+      if (!caseId) {
+        return res.status(404).json({
+          error:
+            'This conversation does not have a support case'
+        });
+      }
+
+      const result =
+        await pool.query(
+          `
+            INSERT INTO flux_support_internal_notes
+              (
+                user_key,
+                case_id,
+                note,
+                created_at
+              )
+            VALUES (
+              $1,
+              $2,
+              $3,
+              NOW()
+            )
+            RETURNING
+              id,
+              case_id,
+              note,
+              created_at
+          `,
+          [
+            userKey,
+            caseId,
+            note
+          ]
+        );
+
+      return res.json({
+        ok: true,
+        note:
+          result.rows[0]
+      });
+
+    } catch (error) {
+      console.error(
+        'Flux owner case note failed:',
+        error.message
+      );
+
+      return res.status(500).json({
+        error:
+          'Could not save internal note'
+      });
+    }
+  }
+);
+
+
 app.post(
   '/api/admin/whatsapp/escalations/:userKey/takeover',
   requireApiAuth,
