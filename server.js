@@ -365,6 +365,17 @@ async function ensureWhatsAppEscalationSchema() {
         ADD COLUMN IF NOT EXISTS human_wait_ack_at TIMESTAMPTZ
       `);
 
+      await pool.query(`
+        ALTER TABLE whatsapp_human_escalations
+        ADD COLUMN IF NOT EXISTS escalation_summary TEXT
+      `);
+
+      await pool.query(`
+        ALTER TABLE whatsapp_human_escalations
+        ADD COLUMN IF NOT EXISTS escalation_reason VARCHAR(160)
+      `);
+
+
       whatsappEscalationSchemaReady = true;
     })();
   }
@@ -1006,6 +1017,8 @@ app.get('/api/admin/whatsapp/escalations', requireApiAuth, requireOwnerApi, asyn
         updated_at,
         human_expires_at,
         human_last_reply_at,
+        escalation_reason,
+        escalation_summary,
         CASE
           WHEN active = TRUE
             AND (
@@ -1142,6 +1155,8 @@ app.get('/api/admin/whatsapp/escalations/:userKey/messages', requireApiAuth, req
           updated_at,
           human_expires_at,
           human_last_reply_at,
+          escalation_reason,
+          escalation_summary,
           CASE
             WHEN active = TRUE
               AND (
@@ -3101,6 +3116,551 @@ async function getFluxSupportConversationSummary(from) {
   };
 }
 
+
+async function syncFluxSupportStateFromAction(
+  from,
+  userId,
+  action,
+  details = {}
+) {
+  try {
+    if (!from || !action) return;
+
+    const patch = {
+      lastRealAction:
+        String(action || '')
+    };
+
+    const actionName =
+      String(action || '');
+
+    if (userId) {
+      patch.fluxUserId =
+        Number(userId);
+    }
+
+    if (
+      actionName ===
+      'verification_started'
+    ) {
+      patch.pendingExternalAction =
+        'account_verification';
+    }
+
+    if (
+      actionName ===
+      'account_verified'
+    ) {
+      patch.pendingExternalAction = '';
+      patch.pendingConfirmation = '';
+    }
+
+    if (
+      actionName ===
+        'password_reset_link_sent' ||
+      actionName ===
+        'password_reset_link_resent'
+    ) {
+      patch.issueType =
+        'password_recovery';
+
+      patch.pendingExternalAction =
+        'password_reset';
+    }
+
+    if (
+      actionName ===
+        'session_revoked' ||
+      actionName ===
+        'sessions_revoked' ||
+      actionName ===
+        'revoke_all_sessions'
+    ) {
+      patch.issueType =
+        'security';
+    }
+
+    if (
+      actionName ===
+        'login_alerts_changed'
+    ) {
+      patch.issueType =
+        'security';
+    }
+
+    if (
+      actionName ===
+        'username_changed' ||
+      actionName ===
+        'display_name_changed' ||
+      actionName ===
+        'bio_changed' ||
+      actionName ===
+        'privacy_changed'
+    ) {
+      patch.issueType =
+        'account_settings';
+    }
+
+    if (
+      actionName.includes(
+        'suspension'
+      ) ||
+      actionName.includes(
+        'appeal'
+      )
+    ) {
+      patch.issueType =
+        'suspended_account';
+    }
+
+    if (
+      actionName.includes(
+        'security_recovery'
+      )
+    ) {
+      patch.issueType =
+        'security_compromise';
+
+      patch.priority =
+        'urgent';
+    }
+
+    const detailCaseId =
+      Number(
+        details?.caseId ||
+        details?.case_id ||
+        0
+      );
+
+    if (detailCaseId > 0) {
+      patch.caseId =
+        detailCaseId;
+    }
+
+    if (
+      actionName ===
+      'support_case_closed'
+    ) {
+      patch.pendingConfirmation = '';
+    }
+
+    await patchFluxSupportState(
+      from,
+      patch
+    );
+
+    /*
+     * Keep the associated case synchronized with real
+     * account actions.
+     */
+    const state =
+      await getFluxSupportState(from);
+
+    const caseId =
+      Number(
+        detailCaseId ||
+        state?.case_id ||
+        0
+      );
+
+    if (!caseId) return;
+
+    let nextStatus = '';
+    let waitingFor = '';
+
+    if (
+      actionName ===
+        'password_reset_link_sent' ||
+      actionName ===
+        'password_reset_link_resent'
+    ) {
+      nextStatus =
+        'waiting_for_user';
+
+      waitingFor =
+        'user';
+    }
+
+    if (
+      actionName ===
+        'suspension_appeal_submitted'
+    ) {
+      nextStatus =
+        'waiting_for_support';
+
+      waitingFor =
+        'support';
+    }
+
+    if (
+      actionName ===
+        'support_case_closed'
+    ) {
+      nextStatus =
+        'resolved';
+
+      waitingFor = '';
+    }
+
+    if (
+      nextStatus
+    ) {
+      await pool.query(
+        `
+          UPDATE flux_support_cases
+          SET
+            status = $1,
+            waiting_for = $2,
+            closed_at =
+              CASE
+                WHEN $1 = 'resolved'
+                THEN COALESCE(
+                  closed_at,
+                  NOW()
+                )
+                ELSE closed_at
+              END,
+            updated_at = NOW()
+          WHERE id = $3
+        `,
+        [
+          nextStatus,
+          waitingFor,
+          caseId
+        ]
+      );
+    }
+
+  } catch (error) {
+    console.error(
+      'Flux support state synchronization failed:',
+      error.message
+    );
+  }
+}
+
+
+async function buildFluxEscalationSummary(
+  from,
+  reason = ''
+) {
+  try {
+    const [
+      history,
+      state,
+      verification
+    ] = await Promise.all([
+      getWhatsAppConversationHistory(
+        from
+      ),
+      getFluxSupportState(
+        from
+      ),
+      getFluxVerificationSummary(
+        from
+      )
+    ]);
+
+    let actions = [];
+
+    try {
+      await ensureFluxSupportActionSchema();
+
+      const actionResult =
+        await pool.query(
+          `
+            SELECT
+              action,
+              created_at
+            FROM flux_support_action_audit
+            WHERE user_key = $1
+            ORDER BY created_at DESC, id DESC
+            LIMIT 8
+          `,
+          [
+            whatsappMemoryUserKey(
+              from
+            )
+          ]
+        );
+
+      actions =
+        actionResult.rows || [];
+
+    } catch {
+      actions = [];
+    }
+
+    const recentMessages =
+      (history || [])
+        .slice(-8)
+        .map(
+          item =>
+            `${item.role === 'assistant' ? 'Flux' : 'Customer'}: ${String(item.content || '').slice(0, 240)}`
+        )
+        .join('\n');
+
+    const recentActions =
+      actions
+        .map(
+          item =>
+            `- ${String(item.action || '').replace(/_/g, ' ')}`
+        )
+        .join('\n');
+
+    const lines = [
+      reason
+        ? `Escalation reason: ${reason}`
+        : '',
+      `Verification: ${
+        verification?.verified
+          ? `verified (${verification.remainingMinutes} min remaining)`
+          : 'not currently verified'
+      }`,
+      state?.issue_type
+        ? `Issue: ${state.issue_type}`
+        : '',
+      state?.case_id
+        ? `Case: #${state.case_id}`
+        : '',
+      state?.priority
+        ? `Priority: ${state.priority}`
+        : '',
+      state?.pending_confirmation
+        ? `Pending confirmation: ${state.pending_confirmation}`
+        : '',
+      state?.pending_external_action
+        ? `Waiting for customer action: ${state.pending_external_action}`
+        : '',
+      state?.last_real_action
+        ? `Last real action: ${state.last_real_action}`
+        : '',
+      recentActions
+        ? `Recent actions:\n${recentActions}`
+        : '',
+      recentMessages
+        ? `Recent conversation:\n${recentMessages}`
+        : ''
+    ].filter(Boolean);
+
+    return lines
+      .join('\n\n')
+      .slice(0, 7000);
+
+  } catch (error) {
+    console.error(
+      'Flux escalation summary failed:',
+      error.message
+    );
+
+    return reason
+      ? `Escalation reason: ${reason}`
+      : 'Human support requested.';
+  }
+}
+
+
+async function saveFluxEscalationSummary(
+  from,
+  reason = ''
+) {
+  try {
+    await ensureWhatsAppEscalationSchema();
+
+    const summary =
+      await buildFluxEscalationSummary(
+        from,
+        reason
+      );
+
+    await pool.query(
+      `
+        UPDATE whatsapp_human_escalations
+        SET
+          escalation_summary = $1,
+          escalation_reason = $2,
+          updated_at = NOW()
+        WHERE user_key = $3
+      `,
+      [
+        summary,
+        String(reason || '')
+          .slice(0, 160),
+        whatsappMemoryUserKey(
+          from
+        )
+      ]
+    );
+
+    return summary;
+
+  } catch (error) {
+    console.error(
+      'Flux escalation summary save failed:',
+      error.message
+    );
+
+    return '';
+  }
+}
+
+
+async function startFluxSecurityRecovery(
+  from
+) {
+  await ensureFluxSupportActionSchema();
+  await ensureFluxSupportStateSchema();
+
+  const account =
+    await getVerifiedFluxSupportAccount(
+      from
+    );
+
+  const userId =
+    account
+      ? Number(account.id)
+      : null;
+
+  let supportCase =
+    await findOpenFluxSupportCase(
+      from,
+      userId,
+      'security_compromise'
+    );
+
+  if (!supportCase) {
+    const result =
+      await pool.query(
+        `
+          INSERT INTO flux_support_cases
+            (
+              user_key,
+              flux_user_id,
+              case_type,
+              status,
+              subject,
+              details,
+              priority,
+              waiting_for,
+              created_at,
+              updated_at
+            )
+          VALUES (
+            $1,
+            $2,
+            'security_compromise',
+            'open',
+            'Possible account compromise',
+            $3::jsonb,
+            'urgent',
+            '',
+            NOW(),
+            NOW()
+          )
+          RETURNING *
+        `,
+        [
+          whatsappMemoryUserKey(
+            from
+          ),
+          userId,
+          JSON.stringify({
+            source:
+              'whatsapp_ai_support'
+          })
+        ]
+      );
+
+    supportCase =
+      result.rows[0];
+  }
+
+  await patchFluxSupportState(
+    from,
+    {
+      fluxUserId:
+        userId,
+      issueType:
+        'security_compromise',
+      caseId:
+        Number(
+          supportCase.id
+        ),
+      priority:
+        'urgent'
+    }
+  );
+
+  await recordFluxSupportAction(
+    from,
+    userId,
+    'security_recovery_started',
+    {
+      caseId:
+        Number(
+          supportCase.id
+        )
+    }
+  );
+
+  return {
+    ok: true,
+    caseId:
+      Number(
+        supportCase.id
+      ),
+    priority:
+      'urgent',
+    verified:
+      Boolean(account),
+    nextSteps: account
+      ? [
+          'Review active login sessions',
+          'Sign out suspicious sessions',
+          'Confirm login alerts are enabled',
+          'Offer a secure password reset'
+        ]
+      : [
+          'Verify account ownership',
+          'Review active login sessions',
+          'Sign out suspicious sessions',
+          'Confirm login alerts are enabled',
+          'Offer a secure password reset'
+        ]
+  };
+}
+
+
+
+const fluxOriginalRecordSupportAction =
+  recordFluxSupportAction;
+
+recordFluxSupportAction =
+  async function(
+    from,
+    userId,
+    action,
+    details = {}
+  ) {
+    const result =
+      await fluxOriginalRecordSupportAction(
+        from,
+        userId,
+        action,
+        details
+      );
+
+    await syncFluxSupportStateFromAction(
+      from,
+      userId,
+      action,
+      details
+    );
+
+    return result;
+  };
+
 const FLUX_AI_SUPPORT_TOOLS = [
   {
     type: 'function',
@@ -3401,6 +3961,19 @@ const FLUX_AI_SUPPORT_TOOLS = [
         'caseId',
         'confirmed'
       ],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'start_security_recovery',
+    description:
+      'Start the structured Flux compromised-account recovery workflow when the customer says their account may be hacked, stolen, compromised, or accessed by someone else. Creates or reuses an urgent security case and returns the correct next security actions.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {},
       additionalProperties: false
     }
   },
@@ -4845,6 +5418,15 @@ async function executeFluxAiSupportTool(
       closed: true,
       caseId
     };
+  }
+
+  if (
+    name ===
+    'start_security_recovery'
+  ) {
+    return await startFluxSecurityRecovery(
+      from
+    );
   }
 
   if (name === 'get_support_state') {
@@ -6441,7 +7023,11 @@ Agent operating policy:
 - After a successful action, state exactly what changed.
 - If an action fails, give the recoverable next step and do not pretend it succeeded.
 - Avoid duplicate cases. Check for an existing appropriate open case before creating another.
-- For compromised-account reports, treat the issue as high priority: verify ownership, inspect sessions, revoke suspicious access, enable login alerts when requested, and offer password reset.
+- For compromised-account reports, immediately use start_security_recovery. Treat the case as urgent.
+- For a suspected hacked/stolen account, follow this sequence: establish or reuse verification -> inspect security summary -> list active sessions -> identify suspicious sessions with the customer -> revoke only confirmed suspicious sessions -> confirm login alerts -> offer a password-reset link.
+- Do not force the customer to repeat their account identifier if it was already provided or verification is still valid.
+- Never sign out a specific device merely because it looks unfamiliar; show the safe device information and obtain confirmation first.
+- After the security workflow, summarize exactly which security actions were completed and which are still pending.
 - For missing verification/reset emails, use resend actions and remind the customer to check Spam, Junk or Promotions.
 - For support cases, distinguish status, priority and who the case is waiting for.
 - Never remove administrative suspensions automatically.
