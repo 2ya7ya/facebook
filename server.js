@@ -838,29 +838,19 @@ async function sendWhatsAppSupportMenu(to) {
                   rows: [
                     {
                       id: 'support_password',
-                      title: 'Account access',
-                      description: 'Password, login and recovery'
-                    },
+                      title: 'Account access',},
                     {
                       id: 'support_suspended',
-                      title: 'Suspended account',
-                      description: 'Status and appeals'
-                    },
+                      title: 'Suspended account',},
                     {
                       id: 'support_security',
-                      title: 'Security & sessions',
-                      description: 'Devices and suspicious access'
-                    },
+                      title: 'Security & sessions',},
                     {
                       id: 'support_account',
-                      title: 'Account settings',
-                      description: 'Username, privacy and account info'
-                    },
+                      title: 'Account settings',},
                     {
                       id: 'support_cases',
-                      title: 'My support cases',
-                      description: 'Check cases and appeals'
-                    }
+                      title: 'My support cases',}
                   ]
                 },
                 {
@@ -868,29 +858,19 @@ async function sendWhatsAppSupportMenu(to) {
                   rows: [
                     {
                       id: 'support_messaging',
-                      title: 'Messages',
-                      description: 'Chats and messaging problems'
-                    },
+                      title: 'Messages',},
                     {
                       id: 'support_content',
-                      title: 'Reels & content',
-                      description: 'Uploads, playback and publishing'
-                    },
+                      title: 'Reels & content',},
                     {
                       id: 'support_bug',
-                      title: 'Technical problems',
-                      description: 'Bugs, crashes and unexpected behavior'
-                    },
+                      title: 'Technical problems',},
                     {
                       id: 'support_feedback',
-                      title: 'Feedback',
-                      description: 'Suggestions and product feedback'
-                    },
+                      title: 'Feedback',},
                     {
                       id: 'support_human',
-                      title: 'Talk to a person',
-                      description: 'Transfer to human support'
-                    }
+                      title: 'Talk to a person',}
                   ]
                 }
               ]
@@ -8554,11 +8534,26 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
       ) {
         text = 'Talk to a person';
       } else {
-        await sendWhatsAppSystemText(
-          from,
+        const category =
           FLUX_SUPPORT_CATEGORIES[
             selectedSupportCategory
-          ].opener
+          ];
+
+        await addWhatsAppMemoryMessage(
+          from,
+          'user',
+          `Selected support topic: ${category.label}`
+        );
+
+        await addWhatsAppMemoryMessage(
+          from,
+          'assistant',
+          category.opener
+        );
+
+        await sendWhatsAppSystemText(
+          from,
+          category.opener
         );
 
         return;
@@ -8722,7 +8717,7 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
       ]?.label || 'General support';
 
     let replyText =
-      fluxSupportWelcomeMessage(text);
+      'I’m here. Tell me a little more about what happened and I’ll help you with the next step.';
 
     if (openAiKey) {
       try {
@@ -8766,12 +8761,42 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
             'assistant',
             generated
           );
+        } else {
+          replyText =
+            'I’m here. Tell me a little more about what happened and I’ll help you with the next step.';
+
+          await addWhatsAppMemoryMessage(
+            from,
+            'user',
+            text
+          );
+
+          await addWhatsAppMemoryMessage(
+            from,
+            'assistant',
+            replyText
+          );
         }
 
       } catch (aiError) {
         console.error(
           'Flux AI support request failed:',
           aiError.message
+        );
+
+        replyText =
+          'I’m here. I couldn’t complete that automatically just now, but I can still help. Tell me what happened and I’ll guide you through the next step.';
+
+        await addWhatsAppMemoryMessage(
+          from,
+          'user',
+          text
+        );
+
+        await addWhatsAppMemoryMessage(
+          from,
+          'assistant',
+          replyText
         );
       }
 
