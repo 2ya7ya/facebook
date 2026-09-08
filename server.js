@@ -528,45 +528,57 @@ async function sendWhatsAppSystemText(to, body) {
 
 const FLUX_SUPPORT_CATEGORIES = {
   support_password: {
-    label: 'Password & login',
+    label: 'Account access',
     opener:
-      'You selected Password & login. Tell me what happens when you try to sign in, and I’ll guide you through the safest recovery steps.'
+      'I can help with sign-in, password recovery, and account-access problems. Tell me what happens when you try to sign in.'
   },
 
   support_suspended: {
     label: 'Suspended account',
     opener:
-      'You selected Suspended account. Tell me what suspension message you see and whether a duration or reason is shown.'
+      'I can check suspension status and help with an appeal. Tell me what message you see when you try to access the account.'
   },
 
   support_security: {
-    label: 'Privacy & security',
+    label: 'Security & sessions',
     opener:
-      'You selected Privacy & security. Tell me what you are concerned about, such as an unfamiliar login, account access, privacy, or suspicious activity.'
+      'I can help review active devices, suspicious access, and sign-in security. Tell me what you noticed.'
+  },
+
+  support_account: {
+    label: 'Account settings',
+    opener:
+      'I can help with your username, privacy settings, registered account information, and other account controls.'
   },
 
   support_messaging: {
-    label: 'Messages & Messenger',
+    label: 'Messages',
     opener:
-      'You selected Messages & Messenger. Describe what is happening with your conversations, sending, receiving, notifications, or media.'
+      'Tell me what is happening with messages, conversations, notifications, sending, receiving, or media.'
   },
 
   support_content: {
     label: 'Reels & content',
     opener:
-      'You selected Reels & content. Tell me whether the issue involves uploading, playback, comments, publishing, or another content feature.'
+      'Tell me whether the problem involves uploading, playback, publishing, comments, or another content feature.'
   },
 
   support_bug: {
-    label: 'Technical issue',
+    label: 'Technical problems',
     opener:
-      'You selected Technical issue. Describe what you expected to happen, what actually happened, and which device or app screen you were using.'
+      'Tell me what you expected to happen, what actually happened, and which Flux screen or feature you were using.'
   },
 
   support_feedback: {
     label: 'Feedback',
     opener:
-      'You selected Feedback. I’d be glad to hear your suggestion or experience. Please tell me what you would like Flux to improve.'
+      'Tell me what you would like Flux to improve. I can record your feedback for the team.'
+  },
+
+  support_cases: {
+    label: 'My support cases',
+    opener:
+      'I can check your existing Flux support cases, appeals, and their current status.'
   },
 
   support_human: {
@@ -707,12 +719,12 @@ async function sendWhatsAppSupportMenu(to) {
 
             body: {
               text:
-                'Welcome to Flux Support. Choose the topic that best describes what you need, or simply type your question.'
+                'Welcome to Flux Support 👋\n\nI can help resolve account, security, login and technical issues — and perform supported actions on your Flux account after ownership verification.\n\nChoose a topic below, or simply describe what you need in your own words.'
             },
 
             footer: {
               text:
-                'You can ask for a real person at any time.'
+                'Your security matters. Never send your password or verification codes to anyone.'
             },
 
             action: {
@@ -720,69 +732,62 @@ async function sendWhatsAppSupportMenu(to) {
 
               sections: [
                 {
-                  title: 'Account & privacy',
-
+                  title: 'Account & security',
                   rows: [
                     {
                       id: 'support_password',
-                      title: 'Password & login',
-                      description:
-                        'Sign-in and account recovery'
+                      title: 'Account access',
+                      description: 'Password, login and recovery'
                     },
-
                     {
                       id: 'support_suspended',
                       title: 'Suspended account',
-                      description:
-                        'Suspensions and disabled access'
+                      description: 'Status and appeals'
                     },
-
                     {
                       id: 'support_security',
-                      title: 'Privacy & security',
-                      description:
-                        'Security and privacy concerns'
+                      title: 'Security & sessions',
+                      description: 'Devices and suspicious access'
+                    },
+                    {
+                      id: 'support_account',
+                      title: 'Account settings',
+                      description: 'Username, privacy and account info'
+                    },
+                    {
+                      id: 'support_cases',
+                      title: 'My support cases',
+                      description: 'Check cases and appeals'
                     }
                   ]
                 },
-
                 {
-                  title: 'Using Flux',
-
+                  title: 'Help using Flux',
                   rows: [
                     {
                       id: 'support_messaging',
                       title: 'Messages',
-                      description:
-                        'Chats and messaging problems'
+                      description: 'Chats and messaging problems'
                     },
-
                     {
                       id: 'support_content',
                       title: 'Reels & content',
-                      description:
-                        'Uploading and content issues'
+                      description: 'Uploads, playback and publishing'
                     },
-
                     {
                       id: 'support_bug',
-                      title: 'Technical issue',
-                      description:
-                        'Bugs, crashes and unexpected behavior'
+                      title: 'Technical problems',
+                      description: 'Bugs, crashes and unexpected behavior'
                     },
-
                     {
                       id: 'support_feedback',
                       title: 'Feedback',
-                      description:
-                        'Suggestions and product feedback'
+                      description: 'Suggestions and product feedback'
                     },
-
                     {
                       id: 'support_human',
                       title: 'Talk to a person',
-                      description:
-                        'Continue with human support'
+                      description: 'Transfer to human support'
                     }
                   ]
                 }
@@ -2087,6 +2092,46 @@ async function getFluxSupportResolvedAccount(from) {
   return await findFluxAccountForWhatsApp(from);
 }
 
+
+function fluxSafeSessionId(sessionKey) {
+  return crypto
+    .createHash('sha256')
+    .update(String(sessionKey || ''))
+    .digest('hex')
+    .slice(0, 12);
+}
+
+async function getFluxSupportMode(from) {
+  return {
+    mode:
+      (await isWhatsAppHumanEscalated(from))
+        ? 'human'
+        : 'ai'
+  };
+}
+
+function wantsReturnToFluxAi(text) {
+  const value =
+    String(text || '')
+      .trim()
+      .toLowerCase();
+
+  const phrases = [
+    'return to ai',
+    'back to ai',
+    'switch to ai',
+    'ai support',
+    'let ai handle it',
+    'ارجع للذكاء الاصطناعي',
+    'رجعني للذكاء الاصطناعي',
+    'العودة للذكاء الاصطناعي'
+  ];
+
+  return phrases.some(
+    phrase => value.includes(phrase)
+  );
+}
+
 const FLUX_AI_SUPPORT_TOOLS = [
   {
     type: 'function',
@@ -2140,6 +2185,130 @@ const FLUX_AI_SUPPORT_TOOLS = [
         }
       },
       required: ['code'],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'resend_verification_code',
+    description:
+      'Send a new ownership verification code to the registered email after a verification was already started. Enforces a resend cooldown.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'get_support_cases',
+    description:
+      'List the customer recent Flux support cases and their status.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'get_account_settings',
+    description:
+      'Read safe account settings for the verified Flux account, including username, privacy setting, login-alert setting and masked contact information.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'update_username',
+    description:
+      'Change the verified Flux account username. Only execute after the customer explicitly requests the new username and confirms the change.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        username: {
+          type: 'string'
+        },
+        confirmed: {
+          type: 'boolean'
+        }
+      },
+      required: [
+        'username',
+        'confirmed'
+      ],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'update_account_privacy',
+    description:
+      'Turn the verified Flux account private or public. Only execute after explicit customer confirmation.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        private: {
+          type: 'boolean'
+        },
+        confirmed: {
+          type: 'boolean'
+        }
+      },
+      required: [
+        'private',
+        'confirmed'
+      ],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'revoke_specific_session',
+    description:
+      'Sign one verified Flux account device/session out using the safe session ID returned by list_active_sessions. Requires explicit confirmation.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        sessionId: {
+          type: 'string'
+        },
+        confirmed: {
+          type: 'boolean'
+        }
+      },
+      required: [
+        'sessionId',
+        'confirmed'
+      ],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'get_support_mode',
+    description:
+      'Check whether the current WhatsApp support conversation is being handled by Flux AI or human support.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {},
       additionalProperties: false
     }
   },
@@ -2337,6 +2506,499 @@ async function executeFluxAiSupportTool(
 
   const verifiedUserId =
     account ? Number(account.id) : null;
+
+  if (name === 'get_support_mode') {
+    return {
+      ok: true,
+      ...(await getFluxSupportMode(from))
+    };
+  }
+
+  if (name === 'resend_verification_code') {
+    await ensureFluxSupportVerificationSchema();
+
+    const key =
+      whatsappMemoryUserKey(from);
+
+    const verificationResult =
+      await pool.query(
+        `
+          SELECT
+            v.flux_user_id,
+            v.identifier,
+            v.created_at,
+            u.email,
+            u.full_name
+          FROM flux_support_verifications v
+          JOIN users u
+            ON u.id = v.flux_user_id
+          WHERE v.user_key = $1
+          LIMIT 1
+        `,
+        [key]
+      );
+
+    const row =
+      verificationResult.rows[0];
+
+    if (!row) {
+      return {
+        ok: false,
+        code: 'NO_VERIFICATION_STARTED',
+        message:
+          'No account verification is currently active.'
+      };
+    }
+
+    const created =
+      row.created_at
+        ? new Date(row.created_at).getTime()
+        : 0;
+
+    const secondsSince =
+      Math.floor(
+        (Date.now() - created) / 1000
+      );
+
+    if (secondsSince < 60) {
+      return {
+        ok: false,
+        code: 'RESEND_COOLDOWN',
+        retryAfterSeconds:
+          60 - secondsSince,
+        message:
+          `Please wait ${60 - secondsSince} seconds before requesting another code.`
+      };
+    }
+
+    const accountResult =
+      await pool.query(
+        `
+          SELECT *
+          FROM users
+          WHERE id = $1
+          LIMIT 1
+        `,
+        [Number(row.flux_user_id)]
+      );
+
+    const account =
+      accountResult.rows[0];
+
+    if (!account?.email) {
+      return {
+        ok: false,
+        code: 'NO_REGISTERED_EMAIL',
+        message:
+          'This account does not have a registered email address.'
+      };
+    }
+
+    const code =
+      await beginFluxSupportVerification(
+        from,
+        account,
+        row.identifier || account.email
+      );
+
+    try {
+      await sendFluxVerificationEmail({
+        email: account.email,
+        code,
+        displayName:
+          String(account.full_name || '')
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_DELIVERY_FAILED',
+        message:
+          'The new verification email could not be delivered.'
+      };
+    }
+
+    await recordFluxSupportAction(
+      from,
+      Number(account.id),
+      'verification_code_resent',
+      {}
+    );
+
+    return {
+      ok: true,
+      resent: true,
+      maskedEmail:
+        maskFluxEmail(account.email),
+      expiresInMinutes: 10,
+      message:
+        `A new verification code was sent to ${maskFluxEmail(account.email)}.`
+    };
+  }
+
+  if (name === 'get_support_cases') {
+    await ensureFluxSupportActionSchema();
+
+    const verified =
+      await getVerifiedFluxSupportAccount(from);
+
+    const values = [
+      whatsappMemoryUserKey(from)
+    ];
+
+    let where =
+      'user_key = $1';
+
+    if (verified) {
+      values.push(Number(verified.id));
+      where =
+        '(user_key = $1 OR flux_user_id = $2)';
+    }
+
+    const result =
+      await pool.query(
+        `
+          SELECT
+            id,
+            case_type,
+            status,
+            subject,
+            created_at,
+            updated_at
+          FROM flux_support_cases
+          WHERE ${where}
+          ORDER BY created_at DESC
+          LIMIT 10
+        `,
+        values
+      );
+
+    return {
+      ok: true,
+      cases: result.rows.map(row => ({
+        caseId: Number(row.id),
+        type: row.case_type,
+        status: row.status,
+        subject: row.subject,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
+      }))
+    };
+  }
+
+  if (name === 'get_account_settings') {
+    const verified =
+      await getVerifiedFluxSupportAccount(from);
+
+    if (!verified) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_REQUIRED',
+        message:
+          'Account ownership must be verified before account settings can be viewed.'
+      };
+    }
+
+    const result =
+      await pool.query(
+        `
+          SELECT
+            id,
+            full_name,
+            email,
+            phone,
+            username,
+            account_private,
+            login_alerts,
+            created_at
+          FROM users
+          WHERE id = $1
+          LIMIT 1
+        `,
+        [Number(verified.id)]
+      );
+
+    const user =
+      result.rows[0];
+
+    return {
+      ok: true,
+      settings: {
+        displayName:
+          String(user?.full_name || ''),
+        username:
+          String(user?.username || ''),
+        email:
+          maskFluxEmail(user?.email),
+        phone:
+          maskFluxPhone(user?.phone),
+        privateAccount:
+          Boolean(user?.account_private),
+        loginAlerts:
+          user?.login_alerts !== false,
+        joinedAt:
+          user?.created_at || null
+      }
+    };
+  }
+
+  if (name === 'update_username') {
+    const verified =
+      await getVerifiedFluxSupportAccount(from);
+
+    if (!verified) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_REQUIRED',
+        message:
+          'Account ownership must be verified before the username can be changed.'
+      };
+    }
+
+    const username =
+      String(args?.username || '')
+        .trim()
+        .toLowerCase();
+
+    if (!args?.confirmed) {
+      return {
+        ok: false,
+        confirmationRequired: true,
+        message:
+          `Changing the username to @${username} requires explicit confirmation.`
+      };
+    }
+
+    if (!/^[a-z0-9._]{3,30}$/.test(username)) {
+      return {
+        ok: false,
+        code: 'INVALID_USERNAME',
+        message:
+          'Usernames must be 3–30 characters and may contain letters, numbers, periods and underscores.'
+      };
+    }
+
+    const taken =
+      await pool.query(
+        `
+          SELECT id
+          FROM users
+          WHERE LOWER(username) = $1
+            AND id <> $2
+          LIMIT 1
+        `,
+        [
+          username,
+          Number(verified.id)
+        ]
+      );
+
+    if (taken.rowCount) {
+      return {
+        ok: false,
+        code: 'USERNAME_TAKEN',
+        message:
+          'That username is already in use.'
+      };
+    }
+
+    await pool.query(
+      `
+        UPDATE users
+        SET username = $1
+        WHERE id = $2
+      `,
+      [
+        username,
+        Number(verified.id)
+      ]
+    );
+
+    await recordFluxSupportAction(
+      from,
+      Number(verified.id),
+      'username_changed',
+      { username }
+    );
+
+    return {
+      ok: true,
+      changed: true,
+      username
+    };
+  }
+
+  if (name === 'update_account_privacy') {
+    const verified =
+      await getVerifiedFluxSupportAccount(from);
+
+    if (!verified) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_REQUIRED',
+        message:
+          'Account ownership must be verified before privacy settings can be changed.'
+      };
+    }
+
+    const makePrivate =
+      Boolean(args?.private);
+
+    if (!args?.confirmed) {
+      return {
+        ok: false,
+        confirmationRequired: true,
+        message:
+          `Confirm that you want to make the account ${makePrivate ? 'private' : 'public'}.`
+      };
+    }
+
+    await pool.query(
+      `
+        UPDATE users
+        SET account_private = $1
+        WHERE id = $2
+      `,
+      [
+        makePrivate,
+        Number(verified.id)
+      ]
+    );
+
+    await recordFluxSupportAction(
+      from,
+      Number(verified.id),
+      'privacy_changed',
+      {
+        private:
+          makePrivate
+      }
+    );
+
+    return {
+      ok: true,
+      changed: true,
+      privateAccount:
+        makePrivate
+    };
+  }
+
+  if (name === 'revoke_specific_session') {
+    const verified =
+      await getVerifiedFluxSupportAccount(from);
+
+    if (!verified) {
+      return {
+        ok: false,
+        code: 'VERIFICATION_REQUIRED',
+        message:
+          'Account ownership must be verified before a device can be signed out.'
+      };
+    }
+
+    const requestedId =
+      String(
+        args?.sessionId || ''
+      ).trim();
+
+    const sessions =
+      await pool.query(
+        `
+          SELECT
+            session_key,
+            device_model,
+            platform_name,
+            location,
+            last_active_at
+          FROM account_login_sessions
+          WHERE user_id = $1
+            AND ended_at IS NULL
+        `,
+        [Number(verified.id)]
+      );
+
+    const match =
+      sessions.rows.find(
+        row =>
+          fluxSafeSessionId(
+            row.session_key
+          ) === requestedId
+      );
+
+    if (!match) {
+      return {
+        ok: false,
+        code: 'SESSION_NOT_FOUND',
+        message:
+          'That active session could not be found.'
+      };
+    }
+
+    if (!args?.confirmed) {
+      return {
+        ok: false,
+        confirmationRequired: true,
+        session: {
+          sessionId:
+            requestedId,
+          device:
+            match.device_model ||
+            'Unknown device',
+          platform:
+            match.platform_name || '',
+          location:
+            match.location || ''
+        },
+        message:
+          'Explicit confirmation is required before signing this device out.'
+      };
+    }
+
+    await pool.query(
+      `
+        INSERT INTO revoked_account_sessions
+          (user_id, session_key)
+        VALUES ($1, $2)
+        ON CONFLICT (user_id, session_key)
+        DO UPDATE SET revoked_at = NOW()
+      `,
+      [
+        Number(verified.id),
+        match.session_key
+      ]
+    );
+
+    await pool.query(
+      `
+        UPDATE account_login_sessions
+        SET
+          ended_at = NOW(),
+          last_active_at = NOW()
+        WHERE user_id = $1
+          AND session_key = $2
+      `,
+      [
+        Number(verified.id),
+        match.session_key
+      ]
+    );
+
+    await recordFluxSupportAction(
+      from,
+      Number(verified.id),
+      'session_revoked',
+      {
+        sessionId:
+          requestedId
+      }
+    );
+
+    return {
+      ok: true,
+      signedOut: true,
+      sessionId:
+        requestedId
+    };
+  }
 
   if (name === 'lookup_account_by_identifier') {
     const identifier =
@@ -2574,6 +3236,7 @@ async function executeFluxAiSupportTool(
     const result = await pool.query(
       `
         SELECT
+          session_key,
           device_model,
           platform_name,
           platform_version,
@@ -2595,6 +3258,8 @@ async function executeFluxAiSupportTool(
       count: result.rows.length,
       sessions: result.rows.map(
         row => ({
+          sessionId:
+            fluxSafeSessionId(row.session_key),
           device:
             String(
               row.device_model ||
@@ -3210,6 +3875,14 @@ Tool rules:
 - A successful verification remains valid temporarily for the current WhatsApp conversation.
 - Do not reveal the full registered email or phone number unless it was already supplied by the customer.
 - Never reveal a verification code yourself.
+- If the customer says they did not receive a verification code, use resend_verification_code instead of giving generic instructions.
+- When listing sessions, refer to the safe sessionId returned by the tool; never expose internal session keys.
+- Before changing a username, changing privacy, or signing out one specific device, clearly state the exact change and obtain explicit confirmation.
+- Use get_support_cases when the customer asks about an appeal, previous report, case number, or support-case status.
+- Use get_account_settings when the customer asks what email, phone, username, privacy setting, or login-alert setting is currently attached to the verified account.
+- If the customer asks whether AI or a person is handling the conversation, use get_support_mode.
+- Do not create duplicate support cases when an appropriate open case already exists.
+- Prefer performing an available Flux action over merely explaining how the customer could do it manually.
 - Verification codes are delivered automatically to the registered Flux email address.
 - After start_account_verification succeeds, tell the customer which masked email received the code and ask them to send the 6-digit code here.
 - Never claim an email was sent unless start_account_verification reports success.
@@ -3533,6 +4206,32 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
       await isWhatsAppHumanEscalated(from);
 
     if (humanEscalated) {
+      if (wantsReturnToFluxAi(text)) {
+        await setWhatsAppHumanEscalation(
+          from,
+          false
+        );
+
+        await addWhatsAppMemoryMessage(
+          from,
+          'user',
+          text
+        );
+
+        await addWhatsAppMemoryMessage(
+          from,
+          'assistant',
+          'Your conversation has returned to Flux AI Support.'
+        );
+
+        await sendWhatsAppSystemText(
+          from,
+          'Your conversation has returned to Flux AI Support. How can I help?'
+        );
+
+        return;
+      }
+
       await addWhatsAppMemoryMessage(
         from,
         'user',
@@ -6602,6 +7301,22 @@ New password
   style="box-sizing:border-box;width:100%;padding:13px;border:1px solid #ccd0d5;border-radius:8px;font-size:16px;"
 >
 
+<label
+  style="display:block;font-weight:700;margin:18px 0 8px;"
+>
+Confirm new password
+</label>
+
+<input
+  type="password"
+  name="confirmPassword"
+  minlength="8"
+  maxlength="200"
+  required
+  autocomplete="new-password"
+  style="box-sizing:border-box;width:100%;padding:13px;border:1px solid #ccd0d5;border-radius:8px;font-size:16px;"
+>
+
 <p style="font-size:13px;color:#65676b;">
 Use at least 8 characters with at least one letter and one number.
 </p>
@@ -6634,6 +7349,18 @@ app.post(
       String(
         request.body?.newPassword || ''
       );
+
+    const confirmPassword =
+      String(
+        request.body?.confirmPassword || ''
+      );
+
+    if (newPassword !== confirmPassword) {
+      return response
+        .status(400)
+        .send('The two passwords do not match.');
+    }
+
 
     if (
       newPassword.length < 8 ||
