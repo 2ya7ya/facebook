@@ -751,6 +751,33 @@ function wantsSupportMenu(text) {
   return exact.includes(value);
 }
 
+
+function fluxSupportWelcomeText(text = '') {
+  const arabic =
+    /[\u0600-\u06FF]/.test(
+      String(text || '')
+    );
+
+  if (arabic) {
+    return `مرحباً بك في دعم Flux 👋
+
+أنا هنا لمساعدتك في حل مشاكل حسابك واستخدام Flux، بما في ذلك تسجيل الدخول، استرداد الحساب، الأمان، الأجهزة، الحسابات الموقوفة، الرسائل، المحتوى والمشاكل التقنية.
+
+يمكنك اختيار القسم المناسب من القائمة التالية، أو ببساطة اكتب مشكلتك بطريقتك وسأساعدك خطوة بخطوة.
+
+🔒 لحماية حسابك، لن يطلب منك دعم Flux إرسال كلمة المرور أو رموز التحقق الخاصة بك.`;
+  }
+
+  return `Welcome to Flux Support 👋
+
+I’m here to help you resolve problems with your Flux account and the app, including sign-in, account recovery, security, devices, suspended accounts, messaging, content, and technical issues.
+
+You can choose the most relevant topic from the menu below, or simply describe what’s happening in your own words and I’ll guide you through it step by step.
+
+🔒 For your security, Flux Support will never ask you to send your password or private verification codes.`;
+}
+
+
 async function sendWhatsAppSupportMenu(to) {
   const accessToken = String(
     process.env.WHATSAPP_ACCESS_TOKEN || ''
@@ -794,12 +821,12 @@ async function sendWhatsAppSupportMenu(to) {
 
             body: {
               text:
-                'Welcome to Flux Support 👋\n\nI can help resolve account, security, login and technical issues — and perform supported actions on your Flux account after ownership verification.\n\nChoose a topic below, or simply describe what you need in your own words.'
+                'Choose the topic that best matches what you need help with.'
             },
 
             footer: {
               text:
-                'Your security matters. Never send your password or verification codes to anyone.'
+                'You can also describe your issue directly at any time.'
             },
 
             action: {
@@ -8542,7 +8569,15 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
       !selectedSupportCategory &&
       wantsSupportMenu(text)
     ) {
-      await sendWhatsAppSupportMenu(from);
+      await sendWhatsAppSystemText(
+        from,
+        fluxSupportWelcomeText(text)
+      );
+
+      await sendWhatsAppSupportMenu(
+        from
+      );
+
       return;
     }
 
