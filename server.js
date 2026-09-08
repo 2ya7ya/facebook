@@ -2684,6 +2684,669 @@ Flux Support`,
   });
 }
 
+
+async function ensureFluxEmailChangeSchema() {
+  await ensureDatabase();
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS flux_support_email_changes (
+      user_key VARCHAR(64) PRIMARY KEY,
+      flux_user_id BIGINT NOT NULL,
+      old_email VARCHAR(255) NOT NULL DEFAULT '',
+      new_email VARCHAR(255) NOT NULL,
+      code_hash VARCHAR(128) NOT NULL,
+      attempts INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      completed_at TIMESTAMPTZ
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS
+      flux_support_email_changes_user_idx
+    ON flux_support_email_changes
+      (flux_user_id, created_at DESC)
+  `);
+
+  await pool.query(`
+    DELETE FROM flux_support_email_changes
+    WHERE expires_at < NOW() - INTERVAL '1 day'
+  `);
+}
+
+
+function normalizeFluxEmail(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase();
+}
+
+
+function isValidFluxEmail(value) {
+  const email =
+    normalizeFluxEmail(value);
+
+  return (
+    email.length <= 255 &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+  );
+}
+
+
+async function fluxEmailAlreadyUsed(
+  email,
+  excludeUserId = null
+) {
+  const clean =
+    normalizeFluxEmail(email);
+
+  const result =
+    await pool.query(
+      `
+        SELECT id
+        FROM users
+        WHERE
+          (
+            LOWER(COALESCE(email, '')) = $1
+            OR LOWER(COALESCE(identifier, '')) = $1
+          )
+          AND (
+            $2::bigint IS NULL
+            OR id <> $2
+          )
+        LIMIT 1
+      `,
+      [
+        clean,
+        excludeUserId
+          ? Number(excludeUserId)
+          : null
+      ]
+    );
+
+  return result.rowCount > 0;
+}
+
+
+async function sendFluxEmailChangeCode({
+  email,
+  code,
+  displayName = ''
+}) {
+  const transport =
+    getFluxMailTransport();
+
+  if (!transport) {
+    throw new Error(
+      'Flux email delivery is not configured.'
+    );
+  }
+
+  const to =
+    normalizeFluxEmail(email);
+
+  if (!isValidFluxEmail(to)) {
+    throw new Error(
+      'The new email address is not valid.'
+    );
+  }
+
+  const from =
+    String(
+      process.env.SMTP_FROM ||
+      process.env.SMTP_USER ||
+      ''
+    ).trim();
+
+  const name =
+    String(displayName || '').trim();
+
+  const greeting =
+    name
+      ? `Hi ${name},`
+      : 'Hello,';
+
+  await transport.sendMail({
+    from,
+    to,
+    subject:
+      `${code} is your Flux email verification code`,
+    text:
+`${greeting}
+
+You requested to use this email address with your Flux account.
+
+Your verification code is:
+
+${code}
+
+This code expires in 10 minutes.
+
+If you don't see this email within a minute, check your Spam, Junk, or Promotions folder.
+
+If you did not request this change, you can ignore this email.
+
+Flux Support`,
+    html:
+`<!doctype html>
+<html>
+<body style="font-family:Arial,sans-serif;background:#f5f6f7;padding:24px;color:#111;">
+  <div style="max-width:520px;margin:auto;background:#fff;border-radius:14px;padding:28px;">
+    <h2 style="margin-top:0;">Verify your new Flux email</h2>
+
+    <p>${escapeFluxEmailHtml(greeting)}</p>
+
+    <p>
+      You requested to use this email address
+      with your Flux account.
+    </p>
+
+    <div style="font-size:32px;font-weight:700;letter-spacing:8px;margin:24px 0;">
+      ${escapeFluxEmailHtml(code)}
+    </div>
+
+    <p>
+      This code expires in
+      <strong>10 minutes</strong>.
+    </p>
+
+    <p style="font-size:13px;color:#65676b;">
+      If this email does not appear within a minute,
+      check Spam, Junk, or Promotions.
+    </p>
+
+    <p style="font-size:13px;color:#65676b;">
+      If you did not request this change,
+      you can ignore this email.
+    </p>
+
+    <p>Flux Support</p>
+  </div>
+</body>
+</html>`
+  });
+}
+
+
+async function beginFluxEmailChange(
+  from,
+  newEmail
+) {
+  await ensureFluxEmailChangeSchema();
+
+  const account =
+    await getVerifiedFluxSupportAccount(
+      from
+    );
+
+  if (!account) {
+    return {
+      ok: false,
+      code: 'VERIFICATION_REQUIRED',
+      message:
+        'Account ownership must be verified before the email address can be changed.'
+    };
+  }
+
+  const cleanNewEmail =
+    normalizeFluxEmail(newEmail);
+
+  if (!isValidFluxEmail(cleanNewEmail)) {
+    return {
+      ok: false,
+      code: 'INVALID_EMAIL',
+      message:
+        'Enter a valid email address.'
+    };
+  }
+
+  const oldEmail =
+    normalizeFluxEmail(
+      account.email
+    );
+
+  if (
+    oldEmail &&
+    cleanNewEmail === oldEmail
+  ) {
+    return {
+      ok: false,
+      code: 'EMAIL_UNCHANGED',
+      message:
+        'That is already the email address on this Flux account.'
+    };
+  }
+
+  if (
+    await fluxEmailAlreadyUsed(
+      cleanNewEmail,
+      Number(account.id)
+    )
+  ) {
+    return {
+      ok: false,
+      code: 'EMAIL_IN_USE',
+      message:
+        'That email address is already associated with another Flux account.'
+    };
+  }
+
+  const code =
+    fluxSupportVerificationCode();
+
+  const codeHash =
+    fluxSupportHashCode(code);
+
+  const userKey =
+    whatsappMemoryUserKey(from);
+
+  await pool.query(
+    `
+      INSERT INTO flux_support_email_changes
+        (
+          user_key,
+          flux_user_id,
+          old_email,
+          new_email,
+          code_hash,
+          attempts,
+          created_at,
+          expires_at,
+          completed_at
+        )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        0,
+        NOW(),
+        NOW() + INTERVAL '10 minutes',
+        NULL
+      )
+      ON CONFLICT (user_key)
+      DO UPDATE SET
+        flux_user_id = EXCLUDED.flux_user_id,
+        old_email = EXCLUDED.old_email,
+        new_email = EXCLUDED.new_email,
+        code_hash = EXCLUDED.code_hash,
+        attempts = 0,
+        created_at = NOW(),
+        expires_at =
+          NOW() + INTERVAL '10 minutes',
+        completed_at = NULL
+    `,
+    [
+      userKey,
+      Number(account.id),
+      oldEmail,
+      cleanNewEmail,
+      codeHash
+    ]
+  );
+
+  try {
+    await sendFluxEmailChangeCode({
+      email: cleanNewEmail,
+      code,
+      displayName:
+        String(
+          account.full_name || ''
+        )
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      code:
+        'EMAIL_CHANGE_DELIVERY_FAILED',
+      message:
+        'The verification email could not be delivered right now.'
+    };
+  }
+
+  await patchFluxSupportState(
+    from,
+    {
+      fluxUserId:
+        Number(account.id),
+      issueType:
+        'account_settings',
+      pendingExternalAction:
+        'verify_new_email',
+      lastRealAction:
+        'email_change_verification_sent'
+    }
+  );
+
+  await recordFluxSupportAction(
+    from,
+    Number(account.id),
+    'email_change_verification_sent',
+    {
+      newEmail:
+        maskFluxEmail(cleanNewEmail)
+    }
+  );
+
+  return {
+    ok: true,
+    sent: true,
+    maskedEmail:
+      maskFluxEmail(
+        cleanNewEmail
+      ),
+    expiresInMinutes: 10,
+    message:
+      `A verification code was sent to ${maskFluxEmail(cleanNewEmail)}. It expires in 10 minutes. If you don't see it within a minute, check Spam, Junk, or Promotions.`
+  };
+}
+
+
+async function completeFluxEmailChange(
+  from,
+  code
+) {
+  await ensureFluxEmailChangeSchema();
+
+  const account =
+    await getVerifiedFluxSupportAccount(
+      from
+    );
+
+  if (!account) {
+    return {
+      ok: false,
+      code: 'VERIFICATION_REQUIRED',
+      message:
+        'Your Flux account verification expired. Verify account ownership again before completing the email change.'
+    };
+  }
+
+  const userKey =
+    whatsappMemoryUserKey(from);
+
+  const result =
+    await pool.query(
+      `
+        SELECT
+          flux_user_id,
+          old_email,
+          new_email,
+          code_hash,
+          attempts,
+          expires_at,
+          completed_at
+        FROM flux_support_email_changes
+        WHERE user_key = $1
+        LIMIT 1
+      `,
+      [userKey]
+    );
+
+  const pending =
+    result.rows[0];
+
+  if (!pending) {
+    return {
+      ok: false,
+      code: 'NO_EMAIL_CHANGE_STARTED',
+      message:
+        'There is no pending email change for this conversation.'
+    };
+  }
+
+  if (
+    Number(pending.flux_user_id) !==
+    Number(account.id)
+  ) {
+    return {
+      ok: false,
+      code: 'ACCOUNT_MISMATCH'
+    };
+  }
+
+  if (pending.completed_at) {
+    return {
+      ok: false,
+      code: 'EMAIL_CHANGE_ALREADY_COMPLETED'
+    };
+  }
+
+  if (
+    !pending.expires_at ||
+    new Date(
+      pending.expires_at
+    ).getTime() <= Date.now()
+  ) {
+    return {
+      ok: false,
+      code: 'EMAIL_CHANGE_EXPIRED',
+      message:
+        'That email verification code has expired. Send a new code to continue.'
+    };
+  }
+
+  if (
+    Number(
+      pending.attempts || 0
+    ) >= 5
+  ) {
+    return {
+      ok: false,
+      code: 'TOO_MANY_ATTEMPTS',
+      message:
+        'Too many incorrect verification attempts. Start the email-change process again.'
+    };
+  }
+
+  const candidate =
+    fluxSupportHashCode(
+      String(code || '').trim()
+    );
+
+  if (
+    candidate !==
+    String(
+      pending.code_hash || ''
+    )
+  ) {
+    await pool.query(
+      `
+        UPDATE flux_support_email_changes
+        SET attempts = attempts + 1
+        WHERE user_key = $1
+      `,
+      [userKey]
+    );
+
+    return {
+      ok: false,
+      code: 'INVALID_CODE',
+      message:
+        'That verification code is incorrect.'
+    };
+  }
+
+  const newEmail =
+    normalizeFluxEmail(
+      pending.new_email
+    );
+
+  if (
+    await fluxEmailAlreadyUsed(
+      newEmail,
+      Number(account.id)
+    )
+  ) {
+    return {
+      ok: false,
+      code: 'EMAIL_IN_USE',
+      message:
+        'That email address became associated with another Flux account before verification completed.'
+    };
+  }
+
+  const client =
+    await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const locked =
+      await client.query(
+        `
+          SELECT
+            id,
+            email,
+            identifier
+          FROM users
+          WHERE id = $1
+          FOR UPDATE
+        `,
+        [Number(account.id)]
+      );
+
+    const current =
+      locked.rows[0];
+
+    if (!current) {
+      throw new Error(
+        'Flux account no longer exists.'
+      );
+    }
+
+    const currentEmail =
+      normalizeFluxEmail(
+        current.email
+      );
+
+    const currentIdentifier =
+      normalizeFluxEmail(
+        current.identifier
+      );
+
+    /*
+     * Preserve the user's login model:
+     * if identifier currently equals the old/current email,
+     * move identifier with the new email.
+     * Username/phone/custom identifiers stay unchanged.
+     */
+    const identifierUsesEmail =
+      currentIdentifier &&
+      (
+        currentIdentifier ===
+          normalizeFluxEmail(
+            pending.old_email
+          ) ||
+        currentIdentifier ===
+          currentEmail
+      );
+
+    if (identifierUsesEmail) {
+      await client.query(
+        `
+          UPDATE users
+          SET
+            email = $1,
+            identifier = $1
+          WHERE id = $2
+        `,
+        [
+          newEmail,
+          Number(account.id)
+        ]
+      );
+    } else {
+      await client.query(
+        `
+          UPDATE users
+          SET email = $1
+          WHERE id = $2
+        `,
+        [
+          newEmail,
+          Number(account.id)
+        ]
+      );
+    }
+
+    await client.query(
+      `
+        UPDATE flux_support_email_changes
+        SET
+          completed_at = NOW(),
+          code_hash = ''
+        WHERE user_key = $1
+      `,
+      [userKey]
+    );
+
+    await client.query('COMMIT');
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+
+    if (
+      String(error?.code || '') ===
+      '23505'
+    ) {
+      return {
+        ok: false,
+        code: 'EMAIL_IN_USE',
+        message:
+          'That email address is already associated with another Flux account.'
+      };
+    }
+
+    throw error;
+
+  } finally {
+    client.release();
+  }
+
+  await patchFluxSupportState(
+    from,
+    {
+      issueType:
+        'account_settings',
+      pendingExternalAction: '',
+      pendingConfirmation: '',
+      lastRealAction:
+        'email_changed'
+    }
+  );
+
+  await recordFluxSupportAction(
+    from,
+    Number(account.id),
+    'email_changed',
+    {
+      oldEmail:
+        maskFluxEmail(
+          pending.old_email
+        ),
+      newEmail:
+        maskFluxEmail(
+          newEmail
+        )
+    }
+  );
+
+  return {
+    ok: true,
+    changed: true,
+    newEmail:
+      maskFluxEmail(
+        newEmail
+      ),
+    message:
+      `Your Flux email has been changed to ${maskFluxEmail(newEmail)}.`
+  };
+}
+
+
 async function beginFluxSupportVerification(from, account, identifier) {
   await ensureFluxSupportVerificationSchema();
 
@@ -3277,7 +3940,11 @@ async function syncFluxSupportStateFromAction(
       actionName ===
         'bio_changed' ||
       actionName ===
-        'privacy_changed'
+        'privacy_changed' ||
+      actionName ===
+        'email_change_verification_sent' ||
+      actionName ===
+        'email_changed'
     ) {
       patch.issueType =
         'account_settings';
@@ -3855,6 +4522,27 @@ async function autoSyncFluxCaseLifecycle(
     let waitingFor = '';
 
     if (
+      actionName ===
+      'email_change_verification_sent'
+    ) {
+      status =
+        'waiting_for_user';
+
+      waitingFor =
+        'user';
+    }
+
+    if (
+      actionName ===
+      'email_changed'
+    ) {
+      status =
+        'open';
+
+      waitingFor = '';
+    }
+
+    if (
       actionName === 'verification_started'
     ) {
       status =
@@ -4302,6 +4990,46 @@ const FLUX_AI_SUPPORT_TOOLS = [
     parameters: {
       type: 'object',
       properties: {},
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'start_email_change',
+    description:
+      'Start a secure email-address change for the currently verified Flux account. Sends a 6-digit code to the NEW email address. Use only when the customer explicitly wants to change their account email.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        newEmail: {
+          type: 'string'
+        }
+      },
+      required: [
+        'newEmail'
+      ],
+      additionalProperties: false
+    }
+  },
+
+  {
+    type: 'function',
+    name: 'verify_new_email_code',
+    description:
+      'Verify the 6-digit code sent to the new email address and complete the pending Flux email-address change.',
+    strict: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        code: {
+          type: 'string'
+        }
+      },
+      required: [
+        'code'
+      ],
       additionalProperties: false
     }
   },
@@ -5923,6 +6651,20 @@ async function executeFluxAiSupportTool(
   ) {
     return await startFluxSecurityRecovery(
       from
+    );
+  }
+
+  if (name === 'start_email_change') {
+    return await beginFluxEmailChange(
+      from,
+      args?.newEmail
+    );
+  }
+
+  if (name === 'verify_new_email_code') {
+    return await completeFluxEmailChange(
+      from,
+      args?.code
     );
   }
 
@@ -7552,6 +8294,11 @@ Service standard:
 - Keep normal WhatsApp replies compact unless more detail is genuinely required.
 - For security incidents, be calm and action-oriented: secure access first, explain second.
 - For password recovery, never request the new password in WhatsApp.
+- For an email-address change, first require an already verified Flux account.
+- Never change an email immediately from a WhatsApp message. Use start_email_change, send the code to the NEW email, then use verify_new_email_code only after the customer provides that code.
+- Never reveal the full old or new email after the change; use the masked email returned by the tools.
+- A code sent to the new email proves control of that new address; the existing Flux verification proves ownership of the account.
+- If the new-email code expires or reaches the attempt limit, start a new email-change verification instead of bypassing verification.
 - For suspension cases, distinguish account status from appeal status.
 - For support cases, mention the case ID and current status when available.
 - For account settings changes, repeat the intended new state before requesting confirmation.
