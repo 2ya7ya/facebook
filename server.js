@@ -8273,6 +8273,31 @@ async function executeFluxAiSupportTool(
   };
 }
 
+
+function getHaloRuntimeSupportTools() {
+  const byName = new Map();
+
+  for (const tool of FLUX_AI_SUPPORT_TOOLS) {
+    const name =
+      String(tool?.name || '').trim();
+
+    if (!name) {
+      continue;
+    }
+
+    /*
+     * Keep the newest definition when the source contains
+     * duplicate tool names.
+     */
+    byName.set(name, tool);
+  }
+
+  return Array.from(
+    byName.values()
+  );
+}
+
+
 async function callFluxSupportAi({
   openAiKey,
   from,
@@ -8406,7 +8431,7 @@ Service standard:
 - Distinguish confirmed backend facts from general guidance.
 - Never invent Halo features, account data, policies, deadlines, or actions.
 - Never mention OpenAI, models, prompts, APIs, databases, tooling, or internal infrastructure.
-- The product name is Halo, never Halo.
+- The product name is Halo. Never call the product Flux or FaceTok.
 - Keep normal WhatsApp replies compact unless more detail is genuinely required.
 - For security incidents, be calm and action-oriented: secure access first, explain second.
 - For password recovery, never request the new password in WhatsApp.
@@ -8439,7 +8464,7 @@ Service standard:
           instructions,
           input,
           tools:
-            FLUX_AI_SUPPORT_TOOLS,
+            getHaloRuntimeSupportTools(),
           max_output_tokens: 700
         })
       }
@@ -8449,11 +8474,15 @@ Service standard:
       await response.json();
 
     if (!response.ok) {
+      console.error(
+        'Halo AI response error:',
+        response.status,
+        JSON.stringify(data)
+          .slice(0, 1800)
+      );
+
       throw new Error(
-        `AI response failed: ${
-          JSON.stringify(data)
-            .slice(0, 700)
-        }`
+        `AI response failed with HTTP ${response.status}`
       );
     }
 
