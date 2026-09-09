@@ -8506,6 +8506,31 @@ Rules:
       );
     }
 
+    const usage = data?.usage || {};
+    const inputTokens =
+      Number(
+        usage.input_tokens ??
+        usage.prompt_tokens ??
+        0
+      ) || 0;
+
+    const outputTokens =
+      Number(
+        usage.output_tokens ??
+        usage.completion_tokens ??
+        0
+      ) || 0;
+
+    const totalTokens =
+      Number(
+        usage.total_tokens ??
+        (inputTokens + outputTokens)
+      ) || (inputTokens + outputTokens);
+
+    console.log(
+      `Halo AI success | input: ${inputTokens} | output: ${outputTokens} | total: ${totalTokens}`
+    );
+
     const output =
       Array.isArray(data.output)
         ? data.output
