@@ -8296,12 +8296,7 @@ function getHaloRuntimeSupportTools(
   const core = new Set([
     'lookup_my_account',
     'lookup_account_by_identifier',
-    'start_account_verification',
-    'verify_account_code',
-    'resend_verification_code',
-    'get_verification_status',
     'get_support_state',
-    'get_support_mode',
     'escalate_to_human'
   ]);
 
@@ -8316,6 +8311,10 @@ function getHaloRuntimeSupportTools(
     category.includes('password')
   ) {
     add(
+      'start_account_verification',
+      'verify_account_code',
+      'resend_verification_code',
+      'get_verification_status',
       'get_account_status',
       'request_password_recovery',
       'resend_password_reset_link',
@@ -8328,6 +8327,10 @@ function getHaloRuntimeSupportTools(
     category.includes('session')
   ) {
     add(
+      'start_account_verification',
+      'verify_account_code',
+      'resend_verification_code',
+      'get_verification_status',
       'get_security_summary',
       'list_active_sessions',
       'revoke_session',
@@ -8425,7 +8428,7 @@ async function callFluxSupportAi({
       await getWhatsAppConversationHistory(
         from
       )
-    ).slice(-6);
+    ).slice(-4);
 
   const baseInput = [
     ...recentHistory,
@@ -8489,7 +8492,7 @@ Keep ordinary WhatsApp replies compact.`;
 
   let input = baseInput;
 
-  for (let round = 0; round < 6; round++) {
+  for (let round = 0; round < 3; round++) {
     const response = await fetch(
       'https://api.openai.com/v1/responses',
       {
@@ -8508,7 +8511,7 @@ Keep ordinary WhatsApp replies compact.`;
             getHaloRuntimeSupportTools(
               supportCategoryLabel
             ),
-          max_output_tokens: 450
+          max_output_tokens: 260
         })
       }
     );
