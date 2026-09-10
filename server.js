@@ -15650,7 +15650,7 @@ app.post('/api/music-library/toggle', requireApiAuth, async (request, response) 
 
 app.post('/api/stories/:storyId/like', requireApiAuth, async (request, response) => {
   const storyId = String(request.params.storyId || '');
-  if (!/^\\d+$/.test(storyId)) return response.status(400).json({ error: 'Invalid story.' });
+  if (!/^\d+$/.test(storyId)) return response.status(400).json({ error: 'Invalid story.' });
 
   try {
     await ensureDatabase();
