@@ -9672,9 +9672,15 @@ async function ensureDatabase() {
       user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       image_data TEXT NOT NULL,
       caption VARCHAR(500) NOT NULL DEFAULT '',
+      edit_data JSONB NOT NULL DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query(`
+    ALTER TABLE stories
+    ADD COLUMN IF NOT EXISTS edit_data JSONB NOT NULL DEFAULT '{}'::jsonb
+  `);
+
   await pool.query(`CREATE TABLE IF NOT EXISTS story_likes (
     story_id BIGINT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
     user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -15605,7 +15611,7 @@ app.get('/api/stories', requireApiAuth, async (_request, response) => {
   try {
     await ensureDatabase();
     const result = await pool.query(`
-      SELECT s.id, s.user_id, s.image_data, s.caption, s.created_at, u.full_name, u.profile_photo
+      SELECT s.id, s.user_id, s.image_data, s.caption, s.edit_data, s.created_at, u.full_name, u.profile_photo
       FROM stories s
       JOIN users u ON u.id = s.user_id
       WHERE s.created_at >= NOW() - INTERVAL '24 hours'
@@ -15617,6 +15623,7 @@ app.get('/api/stories', requireApiAuth, async (_request, response) => {
       userId: String(row.user_id),
       image: row.image_data,
       caption: row.caption,
+      editData: row.edit_data || {},
       createdAt: row.created_at,
       author: row.full_name,
       profilePhoto: row.profile_photo || ''
@@ -15629,6 +15636,21 @@ app.get('/api/stories', requireApiAuth, async (_request, response) => {
 
 app.post('/api/stories', requireApiAuth, async (request, response) => {
   const image = request.body?.image || '';
+
+  const editData =
+    request.body?.editData &&
+    typeof request.body.editData === 'object' &&
+    !Array.isArray(request.body.editData)
+      ? request.body.editData
+      : {};
+
+  const editDataJson = JSON.stringify(editData);
+
+  if (Buffer.byteLength(editDataJson, 'utf8') > 120000) {
+    return response.status(400).json({
+      error: 'Story edit data is too large.'
+    });
+  }
   const visibility = String(
     request.body?.visibility || 'public'
   ).trim().toLowerCase();
@@ -15666,19 +15688,22 @@ app.post('/api/stories', requireApiAuth, async (request, response) => {
       `INSERT INTO stories (
          user_id,
          image_data,
-         caption
+         caption,
+         edit_data
        )
-       VALUES ($1, $2, $3)
+       VALUES ($1, $2, $3, $4::jsonb)
        RETURNING
          id,
          user_id,
          image_data,
          caption,
+         edit_data,
          created_at`,
       [
         request.user.id,
         image,
-        caption
+        caption,
+        editDataJson
       ]
     );
 
