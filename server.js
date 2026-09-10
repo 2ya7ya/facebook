@@ -12233,6 +12233,46 @@ async function verifyCurrentAccountPassword(userId, password) {
   return (await (user.password_hash === request.body.password)) || (user.legacy_password && await (user.password_hash === request.body.password));
 }
 
+
+app.get('/api/users/search', requireApiAuth, async (request, response) => {
+  const q = String(request.query.q || '').trim().toLowerCase().slice(0, 120);
+
+  try {
+    await ensureDatabase();
+
+    const result = await pool.query(
+      `SELECT id, full_name, username, profile_photo
+         FROM users
+        WHERE id <> $1
+          AND deactivated_at IS NULL
+          AND (
+            $2 = ''
+            OR LOWER(COALESCE(full_name, '')) LIKE '%' || $2 || '%'
+            OR LOWER(COALESCE(username, '')) LIKE '%' || $2 || '%'
+          )
+        ORDER BY
+          CASE WHEN $2 <> '' AND LOWER(COALESCE(full_name, '')) = $2 THEN 0 ELSE 1 END,
+          LOWER(COALESCE(full_name, '')),
+          id
+        LIMIT 200`,
+      [request.user.id, q]
+    );
+
+    response.set('Cache-Control', 'private, no-store');
+    response.json({
+      users: result.rows.map(user => ({
+        id: String(user.id),
+        name: user.full_name || 'Halo user',
+        username: user.username || '',
+        profilePhoto: user.profile_photo || ''
+      }))
+    });
+  } catch (error) {
+    console.error('User mention search failed:', error.message);
+    response.status(500).json({ error: 'Could not load people.' });
+  }
+});
+
 app.get('/api/account-settings', requireApiAuth, async (request, response) => {
   try {
     await ensureDatabase();
