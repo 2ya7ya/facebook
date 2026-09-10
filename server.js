@@ -15647,6 +15647,57 @@ app.post('/api/music-library/toggle', requireApiAuth, async (request, response) 
   }
 });
 
+
+app.post('/api/stories/:storyId/like', requireApiAuth, async (request, response) => {
+  const storyId = String(request.params.storyId || '');
+  if (!/^\\d+$/.test(storyId)) return response.status(400).json({ error: 'Invalid story.' });
+
+  try {
+    await ensureDatabase();
+
+    const story = await pool.query(
+      'SELECT id FROM stories WHERE id = $1 LIMIT 1',
+      [storyId]
+    );
+    if (!story.rowCount) return response.status(404).json({ error: 'Story not found.' });
+
+    const existing = await pool.query(
+      'SELECT 1 FROM story_likes WHERE story_id = $1 AND user_id = $2 LIMIT 1',
+      [storyId, request.user.id]
+    );
+
+    let liked;
+    if (existing.rowCount) {
+      await pool.query(
+        'DELETE FROM story_likes WHERE story_id = $1 AND user_id = $2',
+        [storyId, request.user.id]
+      );
+      liked = false;
+    } else {
+      await pool.query(
+        `INSERT INTO story_likes (story_id, user_id)
+         VALUES ($1, $2)
+         ON CONFLICT (story_id, user_id) DO NOTHING`,
+        [storyId, request.user.id]
+      );
+      liked = true;
+    }
+
+    const count = await pool.query(
+      'SELECT COUNT(*)::int AS count FROM story_likes WHERE story_id = $1',
+      [storyId]
+    );
+
+    response.json({
+      liked,
+      likeCount: Number(count.rows[0]?.count || 0)
+    });
+  } catch (error) {
+    console.error('Story like failed:', error.message);
+    response.status(500).json({ error: 'Could not update Story like.' });
+  }
+});
+
 app.get('/api/stories', requireApiAuth, async (_request, response) => {
   try {
     await ensureDatabase();
