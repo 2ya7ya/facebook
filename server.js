@@ -9687,6 +9687,12 @@ async function ensureDatabase() {
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (story_id, user_id)
   )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS story_views (
+    story_id BIGINT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    viewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (story_id, user_id)
+  )`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS reel_likes (
       reel_id BIGINT NOT NULL REFERENCES reels(id) ON DELETE CASCADE,
@@ -9767,6 +9773,7 @@ async function ensureDatabase() {
   await pool.query('CREATE INDEX IF NOT EXISTS post_media_likes_user_created_idx ON post_media_likes (user_id, created_at DESC)');
   await pool.query('CREATE INDEX IF NOT EXISTS reel_likes_user_created_idx ON reel_likes (user_id, created_at DESC)');
   await pool.query('CREATE INDEX IF NOT EXISTS story_likes_user_created_idx ON story_likes (user_id, created_at DESC)');
+  await pool.query('CREATE INDEX IF NOT EXISTS story_views_user_viewed_idx ON story_views (user_id, viewed_at DESC)');
 
   await pool.query('CREATE INDEX IF NOT EXISTS reels_created_at_idx ON reels (created_at DESC)');
   await pool.query('CREATE INDEX IF NOT EXISTS stories_created_at_idx ON stories (created_at DESC)');
@@ -15698,17 +15705,39 @@ app.post('/api/stories/:storyId/like', requireApiAuth, async (request, response)
   }
 });
 
-app.get('/api/stories', requireApiAuth, async (_request, response) => {
+app.post('/api/stories/:storyId/view', requireApiAuth, async (request, response) => {
+  const storyId = String(request.params.storyId || '');
+  if (!/^\d+$/.test(storyId)) return response.status(400).json({ error: 'Invalid story.' });
+  try {
+    await ensureDatabase();
+    const viewed = await pool.query(
+      `INSERT INTO story_views (story_id, user_id, viewed_at)
+       SELECT id, $2, NOW() FROM stories WHERE id = $1
+       ON CONFLICT (story_id, user_id) DO UPDATE SET viewed_at = EXCLUDED.viewed_at
+       RETURNING story_id`,
+      [storyId, request.user.id]
+    );
+    if (!viewed.rowCount) return response.status(404).json({ error: 'Story not found.' });
+    response.json({ ok: true, storyId, viewed: true });
+  } catch (error) {
+    console.error('Story view failed:', error.message);
+    response.status(500).json({ error: 'Could not record Story view.' });
+  }
+});
+
+app.get('/api/stories', requireApiAuth, async (request, response) => {
   try {
     await ensureDatabase();
     const result = await pool.query(`
-      SELECT s.id, s.user_id, s.image_data, s.caption, s.edit_data, s.created_at, u.full_name, u.profile_photo
+      SELECT s.id, s.user_id, s.image_data, s.caption, s.edit_data, s.created_at,
+             u.full_name, u.profile_photo, (sv.story_id IS NOT NULL) AS viewed_by_me
       FROM stories s
       JOIN users u ON u.id = s.user_id
+      LEFT JOIN story_views sv ON sv.story_id = s.id AND sv.user_id = $1
       WHERE s.created_at >= NOW() - INTERVAL '24 hours'
       ORDER BY s.created_at DESC
       LIMIT 50
-    `);
+    `, [request.user.id]);
     response.json({ stories: result.rows.map(row => ({
       id: String(row.id),
       userId: String(row.user_id),
@@ -15717,7 +15746,8 @@ app.get('/api/stories', requireApiAuth, async (_request, response) => {
       editData: row.edit_data || {},
       createdAt: row.created_at,
       author: row.full_name,
-      profilePhoto: row.profile_photo || ''
+      profilePhoto: row.profile_photo || '',
+      viewedByMe: Boolean(row.viewed_by_me)
     })) });
   } catch (error) {
     console.error('Stories load failed:', error.message);
