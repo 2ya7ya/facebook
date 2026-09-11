@@ -9681,6 +9681,27 @@ async function ensureDatabase() {
     ADD COLUMN IF NOT EXISTS edit_data JSONB NOT NULL DEFAULT '{}'::jsonb
   `);
 
+  await pool.query('ALTER TABLE notifications ADD COLUMN IF NOT EXISTS story_id BIGINT REFERENCES stories(id) ON DELETE CASCADE');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS story_views (
+      story_id BIGINT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+      viewer_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      viewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (story_id, viewer_id)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS story_question_responses (
+      id BIGSERIAL PRIMARY KEY,
+      story_id BIGINT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+      responder_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      question TEXT NOT NULL DEFAULT '',
+      answer TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query('CREATE INDEX IF NOT EXISTS story_question_responses_story_idx ON story_question_responses (story_id, created_at DESC)');
+  await pool.query('CREATE INDEX IF NOT EXISTS story_views_story_idx ON story_views (story_id, viewed_at DESC)');
   await pool.query(`CREATE TABLE IF NOT EXISTS story_likes (
     story_id BIGINT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
     user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -10144,15 +10165,15 @@ async function pushWhatsAppSupportMessage({
   }
 }
 
-async function createNotification(client, { userId, actorId, type, postId = null, detail = '', commentId = null }) {
+async function createNotification(client, { userId, actorId, type, postId = null, storyId = null, detail = '', commentId = null }) {
   if (!userId || String(userId) === String(actorId)) return;
 
   const created = await client.query(
-    `INSERT INTO notifications (user_id, actor_id, type, post_id, detail, comment_id, read_at, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, NULL, NOW())
+    `INSERT INTO notifications (user_id, actor_id, type, post_id, story_id, detail, comment_id, read_at, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, NOW())
      ON CONFLICT DO NOTHING
      RETURNING id`,
-    [userId, actorId || null, type, postId || null, String(detail || '').slice(0, 1000), commentId || null]
+    [userId, actorId || null, type, postId || null, storyId || null, String(detail || '').slice(0, 1000), commentId || null]
   );
 
   if (!created.rowCount) return;
@@ -15871,6 +15892,36 @@ app.post('/api/stories', requireApiAuth, async (request, response) => {
   }
 });
 
+app.post('/api/stories/:storyId/view', requireApiAuth, async (request,response)=>{
+  const storyId=request.params.storyId;if(!validNumericId(storyId))return response.status(400).json({error:'Invalid story.'});
+  try{await ensureDatabase();const story=await pool.query('SELECT user_id FROM stories WHERE id=$1 LIMIT 1',[storyId]);if(!story.rowCount)return response.status(404).json({error:'Story not found.'});if(String(story.rows[0].user_id)!==String(request.user.id)){await pool.query(`INSERT INTO story_views(story_id,viewer_id,viewed_at) VALUES($1,$2,NOW()) ON CONFLICT(story_id,viewer_id) DO UPDATE SET viewed_at=EXCLUDED.viewed_at`,[storyId,request.user.id]);}response.json({ok:true});}
+  catch(error){console.error('Story view failed:',error.message);response.status(500).json({error:'Could not record story view.'});}
+});
+
+app.post('/api/stories/:storyId/question-responses', requireApiAuth, async (request,response)=>{
+  const storyId=request.params.storyId,question=String(request.body?.question||'').trim().slice(0,500),answer=String(request.body?.answer||'').trim().slice(0,1000);
+  if(!validNumericId(storyId)||!answer)return response.status(400).json({error:'Write a response.'});
+  try{
+    await ensureDatabase();const story=await pool.query('SELECT id,user_id FROM stories WHERE id=$1 LIMIT 1',[storyId]);if(!story.rowCount)return response.status(404).json({error:'Story not found.'});const ownerId=String(story.rows[0].user_id);if(ownerId===String(request.user.id))return response.status(400).json({error:'You cannot reply to your own question.'});
+    const saved=await pool.query(`INSERT INTO story_question_responses(story_id,responder_id,question,answer) VALUES($1,$2,$3,$4) RETURNING id,created_at`,[storyId,request.user.id,question,answer]);
+    await createNotification(pool,{userId:ownerId,actorId:request.user.id,type:'story_question_reply',storyId,detail:answer});
+    const ids=[String(request.user.id),ownerId].sort((a,b)=>Number(a)-Number(b)),key=`direct:${ids[0]}:${ids[1]}`;
+    const created=await pool.query(`INSERT INTO messenger_conversations(conversation_type,created_by,direct_key) VALUES('direct',$1,$2) ON CONFLICT(direct_key) DO UPDATE SET direct_key=EXCLUDED.direct_key RETURNING id`,[request.user.id,key]);const conversationId=created.rows[0].id;
+    await pool.query(`INSERT INTO messenger_conversation_members(conversation_id,user_id,role) VALUES($1,$2,'member'),($1,$3,'member') ON CONFLICT DO NOTHING`,[conversationId,request.user.id,ownerId]);
+    const clientId=`story-question-${storyId}-${saved.rows[0].id}`;let msg=await pool.query(`INSERT INTO messenger_messages(conversation_id,sender_id,client_id,message_type,body) VALUES($1,$2,$3,'text',$4) ON CONFLICT(sender_id,client_id) DO NOTHING RETURNING id`,[conversationId,request.user.id,clientId,`Replied to your question\n${answer}`]);if(!msg.rowCount)msg=await pool.query('SELECT id FROM messenger_messages WHERE sender_id=$1 AND client_id=$2 LIMIT 1',[request.user.id,clientId]);if(msg.rowCount)await messengerFinalizeMessage(msg.rows[0].id,conversationId,request.user.id);
+    response.status(201).json({ok:true,responseId:String(saved.rows[0].id),storyId:String(storyId)});
+  }catch(error){console.error('Story question response failed:',error.message);response.status(500).json({error:'Could not send response.'});}
+});
+
+app.get('/api/stories/:storyId/activity', requireApiAuth, async (request,response)=>{
+  const storyId=request.params.storyId;if(!validNumericId(storyId))return response.status(400).json({error:'Invalid story.'});
+  try{await ensureDatabase();const story=await pool.query('SELECT user_id FROM stories WHERE id=$1 LIMIT 1',[storyId]);if(!story.rowCount)return response.status(404).json({error:'Story not found.'});if(String(story.rows[0].user_id)!==String(request.user.id))return response.status(403).json({error:'Story activity is private.'});
+    const responses=await pool.query(`SELECT r.id,r.answer,r.question,r.created_at,u.id AS user_id,COALESCE(NULLIF(BTRIM(u.full_name),''),'Halo user') AS name,u.profile_photo FROM story_question_responses r JOIN users u ON u.id=r.responder_id WHERE r.story_id=$1 ORDER BY r.created_at DESC`,[storyId]);
+    const viewers=await pool.query(`SELECT v.viewed_at,u.id AS user_id,COALESCE(NULLIF(BTRIM(u.full_name),''),'Halo user') AS name,u.profile_photo FROM story_views v JOIN users u ON u.id=v.viewer_id WHERE v.story_id=$1 ORDER BY v.viewed_at DESC`,[storyId]);
+    response.json({storyId:String(storyId),viewCount:viewers.rowCount,responses:responses.rows.map(r=>({id:String(r.id),userId:String(r.user_id),name:r.name,profilePhoto:r.profile_photo||'',question:r.question||'',answer:r.answer||'',createdAt:r.created_at})),viewers:viewers.rows.map(r=>({userId:String(r.user_id),name:r.name,profilePhoto:r.profile_photo||'',viewedAt:r.viewed_at}))});
+  }catch(error){console.error('Story activity failed:',error.message);response.status(500).json({error:'Could not load story activity.'});}
+});
+
 app.delete('/api/stories/:storyId', requireApiAuth, async (request, response) => {
   const storyId = request.params.storyId;
   if (!validNumericId(storyId)) return response.status(400).json({ error: 'Invalid story.' });
@@ -16865,7 +16916,7 @@ app.get('/api/notifications', requireApiAuth, async (request, response) => {
   try {
     await ensureDatabase();
     const result = await pool.query(
-      `SELECT n.id, n.type, n.post_id, n.detail, n.comment_id, n.read_at, n.created_at,
+      `SELECT n.id, n.type, n.post_id, n.story_id, n.detail, n.comment_id, n.read_at, n.created_at,
               actor.id AS actor_id, actor.full_name AS actor_name, actor.profile_photo AS actor_profile_photo,
               posts.user_id AS post_owner_id,
               pending_request.id AS friend_request_id
@@ -16886,6 +16937,7 @@ app.get('/api/notifications', requireApiAuth, async (request, response) => {
       id: String(row.id),
       type: row.type,
       postId: row.post_id ? String(row.post_id) : '',
+      storyId: row.story_id ? String(row.story_id) : '',
       postOwnerId: row.post_owner_id ? String(row.post_owner_id) : '',
       actorId: row.actor_id ? String(row.actor_id) : '',
       actorName: row.actor_name || 'Facebook user',
