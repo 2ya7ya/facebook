@@ -9682,6 +9682,17 @@ async function ensureDatabase() {
   `);
 
   await pool.query('ALTER TABLE notifications ADD COLUMN IF NOT EXISTS story_id BIGINT REFERENCES stories(id) ON DELETE CASCADE');
+  await pool.query('ALTER TABLE story_views ADD COLUMN IF NOT EXISTS user_id BIGINT REFERENCES users(id) ON DELETE CASCADE');
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='story_views' AND column_name='viewer_id') THEN
+        UPDATE story_views SET user_id=viewer_id WHERE user_id IS NULL;
+      END IF;
+    END $$;
+  `);
+  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS story_views_story_user_unique_idx ON story_views (story_id, user_id) WHERE user_id IS NOT NULL');
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS story_views (
       story_id BIGINT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
@@ -9875,6 +9886,7 @@ function notificationPushText(type, actorName) {
   if (type === 'mention') return `${actor} mentioned you.`;
   if (type === 'friend_request') return `${actor} sent you a friend request.`;
   if (type === 'friend_accept') return `${actor} accepted your friend request.`;
+  if (type === 'story_question_reply') return `${actor} replied to your question.`;
 
   return `${actor} sent you a notification.`;
 }
@@ -9885,6 +9897,7 @@ async function sendNotificationPush({
   actorId,
   type,
   postId = null,
+  storyId = null,
   commentId = null,
   detail = ''
 }) {
@@ -9978,6 +9991,7 @@ async function sendNotificationPush({
         actorName: String(actorName || ''),
         actorProfilePhoto: String(actorProfilePhoto || ''),
         postId: String(postId || ''),
+        storyId: String(storyId || ''),
         commentId: String(commentId || ''),
         detail: cleanDetail,
         mediaPreviewUrl: String(mediaPreviewUrl || ''),
@@ -10184,6 +10198,7 @@ async function createNotification(client, { userId, actorId, type, postId = null
     actorId,
     type,
     postId,
+    storyId,
     commentId,
     detail
   }).catch(error => {
@@ -15892,12 +15907,6 @@ app.post('/api/stories', requireApiAuth, async (request, response) => {
   }
 });
 
-app.post('/api/stories/:storyId/view', requireApiAuth, async (request,response)=>{
-  const storyId=request.params.storyId;if(!validNumericId(storyId))return response.status(400).json({error:'Invalid story.'});
-  try{await ensureDatabase();const story=await pool.query('SELECT user_id FROM stories WHERE id=$1 LIMIT 1',[storyId]);if(!story.rowCount)return response.status(404).json({error:'Story not found.'});if(String(story.rows[0].user_id)!==String(request.user.id)){await pool.query(`INSERT INTO story_views(story_id,viewer_id,viewed_at) VALUES($1,$2,NOW()) ON CONFLICT(story_id,viewer_id) DO UPDATE SET viewed_at=EXCLUDED.viewed_at`,[storyId,request.user.id]);}response.json({ok:true});}
-  catch(error){console.error('Story view failed:',error.message);response.status(500).json({error:'Could not record story view.'});}
-});
-
 app.post('/api/stories/:storyId/question-responses', requireApiAuth, async (request,response)=>{
   const storyId=request.params.storyId,question=String(request.body?.question||'').trim().slice(0,500),answer=String(request.body?.answer||'').trim().slice(0,1000);
   if(!validNumericId(storyId)||!answer)return response.status(400).json({error:'Write a response.'});
@@ -15917,7 +15926,7 @@ app.get('/api/stories/:storyId/activity', requireApiAuth, async (request,respons
   const storyId=request.params.storyId;if(!validNumericId(storyId))return response.status(400).json({error:'Invalid story.'});
   try{await ensureDatabase();const story=await pool.query('SELECT user_id FROM stories WHERE id=$1 LIMIT 1',[storyId]);if(!story.rowCount)return response.status(404).json({error:'Story not found.'});if(String(story.rows[0].user_id)!==String(request.user.id))return response.status(403).json({error:'Story activity is private.'});
     const responses=await pool.query(`SELECT r.id,r.answer,r.question,r.created_at,u.id AS user_id,COALESCE(NULLIF(BTRIM(u.full_name),''),'Halo user') AS name,u.profile_photo FROM story_question_responses r JOIN users u ON u.id=r.responder_id WHERE r.story_id=$1 ORDER BY r.created_at DESC`,[storyId]);
-    const viewers=await pool.query(`SELECT v.viewed_at,u.id AS user_id,COALESCE(NULLIF(BTRIM(u.full_name),''),'Halo user') AS name,u.profile_photo FROM story_views v JOIN users u ON u.id=v.viewer_id WHERE v.story_id=$1 ORDER BY v.viewed_at DESC`,[storyId]);
+    const viewers=await pool.query(`SELECT v.viewed_at,u.id AS user_id,COALESCE(NULLIF(BTRIM(u.full_name),''),'Halo user') AS name,u.profile_photo FROM story_views v JOIN users u ON u.id=v.user_id WHERE v.story_id=$1 AND v.user_id IS NOT NULL ORDER BY v.viewed_at DESC`,[storyId]);
     response.json({storyId:String(storyId),viewCount:viewers.rowCount,responses:responses.rows.map(r=>({id:String(r.id),userId:String(r.user_id),name:r.name,profilePhoto:r.profile_photo||'',question:r.question||'',answer:r.answer||'',createdAt:r.created_at})),viewers:viewers.rows.map(r=>({userId:String(r.user_id),name:r.name,profilePhoto:r.profile_photo||'',viewedAt:r.viewed_at}))});
   }catch(error){console.error('Story activity failed:',error.message);response.status(500).json({error:'Could not load story activity.'});}
 });
