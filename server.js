@@ -9982,6 +9982,7 @@ async function sendNotificationPush({
 
     const result = await messaging.sendEachForMulticast({
       tokens,
+      notification: { title: actorName, body: pushBody },
       data: {
         title: actorName,
         body: pushBody,
@@ -9998,7 +9999,8 @@ async function sendNotificationPush({
         mediaPreviewType: String(mediaPreviewType || '')
       },
       android: {
-        priority: 'high'
+        priority: 'high',
+        notification: { channelId: 'facetok_notifications', icon: 'ic_notification_facetok', sound: 'default' }
       }
     });
 
