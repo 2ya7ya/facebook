@@ -15701,6 +15701,107 @@ app.post('/api/music-library/toggle', requireApiAuth, async (request, response) 
 });
 
 
+function audiusAuthHeaders(extra = {}) {
+  const token = String(process.env.AUDIUS_BEARER_TOKEN || '').trim();
+  const headers = { ...extra };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
+app.get('/api/story-music/search', requireApiAuth, async (request, response) => {
+  const query = String(request.query.q || '').trim() || 'popular';
+  if (query.length > 120) return response.status(400).json({ error: 'Search is too long.' });
+
+  try {
+    const url = new URL('https://api.audius.co/v1/tracks/search');
+    url.searchParams.set('query', query);
+    url.searchParams.set('limit', '30');
+    url.searchParams.set('sort_method', 'relevant');
+
+    const upstream = await fetch(url, {
+      headers: audiusAuthHeaders({ Accept: 'application/json' })
+    });
+    if (!upstream.ok) {
+      const detail = await upstream.text().catch(() => '');
+      console.error('Audius track search failed:', upstream.status, detail.slice(0, 300));
+      return response.status(502).json({ error: 'Could not search music right now.' });
+    }
+
+    const payload = await upstream.json();
+    const rawTracks = Array.isArray(payload?.data)
+      ? payload.data
+      : Array.isArray(payload?.tracks)
+        ? payload.tracks
+        : [];
+
+    const tracks = rawTracks
+      .map(track => {
+        const streamable = track?.is_streamable ?? track?.isStreamable;
+        if (streamable === false || String(streamable).toLowerCase() === 'false') return null;
+        const id = String(track?.id || '').trim();
+        if (!id) return null;
+        const user = track?.user || {};
+        const artwork = track?.artwork || track?.cover_art || {};
+        return {
+          id,
+          title: String(track?.title || 'Track'),
+          artist: String(user?.name || user?.handle || track?.artist || 'Unknown artist'),
+          durationMs: Math.max(0, Number(track?.duration || 0) * 1000),
+          artwork: String(
+            artwork?._480x480 || artwork?.['480x480'] ||
+            artwork?._150x150 || artwork?.['150x150'] || ''
+          ),
+          streamUrl: `/api/story-music/${encodeURIComponent(id)}/stream`
+        };
+      })
+      .filter(Boolean);
+
+    response.json({ tracks });
+  } catch (error) {
+    console.error('Audius track search failed:', error.message);
+    response.status(502).json({ error: 'Could not search music right now.' });
+  }
+});
+
+app.get('/api/story-music/:trackId/stream', requireApiAuth, async (request, response) => {
+  const trackId = String(request.params.trackId || '').trim();
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(trackId)) {
+    return response.status(400).json({ error: 'Invalid track.' });
+  }
+
+  try {
+    const upstreamHeaders = { Accept: 'audio/mpeg,audio/*;q=0.9,*/*;q=0.1' };
+    const requestedRange = String(request.headers.range || '').trim();
+    if (requestedRange) upstreamHeaders.Range = requestedRange;
+
+    const upstream = await fetch(
+      `https://api.audius.co/v1/tracks/${encodeURIComponent(trackId)}/stream`,
+      { headers: audiusAuthHeaders(upstreamHeaders), redirect: 'follow' }
+    );
+
+    if (!upstream.ok && upstream.status !== 206) {
+      const detail = await upstream.text().catch(() => '');
+      console.error('Audius track stream failed:', upstream.status, detail.slice(0, 300));
+      return response.status(upstream.status === 404 ? 404 : 502).json({ error: 'Could not play this track.' });
+    }
+
+    response.status(upstream.status);
+    for (const name of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
+      const value = upstream.headers.get(name);
+      if (value) response.setHeader(name, value);
+    }
+    response.setHeader('Cache-Control', 'private, max-age=300');
+
+    if (!upstream.body) return response.end();
+    Readable.fromWeb(upstream.body).pipe(response);
+  } catch (error) {
+    console.error('Audius track stream failed:', error.message);
+    if (!response.headersSent) response.status(502).json({ error: 'Could not play this track.' });
+    else response.end();
+  }
+});
+
+
 app.post('/api/stories/:storyId/like', requireApiAuth, async (request, response) => {
   const storyId = String(request.params.storyId || '');
   if (!/^\d+$/.test(storyId)) return response.status(400).json({ error: 'Invalid story.' });
