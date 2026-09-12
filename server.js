@@ -9712,6 +9712,14 @@ async function ensureDatabase() {
     )
   `);
   await pool.query('CREATE INDEX IF NOT EXISTS story_question_responses_story_idx ON story_question_responses (story_id, created_at DESC)');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS story_hidden_users (
+      owner_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      hidden_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (owner_id, hidden_user_id)
+    )
+  `);
   await pool.query('CREATE INDEX IF NOT EXISTS story_views_story_idx ON story_views (story_id, viewed_at DESC)');
   await pool.query(`CREATE TABLE IF NOT EXISTS story_likes (
     story_id BIGINT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
@@ -15773,6 +15781,10 @@ app.get('/api/stories', requireApiAuth, async (request, response) => {
       JOIN users u ON u.id = s.user_id
       LEFT JOIN story_views sv ON sv.story_id = s.id AND sv.user_id = $1
       WHERE s.created_at >= NOW() - INTERVAL '24 hours'
+        AND NOT EXISTS (
+          SELECT 1 FROM story_hidden_users shu
+          WHERE shu.owner_id=s.user_id AND shu.hidden_user_id=$1
+        )
       ORDER BY s.created_at DESC
       LIMIT 50
     `, [request.user.id]);
@@ -15909,6 +15921,18 @@ app.post('/api/stories', requireApiAuth, async (request, response) => {
   }
 });
 
+app.post('/api/stories/privacy/hide/:userId', requireApiAuth, async (request,response)=>{
+  const hiddenUserId=String(request.params.userId||'');
+  if(!validNumericId(hiddenUserId)||hiddenUserId===String(request.user.id))return response.status(400).json({error:'Choose a valid person.'});
+  try{
+    await ensureDatabase();
+    const exists=await pool.query('SELECT id FROM users WHERE id=$1 LIMIT 1',[hiddenUserId]);
+    if(!exists.rowCount)return response.status(404).json({error:'User not found.'});
+    await pool.query('INSERT INTO story_hidden_users(owner_id,hidden_user_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[request.user.id,hiddenUserId]);
+    response.json({ok:true,userId:hiddenUserId});
+  }catch(error){console.error('Story hide failed:',error.message);response.status(500).json({error:'Could not update story privacy.'});}
+});
+
 app.post('/api/stories/:storyId/question-responses', requireApiAuth, async (request,response)=>{
   const storyId=request.params.storyId,question=String(request.body?.question||'').trim().slice(0,500),answer=String(request.body?.answer||'').trim().slice(0,1000);
   if(!validNumericId(storyId)||!answer)return response.status(400).json({error:'Write a response.'});
@@ -15922,6 +15946,20 @@ app.post('/api/stories/:storyId/question-responses', requireApiAuth, async (requ
     const clientId=`story-question-${storyId}-${saved.rows[0].id}`;let msg=await pool.query(`INSERT INTO messenger_messages(conversation_id,sender_id,client_id,message_type,body) VALUES($1,$2,$3,'text',$4) ON CONFLICT(sender_id,client_id) DO NOTHING RETURNING id`,[conversationId,request.user.id,clientId,`Replied to your question\n${answer}`]);if(!msg.rowCount)msg=await pool.query('SELECT id FROM messenger_messages WHERE sender_id=$1 AND client_id=$2 LIMIT 1',[request.user.id,clientId]);if(msg.rowCount)await messengerFinalizeMessage(msg.rows[0].id,conversationId,request.user.id);
     response.status(201).json({ok:true,responseId:String(saved.rows[0].id),storyId:String(storyId)});
   }catch(error){console.error('Story question response failed:',error.message);response.status(500).json({error:'Could not send response.'});}
+});
+
+app.delete('/api/stories/:storyId/question-responses/:responseId', requireApiAuth, async (request,response)=>{
+  const storyId=request.params.storyId,responseId=request.params.responseId;
+  if(!validNumericId(storyId)||!validNumericId(responseId))return response.status(400).json({error:'Invalid response.'});
+  try{
+    await ensureDatabase();
+    const story=await pool.query('SELECT user_id FROM stories WHERE id=$1 LIMIT 1',[storyId]);
+    if(!story.rowCount)return response.status(404).json({error:'Story not found.'});
+    if(String(story.rows[0].user_id)!==String(request.user.id)&&String(request.user.id)!=='1')return response.status(403).json({error:'You cannot delete this response.'});
+    const removed=await pool.query('DELETE FROM story_question_responses WHERE id=$1 AND story_id=$2 RETURNING id',[responseId,storyId]);
+    if(!removed.rowCount)return response.status(404).json({error:'Response not found.'});
+    response.json({ok:true,responseId:String(responseId),storyId:String(storyId)});
+  }catch(error){console.error('Story response deletion failed:',error.message);response.status(500).json({error:'Could not delete response.'});}
 });
 
 app.get('/api/stories/:storyId/activity', requireApiAuth, async (request,response)=>{
