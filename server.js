@@ -15708,9 +15708,18 @@ function audiusAuthHeaders(extra = {}) {
   return headers;
 }
 
+const storyMusicSearchCache = new Map();
+const STORY_MUSIC_SEARCH_CACHE_MS = 60 * 1000;
+
 app.get('/api/story-music/search', requireApiAuth, async (request, response) => {
   const query = String(request.query.q || '').trim() || 'popular';
   if (query.length > 120) return response.status(400).json({ error: 'Search is too long.' });
+
+  const cacheKey = query.toLowerCase();
+  const cached = storyMusicSearchCache.get(cacheKey);
+  if (cached && (Date.now() - cached.at) < STORY_MUSIC_SEARCH_CACHE_MS) {
+    return response.json({ tracks: cached.tracks, cached: true });
+  }
 
   try {
     const url = new URL('https://api.audius.co/v1/tracks/search');
@@ -15756,7 +15765,13 @@ app.get('/api/story-music/search', requireApiAuth, async (request, response) => 
       })
       .filter(Boolean);
 
-    response.json({ tracks });
+    storyMusicSearchCache.set(cacheKey, { at: Date.now(), tracks });
+    if (storyMusicSearchCache.size > 50) {
+      const oldestKey = storyMusicSearchCache.keys().next().value;
+      if (oldestKey) storyMusicSearchCache.delete(oldestKey);
+    }
+    response.setHeader('Cache-Control', 'private, max-age=30');
+    response.json({ tracks, cached: false });
   } catch (error) {
     console.error('Audius track search failed:', error.message);
     response.status(502).json({ error: 'Could not search music right now.' });
