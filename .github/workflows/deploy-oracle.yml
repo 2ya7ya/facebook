@@ -18,6 +18,7 @@ jobs:
           WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           AUDIUS_API_KEY: ${{ secrets.AUDIUS_API_KEY }}
+          AUDIUS_BEARER_TOKEN: ${{ secrets.AUDIUS_BEARER_TOKEN }}
           SUPPORT_INBOX_TOKEN: ${{ secrets.SUPPORT_INBOX_TOKEN }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
@@ -33,6 +34,7 @@ jobs:
           WA_TOKEN_B64="$(printf '%s' "$WHATSAPP_ACCESS_TOKEN" | base64 -w0)"
           OPENAI_KEY_B64="$(printf '%s' "$OPENAI_API_KEY" | base64 -w0)"
           AUDIUS_KEY_B64="$(printf '%s' "$AUDIUS_API_KEY" | base64 -w0)"
+          AUDIUS_BEARER_B64="$(printf '%s' "$AUDIUS_BEARER_TOKEN" | base64 -w0)"
           SUPPORT_TOKEN_B64="$(printf '%s' "$SUPPORT_INBOX_TOKEN" | base64 -w0)"
           SMTP_USER_B64="$(printf '%s' "$SMTP_USER" | base64 -w0)"
           SMTP_PASS_B64="$(printf '%s' "$SMTP_PASS" | base64 -w0)"
@@ -41,7 +43,7 @@ jobs:
           ssh -o StrictHostKeyChecking=accept-new \
               -i ~/.ssh/oracle_deploy \
               "$USER@$HOST" \
-              "WA_TOKEN_B64='$WA_TOKEN_B64' OPENAI_KEY_B64='$OPENAI_KEY_B64' AUDIUS_KEY_B64='$AUDIUS_KEY_B64' SUPPORT_TOKEN_B64='$SUPPORT_TOKEN_B64' SMTP_HOST='$SMTP_HOST' SMTP_PORT='$SMTP_PORT' SMTP_SECURE='$SMTP_SECURE' SMTP_USER_B64='$SMTP_USER_B64' SMTP_PASS_B64='$SMTP_PASS_B64' SMTP_FROM_B64='$SMTP_FROM_B64' bash -s" <<'REMOTE'
+              "WA_TOKEN_B64='$WA_TOKEN_B64' OPENAI_KEY_B64='$OPENAI_KEY_B64' AUDIUS_KEY_B64='$AUDIUS_KEY_B64' AUDIUS_BEARER_B64='$AUDIUS_BEARER_B64' SUPPORT_TOKEN_B64='$SUPPORT_TOKEN_B64' SMTP_HOST='$SMTP_HOST' SMTP_PORT='$SMTP_PORT' SMTP_SECURE='$SMTP_SECURE' SMTP_USER_B64='$SMTP_USER_B64' SMTP_PASS_B64='$SMTP_PASS_B64' SMTP_FROM_B64='$SMTP_FROM_B64' bash -s" <<'REMOTE'
             set -e
             cd /home/opc/facebook
             git fetch origin main
@@ -52,6 +54,7 @@ jobs:
             export WHATSAPP_PHONE_NUMBER_ID="1265692673299937"
             export OPENAI_API_KEY="$(printf '%s' "$OPENAI_KEY_B64" | base64 -d)"
             export AUDIUS_API_KEY="$(printf '%s' "$AUDIUS_KEY_B64" | base64 -d)"
+            export AUDIUS_BEARER_TOKEN="$(printf '%s' "$AUDIUS_BEARER_B64" | base64 -d)"
             export SUPPORT_INBOX_TOKEN="$(printf '%s' "$SUPPORT_TOKEN_B64" | base64 -d)"
             export SMTP_HOST="$SMTP_HOST"
             export SMTP_PORT="$SMTP_PORT"
