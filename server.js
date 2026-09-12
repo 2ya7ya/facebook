@@ -15710,6 +15710,114 @@ function audiusAuthHeaders(extra = {}) {
 
 const storyMusicSearchCache = new Map();
 const STORY_MUSIC_SEARCH_CACHE_MS = 60 * 1000;
+const storyMusicPreparedStreamCache = new Map();
+let storyMusicSavedReady = null;
+
+function ensureStoryMusicSavedTable() {
+  if (!storyMusicSavedReady) {
+    storyMusicSavedReady = pool.query(`
+      CREATE TABLE IF NOT EXISTS story_music_saved (
+        user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        track_id TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT '',
+        artist TEXT NOT NULL DEFAULT '',
+        artwork TEXT NOT NULL DEFAULT '',
+        stream_url TEXT NOT NULL DEFAULT '',
+        duration_ms BIGINT NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, track_id)
+      )
+    `).then(async () => {
+      await pool.query(
+        'CREATE INDEX IF NOT EXISTS story_music_saved_user_created_idx ON story_music_saved(user_id, created_at DESC)'
+      );
+    }).catch(error => {
+      storyMusicSavedReady = null;
+      throw error;
+    });
+  }
+  return storyMusicSavedReady;
+}
+
+async function musicTracksWithSavedState(userId, tracks) {
+  await ensureStoryMusicSavedTable();
+  const ids = [...new Set((tracks || []).map(track => String(track?.id || '')).filter(Boolean))];
+  if (!ids.length) return tracks || [];
+  const saved = await pool.query(
+    'SELECT track_id FROM story_music_saved WHERE user_id = $1 AND track_id = ANY($2::text[])',
+    [Number(userId), ids]
+  );
+  const savedIds = new Set(saved.rows.map(row => String(row.track_id)));
+  return (tracks || []).map(track => ({ ...track, saved: savedIds.has(String(track.id)) }));
+}
+
+app.get('/api/story-music/saved', requireApiAuth, async (request, response) => {
+  try {
+    await ensureStoryMusicSavedTable();
+    const result = await pool.query(
+      `SELECT track_id, title, artist, artwork, stream_url, duration_ms
+         FROM story_music_saved
+        WHERE user_id = $1
+        ORDER BY created_at DESC
+        LIMIT 200`,
+      [Number(request.user.id)]
+    );
+    const tracks = result.rows.map(row => ({
+      id: String(row.track_id),
+      title: String(row.title || 'Track'),
+      artist: String(row.artist || 'Unknown artist'),
+      artwork: String(row.artwork || ''),
+      durationMs: Math.max(0, Number(row.duration_ms || 0)),
+      streamUrl: String(row.stream_url || '') || `/api/story-music/${encodeURIComponent(String(row.track_id))}/stream`,
+      saved: true
+    }));
+    response.setHeader('Cache-Control', 'no-store');
+    response.json({ tracks });
+  } catch (error) {
+    console.error('Story music saved list failed:', error.message);
+    response.status(500).json({ error: 'Could not load saved songs.' });
+  }
+});
+
+app.post('/api/story-music/saved/toggle', requireApiAuth, async (request, response) => {
+  try {
+    await ensureStoryMusicSavedTable();
+    const trackId = String(request.body?.trackId || '').trim();
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(trackId)) {
+      return response.status(400).json({ error: 'Invalid track.' });
+    }
+    const save = request.body?.saved !== false;
+    if (!save) {
+      await pool.query(
+        'DELETE FROM story_music_saved WHERE user_id = $1 AND track_id = $2',
+        [Number(request.user.id), trackId]
+      );
+      return response.json({ ok: true, saved: false });
+    }
+    const title = String(request.body?.title || 'Track').slice(0, 500);
+    const artist = String(request.body?.artist || 'Unknown artist').slice(0, 500);
+    const artwork = String(request.body?.artwork || '').slice(0, 4000);
+    const streamUrl = String(request.body?.streamUrl || '').slice(0, 4000);
+    const durationMs = Math.max(0, Math.min(Number(request.body?.durationMs || 0), 24 * 60 * 60 * 1000));
+    await pool.query(
+      `INSERT INTO story_music_saved
+         (user_id, track_id, title, artist, artwork, stream_url, duration_ms, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
+       ON CONFLICT (user_id, track_id)
+       DO UPDATE SET title = EXCLUDED.title,
+                     artist = EXCLUDED.artist,
+                     artwork = EXCLUDED.artwork,
+                     stream_url = EXCLUDED.stream_url,
+                     duration_ms = EXCLUDED.duration_ms,
+                     created_at = NOW()`,
+      [Number(request.user.id), trackId, title, artist, artwork, streamUrl, durationMs]
+    );
+    response.json({ ok: true, saved: true });
+  } catch (error) {
+    console.error('Story music save toggle failed:', error.message);
+    response.status(500).json({ error: 'Could not update saved song.' });
+  }
+});
 
 app.get('/api/story-music/search', requireApiAuth, async (request, response) => {
   const query = String(request.query.q || '').trim() || 'popular';
@@ -15718,7 +15826,14 @@ app.get('/api/story-music/search', requireApiAuth, async (request, response) => 
   const cacheKey = query.toLowerCase();
   const cached = storyMusicSearchCache.get(cacheKey);
   if (cached && (Date.now() - cached.at) < STORY_MUSIC_SEARCH_CACHE_MS) {
-    return response.json({ tracks: cached.tracks, cached: true });
+    try {
+      const tracks = await musicTracksWithSavedState(request.user.id, cached.tracks);
+      tracks.slice(0, 8).forEach(track => { void warmStoryMusicStream(track.id); });
+      return response.json({ tracks, cached: true });
+    } catch (error) {
+      console.error('Story music saved-state lookup failed:', error.message);
+      return response.json({ tracks: cached.tracks, cached: true });
+    }
   }
 
   try {
@@ -15771,10 +15886,91 @@ app.get('/api/story-music/search', requireApiAuth, async (request, response) => 
       if (oldestKey) storyMusicSearchCache.delete(oldestKey);
     }
     response.setHeader('Cache-Control', 'private, max-age=30');
-    response.json({ tracks, cached: false });
+    try {
+      const tracksWithSaved = await musicTracksWithSavedState(request.user.id, tracks);
+      tracksWithSaved.slice(0, 8).forEach(track => { void warmStoryMusicStream(track.id); });
+      response.json({ tracks: tracksWithSaved, cached: false });
+    } catch (savedError) {
+      console.error('Story music saved-state lookup failed:', savedError.message);
+      response.json({ tracks, cached: false });
+    }
   } catch (error) {
     console.error('Audius track search failed:', error.message);
     response.status(502).json({ error: 'Could not search music right now.' });
+  }
+});
+
+async function warmStoryMusicStream(trackId) {
+  trackId = String(trackId || '').trim();
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(trackId)) return;
+  const cached = storyMusicPreparedStreamCache.get(trackId);
+  if (cached && cached.expiresAt > Date.now()) return;
+  try {
+    const upstream = await fetch(
+      `https://api.audius.co/v1/tracks/${encodeURIComponent(trackId)}/stream`,
+      {
+        headers: audiusAuthHeaders({ Accept: 'audio/mpeg,audio/*;q=0.9,*/*;q=0.1' }),
+        redirect: 'manual'
+      }
+    );
+    const location = String(upstream.headers.get('location') || '').trim();
+    if (location && /^https?:\/\//i.test(location)) {
+      storyMusicPreparedStreamCache.set(trackId, {
+        url: location,
+        expiresAt: Date.now() + 4 * 60 * 1000
+      });
+      if (storyMusicPreparedStreamCache.size > 200) {
+        const oldestKey = storyMusicPreparedStreamCache.keys().next().value;
+        if (oldestKey) storyMusicPreparedStreamCache.delete(oldestKey);
+      }
+    }
+  } catch (_) {}
+}
+
+app.get('/api/story-music/:trackId/prepare', requireApiAuth, async (request, response) => {
+  const trackId = String(request.params.trackId || '').trim();
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(trackId)) {
+    return response.status(400).json({ error: 'Invalid track.' });
+  }
+
+  const cached = storyMusicPreparedStreamCache.get(trackId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return response.json({ streamUrl: cached.url, cached: true });
+  }
+
+  try {
+    const upstream = await fetch(
+      `https://api.audius.co/v1/tracks/${encodeURIComponent(trackId)}/stream`,
+      {
+        headers: audiusAuthHeaders({ Accept: 'audio/mpeg,audio/*;q=0.9,*/*;q=0.1' }),
+        redirect: 'manual'
+      }
+    );
+    const location = String(upstream.headers.get('location') || '').trim();
+    if (location && /^https?:\/\//i.test(location)) {
+      storyMusicPreparedStreamCache.set(trackId, {
+        url: location,
+        expiresAt: Date.now() + 4 * 60 * 1000
+      });
+      if (storyMusicPreparedStreamCache.size > 200) {
+        const oldestKey = storyMusicPreparedStreamCache.keys().next().value;
+        if (oldestKey) storyMusicPreparedStreamCache.delete(oldestKey);
+      }
+      return response.json({ streamUrl: location, cached: false });
+    }
+
+    // Some Audius deployments return the audio body directly instead of a
+    // redirect. In that case keep using Halo's authenticated stream proxy.
+    response.json({
+      streamUrl: `/api/story-music/${encodeURIComponent(trackId)}/stream`,
+      cached: false
+    });
+  } catch (error) {
+    console.error('Audius track prepare failed:', error.message);
+    response.json({
+      streamUrl: `/api/story-music/${encodeURIComponent(trackId)}/stream`,
+      cached: false
+    });
   }
 });
 
