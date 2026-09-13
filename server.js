@@ -15708,6 +15708,231 @@ function audiusAuthHeaders(extra = {}) {
   return headers;
 }
 
+
+function soundstripeAuthHeaders(extra = {}) {
+  const key = String(process.env.SOUNDSTRIPE_API_KEY || '').trim();
+  return {
+    Accept: 'application/vnd.api+json',
+    ...extra,
+    ...(key ? { Authorization: `Token ${key}` } : {})
+  };
+}
+
+function soundstripeConfigured() {
+  return Boolean(String(process.env.SOUNDSTRIPE_API_KEY || '').trim());
+}
+
+const soundstripeCatalogCache = {
+  at: 0,
+  tracks: []
+};
+const SOUNDSTRIPE_CATALOG_CACHE_MS = 15 * 60 * 1000;
+
+function soundstripeTrackId(rawId) {
+  return `ss_${String(rawId || '').trim()}`;
+}
+
+function soundstripeRawId(trackId) {
+  const value = String(trackId || '').trim();
+  return value.startsWith('ss_') ? value.slice(3) : '';
+}
+
+function soundstripeIncludedMap(included, type) {
+  const map = new Map();
+  for (const item of Array.isArray(included) ? included : []) {
+    if (String(item?.type || '') === type && item?.id != null) {
+      map.set(String(item.id), item);
+    }
+  }
+  return map;
+}
+
+function soundstripeTrackFromResource(song, included, playlistImageById = new Map()) {
+  if (!song || String(song.type || '') !== 'songs') return null;
+
+  const rawId = String(song.id || '').trim();
+  if (!rawId) return null;
+
+  const attrs = song.attributes || {};
+  const artistsById = soundstripeIncludedMap(included, 'artists');
+  const audioById = soundstripeIncludedMap(included, 'audio_files');
+
+  const artistRel = Array.isArray(song?.relationships?.artists?.data)
+    ? song.relationships.artists.data
+    : [];
+  const audioRel = Array.isArray(song?.relationships?.audio_files?.data)
+    ? song.relationships.audio_files.data
+    : [];
+
+  const artistResource = artistRel.length
+    ? artistsById.get(String(artistRel[0]?.id || ''))
+    : null;
+
+  const audioResource = audioRel.length
+    ? audioById.get(String(audioRel[0]?.id || ''))
+    : null;
+
+  const audioAttrs = audioResource?.attributes || {};
+  const mp3 = String(audioAttrs?.versions?.mp3 || '').trim();
+
+  const playlistIds = Array.isArray(attrs.playlist_ids)
+    ? attrs.playlist_ids.map(id => String(id))
+    : [];
+
+  let artwork = String(artistResource?.attributes?.image || '').trim();
+  if (!artwork) {
+    for (const playlistId of playlistIds) {
+      const candidate = String(playlistImageById.get(playlistId) || '').trim();
+      if (candidate) {
+        artwork = candidate;
+        break;
+      }
+    }
+  }
+
+  const tags = attrs.tags || {};
+  const searchable = [
+    attrs.title,
+    artistResource?.attributes?.name,
+    attrs.description,
+    ...(Array.isArray(tags.genre) ? tags.genre : []),
+    ...(Array.isArray(tags.mood) ? tags.mood : []),
+    ...(Array.isArray(tags.characteristic) ? tags.characteristic : [])
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return {
+    id: soundstripeTrackId(rawId),
+    title: String(attrs.title || 'Track'),
+    artist: String(artistResource?.attributes?.name || 'Unknown artist'),
+    durationMs: Math.max(0, Number(audioAttrs.duration || 0) * 1000),
+    artwork,
+    streamUrl: `/api/story-music/${encodeURIComponent(soundstripeTrackId(rawId))}/stream`,
+    provider: 'soundstripe',
+    _signedMp3: mp3,
+    _searchable: searchable
+  };
+}
+
+async function fetchSoundstripeCatalog(force = false) {
+  if (!soundstripeConfigured()) {
+    throw new Error('Soundstripe API key is not configured');
+  }
+
+  if (
+    !force &&
+    soundstripeCatalogCache.tracks.length &&
+    (Date.now() - soundstripeCatalogCache.at) < SOUNDSTRIPE_CATALOG_CACHE_MS
+  ) {
+    return soundstripeCatalogCache.tracks;
+  }
+
+  const url = new URL('https://api.soundstripe.com/v1/playlists');
+  url.searchParams.set('include', 'songs,songs.artists,songs.audio_files');
+  url.searchParams.set('filter[media_type]', 'songs');
+  url.searchParams.set('page[size]', '20');
+  url.searchParams.set('page[number]', '1');
+
+  const upstream = await fetch(url, {
+    headers: soundstripeAuthHeaders()
+  });
+
+  if (!upstream.ok) {
+    const detail = await upstream.text().catch(() => '');
+    throw new Error(
+      `Soundstripe playlists failed ${upstream.status}: ${detail.slice(0, 300)}`
+    );
+  }
+
+  const payload = await upstream.json();
+  const playlists = Array.isArray(payload?.data) ? payload.data : [];
+  const included = Array.isArray(payload?.included) ? payload.included : [];
+
+  const playlistImageById = new Map(
+    playlists.map(playlist => [
+      String(playlist?.id || ''),
+      String(playlist?.attributes?.image || '')
+    ])
+  );
+
+  const songsById = soundstripeIncludedMap(included, 'songs');
+
+  const prioritizedPlaylists = [...playlists].sort((a, b) => {
+    const score = playlist => {
+      const name = String(playlist?.attributes?.name || '').toLowerCase();
+      return /trending|social|viral|tiktok|reels?/.test(name) ? 0 : 1;
+    };
+    return score(a) - score(b);
+  });
+
+  const orderedSongIds = [];
+  const seenIds = new Set();
+
+  for (const playlist of prioritizedPlaylists) {
+    const rel = Array.isArray(playlist?.relationships?.songs?.data)
+      ? playlist.relationships.songs.data
+      : [];
+
+    for (const item of rel) {
+      const id = String(item?.id || '');
+      if (id && !seenIds.has(id)) {
+        seenIds.add(id);
+        orderedSongIds.push(id);
+      }
+    }
+  }
+
+  for (const id of songsById.keys()) {
+    if (!seenIds.has(id)) {
+      seenIds.add(id);
+      orderedSongIds.push(id);
+    }
+  }
+
+  const tracks = orderedSongIds
+    .map(id => soundstripeTrackFromResource(
+      songsById.get(id),
+      included,
+      playlistImageById
+    ))
+    .filter(Boolean);
+
+  soundstripeCatalogCache.at = Date.now();
+  soundstripeCatalogCache.tracks = tracks;
+
+  return tracks;
+}
+
+async function getSoundstripeSong(trackId) {
+  const rawId = soundstripeRawId(trackId);
+  if (!rawId) throw new Error('Not a Soundstripe track');
+
+  const url = `https://api.soundstripe.com/v1/songs/${encodeURIComponent(rawId)}`;
+  const upstream = await fetch(url, {
+    headers: soundstripeAuthHeaders()
+  });
+
+  if (!upstream.ok) {
+    const detail = await upstream.text().catch(() => '');
+    const error = new Error(
+      `Soundstripe song failed ${upstream.status}: ${detail.slice(0, 300)}`
+    );
+    error.status = upstream.status;
+    throw error;
+  }
+
+  const payload = await upstream.json();
+  const track = soundstripeTrackFromResource(
+    payload?.data,
+    Array.isArray(payload?.included) ? payload.included : []
+  );
+
+  if (!track) throw new Error('Soundstripe song response was incomplete');
+  return track;
+}
+
 const storyMusicSearchCache = new Map();
 const STORY_MUSIC_SEARCH_CACHE_MS = 60 * 1000;
 const storyMusicPreparedStreamCache = new Map();
@@ -15821,9 +16046,11 @@ app.post('/api/story-music/saved/toggle', requireApiAuth, async (request, respon
 
 app.get('/api/story-music/search', requireApiAuth, async (request, response) => {
   const query = String(request.query.q || '').trim() || 'popular';
-  if (query.length > 120) return response.status(400).json({ error: 'Search is too long.' });
+  if (query.length > 120) {
+    return response.status(400).json({ error: 'Search is too long.' });
+  }
 
-  const cacheKey = query.toLowerCase();
+  const cacheKey = `music:${query.toLowerCase()}`;
   const cached = storyMusicSearchCache.get(cacheKey);
   if (cached && (Date.now() - cached.at) < STORY_MUSIC_SEARCH_CACHE_MS) {
     try {
@@ -15836,6 +16063,71 @@ app.get('/api/story-music/search', requireApiAuth, async (request, response) => 
     }
   }
 
+  let soundstripeError = null;
+
+  if (soundstripeConfigured()) {
+    try {
+      const catalog = await fetchSoundstripeCatalog();
+      const normalized = query.toLowerCase();
+      const defaultFeed =
+        !normalized ||
+        ['popular', 'trending', 'for you', 'foryou', 'recommended'].includes(normalized);
+
+      const tracks = (defaultFeed
+        ? catalog
+        : catalog.filter(track =>
+            String(track?._searchable || '').includes(normalized)
+          )
+      )
+        .slice(0, 30)
+        .map(track => {
+          const clean = { ...track };
+          delete clean._signedMp3;
+          delete clean._searchable;
+          return clean;
+        });
+
+      if (tracks.length) {
+        storyMusicSearchCache.set(cacheKey, { at: Date.now(), tracks });
+        if (storyMusicSearchCache.size > 50) {
+          const oldestKey = storyMusicSearchCache.keys().next().value;
+          if (oldestKey) storyMusicSearchCache.delete(oldestKey);
+        }
+
+        response.setHeader('Cache-Control', 'private, max-age=30');
+        try {
+          const tracksWithSaved = await musicTracksWithSavedState(
+            request.user.id,
+            tracks
+          );
+          tracksWithSaved.slice(0, 8).forEach(track => {
+            void warmStoryMusicStream(track.id);
+          });
+          return response.json({
+            tracks: tracksWithSaved,
+            cached: false,
+            provider: 'soundstripe'
+          });
+        } catch (savedError) {
+          console.error(
+            'Story music saved-state lookup failed:',
+            savedError.message
+          );
+          return response.json({
+            tracks,
+            cached: false,
+            provider: 'soundstripe'
+          });
+        }
+      }
+    } catch (error) {
+      soundstripeError = error;
+      console.error('Soundstripe Story music search failed:', error.message);
+    }
+  }
+
+  // Keep Audius as a compatibility fallback for older saved Story music and
+  // for searches that are not present in the curated Soundstripe catalog.
   try {
     const url = new URL('https://api.audius.co/v1/tracks/search');
     url.searchParams.set('query', query);
@@ -15845,10 +16137,18 @@ app.get('/api/story-music/search', requireApiAuth, async (request, response) => 
     const upstream = await fetch(url, {
       headers: audiusAuthHeaders({ Accept: 'application/json' })
     });
+
     if (!upstream.ok) {
       const detail = await upstream.text().catch(() => '');
-      console.error('Audius track search failed:', upstream.status, detail.slice(0, 300));
-      return response.status(502).json({ error: 'Could not search music right now.' });
+      console.error(
+        'Audius fallback search failed:',
+        upstream.status,
+        detail.slice(0, 300)
+      );
+      return response.status(502).json({
+        error: 'Could not search music right now.',
+        soundstripe: soundstripeError ? soundstripeError.message : undefined
+      });
     }
 
     const payload = await upstream.json();
@@ -15861,68 +16161,116 @@ app.get('/api/story-music/search', requireApiAuth, async (request, response) => 
     const tracks = rawTracks
       .map(track => {
         const streamable = track?.is_streamable ?? track?.isStreamable;
-        if (streamable === false || String(streamable).toLowerCase() === 'false') return null;
+        if (
+          streamable === false ||
+          String(streamable).toLowerCase() === 'false'
+        ) {
+          return null;
+        }
+
         const id = String(track?.id || '').trim();
         if (!id) return null;
+
         const user = track?.user || {};
         const artwork = track?.artwork || track?.cover_art || {};
+
         return {
           id,
           title: String(track?.title || 'Track'),
-          artist: String(user?.name || user?.handle || track?.artist || 'Unknown artist'),
+          artist: String(
+            user?.name ||
+            user?.handle ||
+            track?.artist ||
+            'Unknown artist'
+          ),
           durationMs: Math.max(0, Number(track?.duration || 0) * 1000),
           artwork: String(
-            artwork?._480x480 || artwork?.['480x480'] ||
-            artwork?._150x150 || artwork?.['150x150'] || ''
+            artwork?._480x480 ||
+            artwork?.['480x480'] ||
+            artwork?._150x150 ||
+            artwork?.['150x150'] ||
+            ''
           ),
-          streamUrl: `/api/story-music/${encodeURIComponent(id)}/stream`
+          streamUrl: `/api/story-music/${encodeURIComponent(id)}/stream`,
+          provider: 'audius'
         };
       })
       .filter(Boolean);
 
     storyMusicSearchCache.set(cacheKey, { at: Date.now(), tracks });
-    if (storyMusicSearchCache.size > 50) {
-      const oldestKey = storyMusicSearchCache.keys().next().value;
-      if (oldestKey) storyMusicSearchCache.delete(oldestKey);
-    }
+
     response.setHeader('Cache-Control', 'private, max-age=30');
     try {
-      const tracksWithSaved = await musicTracksWithSavedState(request.user.id, tracks);
-      tracksWithSaved.slice(0, 8).forEach(track => { void warmStoryMusicStream(track.id); });
-      response.json({ tracks: tracksWithSaved, cached: false });
+      const tracksWithSaved = await musicTracksWithSavedState(
+        request.user.id,
+        tracks
+      );
+      tracksWithSaved.slice(0, 8).forEach(track => {
+        void warmStoryMusicStream(track.id);
+      });
+      return response.json({
+        tracks: tracksWithSaved,
+        cached: false,
+        provider: 'audius-fallback'
+      });
     } catch (savedError) {
       console.error('Story music saved-state lookup failed:', savedError.message);
-      response.json({ tracks, cached: false });
+      return response.json({
+        tracks,
+        cached: false,
+        provider: 'audius-fallback'
+      });
     }
   } catch (error) {
-    console.error('Audius track search failed:', error.message);
-    response.status(502).json({ error: 'Could not search music right now.' });
+    console.error('Story music search failed:', error.message);
+    return response.status(502).json({
+      error: 'Could not search music right now.'
+    });
   }
 });
 
 async function warmStoryMusicStream(trackId) {
   trackId = String(trackId || '').trim();
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(trackId)) return;
+
   const cached = storyMusicPreparedStreamCache.get(trackId);
   if (cached && cached.expiresAt > Date.now()) return;
+
+  if (trackId.startsWith('ss_') && soundstripeConfigured()) {
+    try {
+      const track = await getSoundstripeSong(trackId);
+      const signed = String(track?._signedMp3 || '').trim();
+
+      if (signed && /^https?:\/\//i.test(signed)) {
+        storyMusicPreparedStreamCache.set(trackId, {
+          url: signed,
+          expiresAt: Date.now() + 30 * 60 * 1000
+        });
+      }
+      return;
+    } catch (error) {
+      console.error('Soundstripe warm stream failed:', error.message);
+      return;
+    }
+  }
+
   try {
     const upstream = await fetch(
       `https://api.audius.co/v1/tracks/${encodeURIComponent(trackId)}/stream`,
       {
-        headers: audiusAuthHeaders({ Accept: 'audio/mpeg,audio/*;q=0.9,*/*;q=0.1' }),
+        headers: audiusAuthHeaders({
+          Accept: 'audio/mpeg,audio/*;q=0.9,*/*;q=0.1'
+        }),
         redirect: 'manual'
       }
     );
+
     const location = String(upstream.headers.get('location') || '').trim();
     if (location && /^https?:\/\//i.test(location)) {
       storyMusicPreparedStreamCache.set(trackId, {
         url: location,
         expiresAt: Date.now() + 4 * 60 * 1000
       });
-      if (storyMusicPreparedStreamCache.size > 200) {
-        const oldestKey = storyMusicPreparedStreamCache.keys().next().value;
-        if (oldestKey) storyMusicPreparedStreamCache.delete(oldestKey);
-      }
     }
   } catch (_) {}
 }
@@ -15938,38 +16286,70 @@ app.get('/api/story-music/:trackId/prepare', requireApiAuth, async (request, res
     return response.json({ streamUrl: cached.url, cached: true });
   }
 
+  if (trackId.startsWith('ss_')) {
+    try {
+      const track = await getSoundstripeSong(trackId);
+      const signed = String(track?._signedMp3 || '').trim();
+
+      if (!signed || !/^https?:\/\//i.test(signed)) {
+        return response.status(502).json({
+          error: 'Soundstripe did not provide playable audio for this song.'
+        });
+      }
+
+      storyMusicPreparedStreamCache.set(trackId, {
+        url: signed,
+        expiresAt: Date.now() + 30 * 60 * 1000
+      });
+
+      return response.json({
+        streamUrl: signed,
+        cached: false,
+        provider: 'soundstripe'
+      });
+    } catch (error) {
+      console.error('Soundstripe track prepare failed:', error.message);
+      return response.status(error.status === 404 ? 404 : 502).json({
+        error: 'Could not prepare this track.'
+      });
+    }
+  }
+
   try {
     const upstream = await fetch(
       `https://api.audius.co/v1/tracks/${encodeURIComponent(trackId)}/stream`,
       {
-        headers: audiusAuthHeaders({ Accept: 'audio/mpeg,audio/*;q=0.9,*/*;q=0.1' }),
+        headers: audiusAuthHeaders({
+          Accept: 'audio/mpeg,audio/*;q=0.9,*/*;q=0.1'
+        }),
         redirect: 'manual'
       }
     );
+
     const location = String(upstream.headers.get('location') || '').trim();
     if (location && /^https?:\/\//i.test(location)) {
       storyMusicPreparedStreamCache.set(trackId, {
         url: location,
         expiresAt: Date.now() + 4 * 60 * 1000
       });
-      if (storyMusicPreparedStreamCache.size > 200) {
-        const oldestKey = storyMusicPreparedStreamCache.keys().next().value;
-        if (oldestKey) storyMusicPreparedStreamCache.delete(oldestKey);
-      }
-      return response.json({ streamUrl: location, cached: false });
+      return response.json({
+        streamUrl: location,
+        cached: false,
+        provider: 'audius'
+      });
     }
 
-    // Some Audius deployments return the audio body directly instead of a
-    // redirect. In that case keep using Halo's authenticated stream proxy.
-    response.json({
+    return response.json({
       streamUrl: `/api/story-music/${encodeURIComponent(trackId)}/stream`,
-      cached: false
+      cached: false,
+      provider: 'audius'
     });
   } catch (error) {
     console.error('Audius track prepare failed:', error.message);
-    response.json({
+    return response.json({
       streamUrl: `/api/story-music/${encodeURIComponent(trackId)}/stream`,
-      cached: false
+      cached: false,
+      provider: 'audius'
     });
   }
 });
@@ -15981,34 +16361,92 @@ app.get('/api/story-music/:trackId/stream', requireApiAuth, async (request, resp
   }
 
   try {
-    const upstreamHeaders = { Accept: 'audio/mpeg,audio/*;q=0.9,*/*;q=0.1' };
+    const upstreamHeaders = {
+      Accept: 'audio/mpeg,audio/*;q=0.9,*/*;q=0.1'
+    };
     const requestedRange = String(request.headers.range || '').trim();
     if (requestedRange) upstreamHeaders.Range = requestedRange;
 
-    const upstream = await fetch(
-      `https://api.audius.co/v1/tracks/${encodeURIComponent(trackId)}/stream`,
-      { headers: audiusAuthHeaders(upstreamHeaders), redirect: 'follow' }
-    );
+    let upstream;
+    let provider;
+
+    if (trackId.startsWith('ss_')) {
+      provider = 'soundstripe';
+
+      let signed = '';
+      const cached = storyMusicPreparedStreamCache.get(trackId);
+
+      if (cached && cached.expiresAt > Date.now()) {
+        signed = String(cached.url || '').trim();
+      }
+
+      if (!signed) {
+        const track = await getSoundstripeSong(trackId);
+        signed = String(track?._signedMp3 || '').trim();
+
+        if (!signed) {
+          return response.status(502).json({
+            error: 'Could not play this Soundstripe track.'
+          });
+        }
+
+        storyMusicPreparedStreamCache.set(trackId, {
+          url: signed,
+          expiresAt: Date.now() + 30 * 60 * 1000
+        });
+      }
+
+      upstream = await fetch(signed, {
+        headers: upstreamHeaders,
+        redirect: 'follow'
+      });
+    } else {
+      provider = 'audius';
+      upstream = await fetch(
+        `https://api.audius.co/v1/tracks/${encodeURIComponent(trackId)}/stream`,
+        {
+          headers: audiusAuthHeaders(upstreamHeaders),
+          redirect: 'follow'
+        }
+      );
+    }
 
     if (!upstream.ok && upstream.status !== 206) {
       const detail = await upstream.text().catch(() => '');
-      console.error('Audius track stream failed:', upstream.status, detail.slice(0, 300));
-      return response.status(upstream.status === 404 ? 404 : 502).json({ error: 'Could not play this track.' });
+      console.error(
+        `${provider} track stream failed:`,
+        upstream.status,
+        detail.slice(0, 300)
+      );
+      return response.status(upstream.status === 404 ? 404 : 502).json({
+        error: 'Could not play this track.'
+      });
     }
 
     response.status(upstream.status);
-    for (const name of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
+    for (const name of [
+      'content-type',
+      'content-length',
+      'content-range',
+      'accept-ranges',
+      'etag',
+      'last-modified'
+    ]) {
       const value = upstream.headers.get(name);
       if (value) response.setHeader(name, value);
     }
     response.setHeader('Cache-Control', 'private, max-age=300');
+    response.setHeader('X-Halo-Music-Provider', provider);
 
     if (!upstream.body) return response.end();
     Readable.fromWeb(upstream.body).pipe(response);
   } catch (error) {
-    console.error('Audius track stream failed:', error.message);
-    if (!response.headersSent) response.status(502).json({ error: 'Could not play this track.' });
-    else response.end();
+    console.error('Story music stream failed:', error.message);
+    if (!response.headersSent) {
+      response.status(502).json({ error: 'Could not play this track.' });
+    } else {
+      response.end();
+    }
   }
 });
 
