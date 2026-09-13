@@ -15710,6 +15710,8 @@ function audiusAuthHeaders(extra = {}) {
 
 const storyMusicSearchCache = new Map();
 const STORY_MUSIC_SEARCH_CACHE_MS = 60 * 1000;
+const storyMusicFeedCache = new Map();
+const STORY_MUSIC_FEED_ROTATION_MS = 5 * 60 * 1000;
 const storyMusicPreparedStreamCache = new Map();
 let storyMusicSavedReady = null;
 
@@ -15819,6 +15821,116 @@ app.post('/api/story-music/saved/toggle', requireApiAuth, async (request, respon
   }
 });
 
+function mapAudiusStoryTrack(track) {
+  const streamable = track?.is_streamable ?? track?.isStreamable;
+  if (streamable === false || String(streamable).toLowerCase() === 'false') return null;
+  const id = String(track?.id || '').trim();
+  if (!id) return null;
+  const user = track?.user || {};
+  const artwork = track?.artwork || track?.cover_art || {};
+  return {
+    id,
+    title: String(track?.title || 'Track'),
+    artist: String(user?.name || user?.handle || track?.artist || 'Unknown artist'),
+    durationMs: Math.max(0, Number(track?.duration || 0) * 1000),
+    artwork: String(
+      artwork?._480x480 || artwork?.['480x480'] ||
+      artwork?._150x150 || artwork?.['150x150'] || ''
+    ),
+    streamUrl: `/api/story-music/${encodeURIComponent(id)}/stream`
+  };
+}
+
+app.get('/api/story-music/feed', requireApiAuth, async (request, response) => {
+  const category = String(request.query.category || '').trim().toLowerCase();
+  if (category !== 'for-you' && category !== 'trending') {
+    return response.status(400).json({ error: 'Invalid music category.' });
+  }
+
+  // Rotate the discovery window every five minutes. Trending always comes from
+  // Audius' real /tracks/trending list; For you rotates recent/popular discovery.
+  const rotation = Math.floor(Date.now() / STORY_MUSIC_FEED_ROTATION_MS);
+  const cacheKey = `${category}:${rotation}`;
+  const cached = storyMusicFeedCache.get(cacheKey);
+  if (cached) {
+    try {
+      const tracks = await musicTracksWithSavedState(request.user.id, cached);
+      tracks.slice(0, 8).forEach(track => { void warmStoryMusicStream(track.id); });
+      response.setHeader('Cache-Control', 'private, max-age=60');
+      return response.json({ tracks, category, cached: true });
+    } catch (error) {
+      console.error('Story music feed saved-state lookup failed:', error.message);
+      return response.json({ tracks: cached, category, cached: true });
+    }
+  }
+
+  try {
+    let url;
+    if (category === 'trending') {
+      url = new URL('https://api.audius.co/v1/tracks/trending');
+      url.searchParams.set('time', 'week');
+      url.searchParams.set('limit', '30');
+      // Audius documents the trending list as the top 100. Rotating the offset
+      // exposes different songs while staying inside that actual trending set.
+      url.searchParams.set('offset', String((rotation * 29) % 71));
+    } else {
+      url = new URL('https://api.audius.co/v1/tracks/search');
+      url.searchParams.set('limit', '30');
+      url.searchParams.set('sort_method', rotation % 2 === 0 ? 'recent' : 'popular');
+      url.searchParams.set('offset', String((rotation * 17) % 61));
+    }
+
+    let upstream = await fetch(url, {
+      headers: audiusAuthHeaders({ Accept: 'application/json' })
+    });
+
+    // If the broad For-you discovery query is rejected by an Audius deployment,
+    // fall back to a different slice of the real trending catalog instead of
+    // showing a broken/empty sheet.
+    if (!upstream.ok && category === 'for-you') {
+      const fallback = new URL('https://api.audius.co/v1/tracks/trending');
+      fallback.searchParams.set('time', rotation % 2 === 0 ? 'month' : 'week');
+      fallback.searchParams.set('limit', '30');
+      fallback.searchParams.set('offset', String((rotation * 13) % 71));
+      upstream = await fetch(fallback, {
+        headers: audiusAuthHeaders({ Accept: 'application/json' })
+      });
+    }
+
+    if (!upstream.ok) {
+      const detail = await upstream.text().catch(() => '');
+      console.error('Audius music feed failed:', category, upstream.status, detail.slice(0, 300));
+      return response.status(502).json({ error: 'Could not load music right now.' });
+    }
+
+    const payload = await upstream.json();
+    const rawTracks = Array.isArray(payload?.data)
+      ? payload.data
+      : Array.isArray(payload?.tracks)
+        ? payload.tracks
+        : [];
+    const tracks = rawTracks.map(mapAudiusStoryTrack).filter(Boolean);
+
+    storyMusicFeedCache.set(cacheKey, tracks);
+    if (storyMusicFeedCache.size > 12) {
+      const oldestKey = storyMusicFeedCache.keys().next().value;
+      if (oldestKey) storyMusicFeedCache.delete(oldestKey);
+    }
+    response.setHeader('Cache-Control', 'private, max-age=60');
+    try {
+      const tracksWithSaved = await musicTracksWithSavedState(request.user.id, tracks);
+      tracksWithSaved.slice(0, 8).forEach(track => { void warmStoryMusicStream(track.id); });
+      response.json({ tracks: tracksWithSaved, category, cached: false });
+    } catch (savedError) {
+      console.error('Story music feed saved-state lookup failed:', savedError.message);
+      response.json({ tracks, category, cached: false });
+    }
+  } catch (error) {
+    console.error('Audius music feed failed:', category, error.message);
+    response.status(502).json({ error: 'Could not load music right now.' });
+  }
+});
+
 app.get('/api/story-music/search', requireApiAuth, async (request, response) => {
   const query = String(request.query.q || '').trim() || 'popular';
   if (query.length > 120) return response.status(400).json({ error: 'Search is too long.' });
@@ -15859,25 +15971,7 @@ app.get('/api/story-music/search', requireApiAuth, async (request, response) => 
         : [];
 
     const tracks = rawTracks
-      .map(track => {
-        const streamable = track?.is_streamable ?? track?.isStreamable;
-        if (streamable === false || String(streamable).toLowerCase() === 'false') return null;
-        const id = String(track?.id || '').trim();
-        if (!id) return null;
-        const user = track?.user || {};
-        const artwork = track?.artwork || track?.cover_art || {};
-        return {
-          id,
-          title: String(track?.title || 'Track'),
-          artist: String(user?.name || user?.handle || track?.artist || 'Unknown artist'),
-          durationMs: Math.max(0, Number(track?.duration || 0) * 1000),
-          artwork: String(
-            artwork?._480x480 || artwork?.['480x480'] ||
-            artwork?._150x150 || artwork?.['150x150'] || ''
-          ),
-          streamUrl: `/api/story-music/${encodeURIComponent(id)}/stream`
-        };
-      })
+      .map(mapAudiusStoryTrack)
       .filter(Boolean);
 
     storyMusicSearchCache.set(cacheKey, { at: Date.now(), tracks });
