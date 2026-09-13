@@ -9713,6 +9713,17 @@ async function ensureDatabase() {
   `);
   await pool.query('CREATE INDEX IF NOT EXISTS story_question_responses_story_idx ON story_question_responses (story_id, created_at DESC)');
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS story_poll_votes (
+      story_id BIGINT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+      voter_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      option_index INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (story_id, voter_id)
+    )
+  `);
+  await pool.query('CREATE INDEX IF NOT EXISTS story_poll_votes_story_idx ON story_poll_votes (story_id, option_index, updated_at DESC)');
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS story_hidden_users (
       owner_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       hidden_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -16339,6 +16350,184 @@ app.post('/api/stories/privacy/hide/:userId', requireApiAuth, async (request,res
   }catch(error){console.error('Story hide failed:',error.message);response.status(500).json({error:'Could not update story privacy.'});}
 });
 
+
+function storyPollDefinition(editData) {
+  try {
+    let edit = editData;
+    if (typeof edit === 'string') edit = JSON.parse(edit);
+    if (!edit || typeof edit !== 'object') return null;
+    const elements = Array.isArray(edit.elements) ? edit.elements : [];
+    const element = elements.find(item => item && item.type === 'poll');
+    if (!element) return null;
+    const data = element.data && typeof element.data === 'object' ? element.data : {};
+    let options = Array.isArray(data.options)
+      ? data.options.map(value => String(value || '').trim()).filter(Boolean)
+      : [];
+    if (!options.length) {
+      options = [data.choiceA, data.choiceB]
+        .map(value => String(value || '').trim())
+        .filter(Boolean);
+    }
+    if (options.length < 2) return null;
+    options = options.slice(0, 4);
+    return {
+      question: String(data.question || element.text || '').split('\n')[0].trim(),
+      options,
+      headerColor: Number(data.pollHeaderColor ?? -14277082),
+      elementId: String(element.id || '')
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function storyPollResultsPayload(storyId, editData, currentUserId, includeVoters = false) {
+  const definition = storyPollDefinition(editData);
+  if (!definition) return null;
+
+  const countsResult = await pool.query(
+    `SELECT option_index, COUNT(*)::int AS count
+       FROM story_poll_votes
+      WHERE story_id = $1
+      GROUP BY option_index`,
+    [storyId]
+  );
+
+  const counts = new Array(definition.options.length).fill(0);
+  for (const row of countsResult.rows) {
+    const index = Number(row.option_index);
+    if (Number.isInteger(index) && index >= 0 && index < counts.length) {
+      counts[index] = Number(row.count || 0);
+    }
+  }
+
+  const totalVotes = counts.reduce((sum, value) => sum + value, 0);
+  const percentages = counts.map(value =>
+    totalVotes > 0 ? Math.round((value * 100) / totalVotes) : 0
+  );
+
+  let myVote = -1;
+  if (currentUserId) {
+    const mine = await pool.query(
+      `SELECT option_index
+         FROM story_poll_votes
+        WHERE story_id = $1 AND voter_id = $2
+        LIMIT 1`,
+      [storyId, currentUserId]
+    );
+    if (mine.rowCount) myVote = Number(mine.rows[0].option_index);
+  }
+
+  let voters = [];
+  if (includeVoters) {
+    const voterRows = await pool.query(
+      `SELECT pv.option_index, pv.updated_at,
+              u.id AS user_id,
+              COALESCE(NULLIF(BTRIM(u.full_name), ''), 'Halo user') AS name,
+              u.profile_photo
+         FROM story_poll_votes pv
+         JOIN users u ON u.id = pv.voter_id
+        WHERE pv.story_id = $1
+        ORDER BY pv.updated_at DESC`,
+      [storyId]
+    );
+    voters = voterRows.rows
+      .filter(row => Number(row.option_index) >= 0 && Number(row.option_index) < definition.options.length)
+      .map(row => ({
+        userId: String(row.user_id),
+        name: row.name,
+        profilePhoto: row.profile_photo || '',
+        optionIndex: Number(row.option_index),
+        option: definition.options[Number(row.option_index)],
+        votedAt: row.updated_at
+      }));
+  }
+
+  return {
+    question: definition.question,
+    headerColor: definition.headerColor,
+    totalVotes,
+    myVote,
+    options: definition.options.map((text, index) => ({
+      index,
+      text,
+      count: counts[index],
+      percentage: percentages[index]
+    })),
+    voters
+  };
+}
+
+app.get('/api/stories/:storyId/poll-results', requireApiAuth, async (request, response) => {
+  const storyId = String(request.params.storyId || '');
+  if (!validNumericId(storyId)) return response.status(400).json({ error: 'Invalid story.' });
+
+  try {
+    await ensureDatabase();
+    const story = await pool.query(
+      'SELECT id, edit_data FROM stories WHERE id = $1 LIMIT 1',
+      [storyId]
+    );
+    if (!story.rowCount) return response.status(404).json({ error: 'Story not found.' });
+
+    const poll = await storyPollResultsPayload(
+      storyId,
+      story.rows[0].edit_data,
+      request.user.id,
+      false
+    );
+    if (!poll) return response.status(404).json({ error: 'Poll not found.' });
+    return response.json({ storyId, poll });
+  } catch (error) {
+    console.error('Story poll results failed:', error.message);
+    return response.status(500).json({ error: 'Could not load poll results.' });
+  }
+});
+
+app.post('/api/stories/:storyId/poll-vote', requireApiAuth, async (request, response) => {
+  const storyId = String(request.params.storyId || '');
+  const optionIndex = Number(request.body?.optionIndex);
+
+  if (!validNumericId(storyId) || !Number.isInteger(optionIndex)) {
+    return response.status(400).json({ error: 'Choose a valid poll option.' });
+  }
+
+  try {
+    await ensureDatabase();
+    const story = await pool.query(
+      'SELECT id, edit_data FROM stories WHERE id = $1 LIMIT 1',
+      [storyId]
+    );
+    if (!story.rowCount) return response.status(404).json({ error: 'Story not found.' });
+
+    const definition = storyPollDefinition(story.rows[0].edit_data);
+    if (!definition || optionIndex < 0 || optionIndex >= definition.options.length) {
+      return response.status(400).json({ error: 'Choose a valid poll option.' });
+    }
+
+    await pool.query(
+      `INSERT INTO story_poll_votes
+         (story_id, voter_id, option_index, created_at, updated_at)
+       VALUES ($1, $2, $3, NOW(), NOW())
+       ON CONFLICT (story_id, voter_id)
+       DO UPDATE SET option_index = EXCLUDED.option_index, updated_at = NOW()`,
+      [storyId, request.user.id, optionIndex]
+    );
+
+    const poll = await storyPollResultsPayload(
+      storyId,
+      story.rows[0].edit_data,
+      request.user.id,
+      false
+    );
+
+    return response.json({ ok: true, storyId, poll });
+  } catch (error) {
+    console.error('Story poll vote failed:', error.message);
+    return response.status(500).json({ error: 'Could not save poll vote.' });
+  }
+});
+
 app.post('/api/stories/:storyId/question-responses', requireApiAuth, async (request,response)=>{
   const storyId=request.params.storyId,question=String(request.body?.question||'').trim().slice(0,500),answer=String(request.body?.answer||'').trim().slice(0,1000);
   if(!validNumericId(storyId)||!answer)return response.status(400).json({error:'Write a response.'});
@@ -16369,12 +16558,71 @@ app.delete('/api/stories/:storyId/question-responses/:responseId', requireApiAut
 });
 
 app.get('/api/stories/:storyId/activity', requireApiAuth, async (request,response)=>{
-  const storyId=request.params.storyId;if(!validNumericId(storyId))return response.status(400).json({error:'Invalid story.'});
-  try{await ensureDatabase();const story=await pool.query('SELECT user_id FROM stories WHERE id=$1 LIMIT 1',[storyId]);if(!story.rowCount)return response.status(404).json({error:'Story not found.'});if(String(story.rows[0].user_id)!==String(request.user.id))return response.status(403).json({error:'Story activity is private.'});
-    const responses=await pool.query(`SELECT r.id,r.answer,r.question,r.created_at,u.id AS user_id,COALESCE(NULLIF(BTRIM(u.full_name),''),'Halo user') AS name,u.profile_photo FROM story_question_responses r JOIN users u ON u.id=r.responder_id WHERE r.story_id=$1 ORDER BY r.created_at DESC`,[storyId]);
-    const viewers=await pool.query(`SELECT v.viewed_at,u.id AS user_id,COALESCE(NULLIF(BTRIM(u.full_name),''),'Halo user') AS name,u.profile_photo FROM story_views v JOIN users u ON u.id=v.user_id WHERE v.story_id=$1 AND v.user_id IS NOT NULL ORDER BY v.viewed_at DESC`,[storyId]);
-    response.json({storyId:String(storyId),viewCount:viewers.rowCount,responses:responses.rows.map(r=>({id:String(r.id),userId:String(r.user_id),name:r.name,profilePhoto:r.profile_photo||'',question:r.question||'',answer:r.answer||'',createdAt:r.created_at})),viewers:viewers.rows.map(r=>({userId:String(r.user_id),name:r.name,profilePhoto:r.profile_photo||'',viewedAt:r.viewed_at}))});
-  }catch(error){console.error('Story activity failed:',error.message);response.status(500).json({error:'Could not load story activity.'});}
+  const storyId=request.params.storyId;
+  if(!validNumericId(storyId))return response.status(400).json({error:'Invalid story.'});
+  try{
+    await ensureDatabase();
+    const story=await pool.query(
+      'SELECT user_id,edit_data FROM stories WHERE id=$1 LIMIT 1',
+      [storyId]
+    );
+    if(!story.rowCount)return response.status(404).json({error:'Story not found.'});
+    if(String(story.rows[0].user_id)!==String(request.user.id))
+      return response.status(403).json({error:'Story activity is private.'});
+
+    const responses=await pool.query(
+      `SELECT r.id,r.answer,r.question,r.created_at,u.id AS user_id,
+              COALESCE(NULLIF(BTRIM(u.full_name),''),'Halo user') AS name,
+              u.profile_photo
+         FROM story_question_responses r
+         JOIN users u ON u.id=r.responder_id
+        WHERE r.story_id=$1
+        ORDER BY r.created_at DESC`,
+      [storyId]
+    );
+
+    const viewers=await pool.query(
+      `SELECT v.viewed_at,u.id AS user_id,
+              COALESCE(NULLIF(BTRIM(u.full_name),''),'Halo user') AS name,
+              u.profile_photo
+         FROM story_views v
+         JOIN users u ON u.id=v.user_id
+        WHERE v.story_id=$1 AND v.user_id IS NOT NULL
+        ORDER BY v.viewed_at DESC`,
+      [storyId]
+    );
+
+    const poll=await storyPollResultsPayload(
+      storyId,
+      story.rows[0].edit_data,
+      request.user.id,
+      true
+    );
+
+    response.json({
+      storyId:String(storyId),
+      viewCount:viewers.rowCount,
+      responses:responses.rows.map(r=>({
+        id:String(r.id),
+        userId:String(r.user_id),
+        name:r.name,
+        profilePhoto:r.profile_photo||'',
+        question:r.question||'',
+        answer:r.answer||'',
+        createdAt:r.created_at
+      })),
+      viewers:viewers.rows.map(r=>({
+        userId:String(r.user_id),
+        name:r.name,
+        profilePhoto:r.profile_photo||'',
+        viewedAt:r.viewed_at
+      })),
+      poll
+    });
+  }catch(error){
+    console.error('Story activity failed:',error.message);
+    response.status(500).json({error:'Could not load story activity.'});
+  }
 });
 
 app.delete('/api/stories/:storyId', requireApiAuth, async (request, response) => {
