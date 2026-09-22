@@ -30,6 +30,7 @@ const sessionLocationCache = new Map();
 const postMediaRoot = process.env.POST_MEDIA_ROOT || path.join(process.env.HOME || os.homedir(), 'facebook-media', 'posts');
 const postMediaUploadRoot = path.join(postMediaRoot, '_uploads');
 const postMediaAssetRoot = path.join(postMediaRoot, 'assets');
+const storyMediaRoot = process.env.STORY_MEDIA_ROOT || path.join(process.env.HOME || os.homedir(), 'facebook-media', 'stories');
 
 function dataNamespaceCookie(secure) {
   return `facebook_data_namespace=${dataNamespace}; SameSite=Lax; Path=/; Max-Age=31536000; Priority=High${secure ? '; Secure' : ''}`;
@@ -9206,6 +9207,7 @@ async function ensureDatabase() {
     )
   `);
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_photo TEXT');
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_photo_thumbnail TEXT');
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS cover_photo TEXT');
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_frame_name VARCHAR(120)');
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_frame_svg TEXT');
@@ -9584,6 +9586,19 @@ async function ensureDatabase() {
     )
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS profile_photo_thumbnail_files (
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      media_version VARCHAR(64) NOT NULL,
+      mime_type VARCHAR(100) NOT NULL,
+      image_data BYTEA NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (user_id, media_version)
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS profile_photo_thumbnail_files_user_time_idx
+    ON profile_photo_thumbnail_files(user_id, created_at DESC)`);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS profile_media_files (
       user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       media_kind VARCHAR(20) NOT NULL CHECK (media_kind IN ('profile','cover')),
@@ -9680,6 +9695,60 @@ async function ensureDatabase() {
     ALTER TABLE stories
     ADD COLUMN IF NOT EXISTS edit_data JSONB NOT NULL DEFAULT '{}'::jsonb
   `);
+  await pool.query(`ALTER TABLE stories ADD COLUMN IF NOT EXISTS image_storage_key VARCHAR(48)`);
+  await pool.query(`ALTER TABLE stories ADD COLUMN IF NOT EXISTS micro_storage_key VARCHAR(48)`);
+  await pool.query(`ALTER TABLE stories ADD COLUMN IF NOT EXISTS preview_storage_key VARCHAR(48)`);
+  await pool.query(`ALTER TABLE stories ADD COLUMN IF NOT EXISTS medium_storage_key VARCHAR(48)`);
+  await pool.query(`ALTER TABLE stories ADD COLUMN IF NOT EXISTS image_mime_type VARCHAR(80) NOT NULL DEFAULT 'image/jpeg'`);
+  await pool.query(`ALTER TABLE stories ALTER COLUMN image_data DROP NOT NULL`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS story_media_uploads (
+      storage_key VARCHAR(48) PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      media_kind VARCHAR(16) NOT NULL CHECK (media_kind IN ('micro','preview','medium','full')),
+      mime_type VARCHAR(80) NOT NULL DEFAULT 'image/jpeg',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS story_media_uploads_user_time_idx ON story_media_uploads(user_id, created_at DESC)`);
+  // v50 expands the temporary upload table from 2 Story stages to 4.
+  await pool.query(`ALTER TABLE story_media_uploads DROP CONSTRAINT IF EXISTS story_media_uploads_media_kind_check`);
+  await pool.query(`ALTER TABLE story_media_uploads ADD CONSTRAINT story_media_uploads_media_kind_check CHECK (media_kind IN ('micro','preview','medium','full'))`);
+
+  // Migrate every legacy Base64 Story frame to a real binary file before
+  // purging the TEXT payload. This preserves old Stories while removing the
+  // heavy Base64 data from PostgreSQL permanently.
+  const legacyStoryRows = await pool.query(`
+    SELECT id, image_data, image_storage_key
+      FROM stories
+     WHERE image_data LIKE 'data:%;base64,%'
+     ORDER BY id
+  `);
+  for (const row of legacyStoryRows.rows) {
+    let storageKey = safeStoryStorageKey(row.image_storage_key);
+    if (!storageKey) {
+      const decoded = dataUrlBuffer(row.image_data, 'image');
+      if (decoded?.bytes?.length) {
+        storageKey = writeStoryAsset(decoded.bytes);
+        await pool.query(
+          `UPDATE stories
+              SET image_storage_key=$2,
+                  image_mime_type=$3
+            WHERE id=$1`,
+          [row.id, storageKey, decoded.mimeType || 'image/jpeg']
+        );
+      }
+    }
+  }
+  await pool.query(`UPDATE stories SET image_data=NULL WHERE image_data LIKE 'data:%;base64,%'`);
+
+  // Clean abandoned raw uploads. Finalized Story files are not in this table.
+  const staleStoryUploads = await pool.query(`
+    DELETE FROM story_media_uploads
+     WHERE created_at < NOW() - INTERVAL '2 hours'
+     RETURNING storage_key
+  `);
+  for (const row of staleStoryUploads.rows) deleteStoryAsset(row.storage_key);
 
   await pool.query('ALTER TABLE notifications ADD COLUMN IF NOT EXISTS story_id BIGINT REFERENCES stories(id) ON DELETE CASCADE');
   await pool.query('ALTER TABLE story_views ADD COLUMN IF NOT EXISTS user_id BIGINT REFERENCES users(id) ON DELETE CASCADE');
@@ -10554,6 +10623,40 @@ async function recordAdminAudit(request, targetUserId, action, details = {}) {
     'INSERT INTO admin_audit_log (admin_user_id, target_user_id, action, details, ip_address) VALUES ($1,$2,$3,$4::jsonb,$5)',
     [request.user.id, targetUserId || null, String(action).slice(0, 80), JSON.stringify(auditDetails), requestClientIp(request)]
   );
+}
+
+function safeStoryStorageKey(value) {
+  const key = String(value || '').trim();
+  return /^[a-f0-9]{48}$/i.test(key) ? key : '';
+}
+function storyAssetPath(storageKey) {
+  return path.join(storyMediaRoot, `${storageKey}.bin`);
+}
+function writeStoryAsset(bytes) {
+  fs.mkdirSync(storyMediaRoot, { recursive: true });
+  const storageKey = crypto.randomBytes(24).toString('hex');
+  fs.writeFileSync(storyAssetPath(storageKey), bytes);
+  return storageKey;
+}
+function deleteStoryAsset(storageKey) {
+  const key = safeStoryStorageKey(storageKey);
+  if (!key) return;
+  try { fs.unlinkSync(storyAssetPath(key)); } catch (_error) {}
+}
+async function storyMediaAccess(storyId, viewerId) {
+  const result = await pool.query(
+    `SELECT s.user_id, s.image_storage_key, s.micro_storage_key, s.preview_storage_key, s.medium_storage_key, s.image_mime_type,
+            EXISTS(
+              SELECT 1 FROM story_hidden_users shu
+              WHERE shu.owner_id=s.user_id AND shu.hidden_user_id=$2
+            ) AS hidden_from_viewer
+       FROM stories s WHERE s.id=$1 LIMIT 1`,
+    [storyId, viewerId]
+  );
+  if (!result.rowCount) return null;
+  const row = result.rows[0];
+  if (row.hidden_from_viewer && String(row.user_id) !== String(viewerId)) return false;
+  return row;
 }
 
 function validImageData(value) {
@@ -14046,6 +14149,7 @@ app.get('/api/profile', requireApiAuth, async (request, response) => {
       dataNamespace,
       name: user.full_name,
       profilePhoto: user.profile_photo || '',
+      profilePhotoThumbnail: user.profile_photo_thumbnail || user.profile_photo || '',
       coverPhoto: user.cover_photo || '',
       bio: user.bio || '',
       profileDetails: user.profile_details || {},
@@ -14096,6 +14200,7 @@ app.get('/api/search', requireApiAuth, async (request, response) => {
       name: user.full_name,
       username: user.identifier || '',
       profilePhoto: user.profile_photo || '',
+      profilePhotoThumbnail: user.profile_photo_thumbnail || user.profile_photo || '',
       friendState: String(user.id) === String(request.user.id)
         ? 'self'
         : (user.is_friend ? 'friends' : (user.incoming_request_id ? 'incoming' : (user.outgoing_request_id ? 'requested' : 'none'))),
@@ -14175,6 +14280,7 @@ app.get('/api/users/:userId/profile', requireApiAuth, async (request, response) 
       dataNamespace,
       name: user.full_name,
       profilePhoto: user.profile_photo || '',
+      profilePhotoThumbnail: user.profile_photo_thumbnail || user.profile_photo || '',
       coverPhoto: user.cover_photo || '',
       bio: user.bio || '',
       profileDetails: user.profile_details || {},
@@ -14241,13 +14347,14 @@ app.put('/api/profile/photo/:kind', requireApiAuth, express.raw({ type: 'image/*
     );
     const updated = await client.query(
       `UPDATE users SET ${column} = $1, ${updatedColumn} = NOW() WHERE id = $2
-       RETURNING profile_photo, cover_photo, profile_photo_updated_at, cover_photo_updated_at`,
+       RETURNING profile_photo, profile_photo_thumbnail, cover_photo, profile_photo_updated_at, cover_photo_updated_at`,
       [url, request.user.id]
     );
     await client.query('COMMIT');
     response.json({
       ok: true,
       profilePhoto: updated.rows[0].profile_photo || '',
+      profilePhotoThumbnail: updated.rows[0].profile_photo_thumbnail || updated.rows[0].profile_photo || '',
       coverPhoto: updated.rows[0].cover_photo || '',
       profilePhotoUpdatedAt: updated.rows[0].profile_photo_updated_at,
       coverPhotoUpdatedAt: updated.rows[0].cover_photo_updated_at
@@ -14258,6 +14365,77 @@ app.put('/api/profile/photo/:kind', requireApiAuth, express.raw({ type: 'image/*
     response.status(500).json({ error: 'Could not save the picture.' });
   } finally {
     if (client) client.release();
+  }
+});
+
+
+// HALO_PROFILE_DUAL_IMAGE_V237
+app.put('/api/profile/photo-thumbnail', requireApiAuth, express.raw({ type: 'image/*', limit: '2mb' }), async (request, response) => {
+  const mimeType = String(request.headers['content-type'] || '')
+    .split(';')[0].trim().toLowerCase().replace('image/jpg', 'image/jpeg');
+  const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+  const bytes = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
+
+  if (!allowedTypes.has(mimeType) || !bytes.length || bytes.length > 1024 * 1024) {
+    return response.status(400).json({ error: 'Invalid profile thumbnail.' });
+  }
+
+  try {
+    await ensureDatabase();
+    const version = crypto.createHash('sha256').update(bytes).digest('hex');
+    const url = `/api/profile/photo-thumbnail/${encodeURIComponent(String(request.user.id))}/${version}`;
+
+    await pool.query(
+      `INSERT INTO profile_photo_thumbnail_files(user_id,media_version,mime_type,image_data,created_at)
+       VALUES($1,$2,$3,$4,NOW())
+       ON CONFLICT (user_id,media_version) DO NOTHING`,
+      [request.user.id, version, mimeType, bytes]
+    );
+
+    await pool.query(
+      `UPDATE users SET profile_photo_thumbnail=$1 WHERE id=$2`,
+      [url, request.user.id]
+    );
+
+    response.status(201).json({
+      ok: true,
+      profilePhotoThumbnail: url,
+      version
+    });
+  } catch (error) {
+    console.error('Profile thumbnail upload failed:', error.message);
+    response.status(500).json({ error: 'Could not save profile thumbnail.' });
+  }
+});
+
+app.get('/api/profile/photo-thumbnail/:ownerId/:version', requireApiAuth, async (request, response) => {
+  const ownerId = String(request.params.ownerId || '');
+  const version = String(request.params.version || '').toLowerCase();
+
+  if (!validNumericId(ownerId) || !/^[a-f0-9]{64}$/.test(version)) {
+    return response.status(400).end();
+  }
+
+  try {
+    await ensureDatabase();
+    const result = await pool.query(
+      `SELECT mime_type,image_data
+       FROM profile_photo_thumbnail_files
+       WHERE user_id=$1 AND media_version=$2
+       LIMIT 1`,
+      [ownerId, version]
+    );
+
+    const media = result.rows[0];
+    if (!media) return response.status(404).end();
+
+    response.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+    response.setHeader('ETag', `"${version}"`);
+    if (request.headers['if-none-match'] === `"${version}"`) return response.status(304).end();
+    response.type(media.mime_type || 'image/jpeg').send(media.image_data);
+  } catch (error) {
+    console.error('Profile thumbnail load failed:', error.message);
+    response.status(500).end();
   }
 });
 
@@ -14331,7 +14509,7 @@ app.put('/api/profile', requireApiAuth, async (request, response) => {
              ELSE profile_details
            END
        WHERE id = $1
-       RETURNING id, full_name, profile_photo, cover_photo, profile_frame_name, profile_frame_svg, bio, profile_details, created_at, profile_photo_updated_at, cover_photo_updated_at`,
+       RETURNING id, full_name, profile_photo, profile_photo_thumbnail, cover_photo, profile_frame_name, profile_frame_svg, bio, profile_details, created_at, profile_photo_updated_at, cover_photo_updated_at`,
       [
         request.user.id,
         profilePhoto !== undefined, storedProfilePhoto || null,
@@ -14349,6 +14527,7 @@ app.put('/api/profile', requireApiAuth, async (request, response) => {
       ok: true,
       name: user.full_name,
       profilePhoto: user.profile_photo || '',
+      profilePhotoThumbnail: user.profile_photo_thumbnail || user.profile_photo || '',
       coverPhoto: user.cover_photo || '',
       bio: user.bio || '',
       profileDetails: user.profile_details || {},
@@ -15258,6 +15437,7 @@ async function currentProfileMedia(ownerUserId, kind, requestedVersion) {
   }
   return {
     ownerId: String(user.id), ownerName: user.full_name, profilePhoto: user.profile_photo || '',
+      profilePhotoThumbnail: user.profile_photo_thumbnail || user.profile_photo || '',
     source, version, createdAt, isCurrent: version === currentVersion, currentVersion
   };
 }
@@ -16192,7 +16372,7 @@ app.get('/api/stories', requireApiAuth, async (request, response) => {
   try {
     await ensureDatabase();
     const result = await pool.query(`
-      SELECT s.id, s.user_id, s.image_data, s.caption, s.edit_data, s.created_at,
+      SELECT s.id, s.user_id, s.caption, s.edit_data, s.created_at,
              u.full_name, u.profile_photo, (sv.story_id IS NOT NULL) AS viewed_by_me
       FROM stories s
       JOIN users u ON u.id = s.user_id
@@ -16205,10 +16385,14 @@ app.get('/api/stories', requireApiAuth, async (request, response) => {
       ORDER BY s.created_at DESC
       LIMIT 50
     `, [request.user.id]);
+    response.setHeader('Cache-Control', 'private, no-cache');
     response.json({ stories: result.rows.map(row => ({
       id: String(row.id),
       userId: String(row.user_id),
-      image: row.image_data,
+      image: `/api/stories/${encodeURIComponent(String(row.id))}/media`,
+      microImage: `/api/stories/${encodeURIComponent(String(row.id))}/micro`,
+      previewImage: `/api/stories/${encodeURIComponent(String(row.id))}/preview`,
+      mediumImage: `/api/stories/${encodeURIComponent(String(row.id))}/medium`,
       caption: row.caption,
       editData: row.edit_data || {},
       createdAt: row.created_at,
@@ -16222,8 +16406,127 @@ app.get('/api/stories', requireApiAuth, async (request, response) => {
   }
 });
 
+app.get('/api/stories/:storyId/media', requireApiAuth, async (request, response) => {
+  const storyId = String(request.params.storyId || '');
+  if (!validNumericId(storyId)) return response.status(400).end();
+  try {
+    await ensureDatabase();
+    const row = await storyMediaAccess(storyId, request.user.id);
+    if (row === null) return response.status(404).end();
+    if (row === false) return response.status(403).end();
+    const key = safeStoryStorageKey(row.image_storage_key);
+    if (!key) return response.status(404).end();
+    return sendFileRange(request, response, storyAssetPath(key), row.image_mime_type || 'image/jpeg', 'private, max-age=86400');
+  } catch (error) {
+    console.error('Story media load failed:', error.message);
+    if (!response.headersSent) response.status(500).end();
+  }
+});
+
+app.get('/api/stories/:storyId/micro', requireApiAuth, async (request, response) => {
+  const storyId = String(request.params.storyId || '');
+  if (!validNumericId(storyId)) return response.status(400).end();
+  try {
+    await ensureDatabase();
+    const row = await storyMediaAccess(storyId, request.user.id);
+    if (row === null) return response.status(404).end();
+    if (row === false) return response.status(403).end();
+    const key = safeStoryStorageKey(row.micro_storage_key) ||
+                safeStoryStorageKey(row.preview_storage_key) ||
+                safeStoryStorageKey(row.medium_storage_key) ||
+                safeStoryStorageKey(row.image_storage_key);
+    if (!key) return response.status(404).end();
+    return sendFileRange(request, response, storyAssetPath(key), 'image/jpeg', 'private, max-age=86400');
+  } catch (error) {
+    console.error('Story micro load failed:', error.message);
+    if (!response.headersSent) response.status(500).end();
+  }
+});
+
+app.get('/api/stories/:storyId/preview', requireApiAuth, async (request, response) => {
+  const storyId = String(request.params.storyId || '');
+  if (!validNumericId(storyId)) return response.status(400).end();
+  try {
+    await ensureDatabase();
+    const row = await storyMediaAccess(storyId, request.user.id);
+    if (row === null) return response.status(404).end();
+    if (row === false) return response.status(403).end();
+    const previewKey = safeStoryStorageKey(row.preview_storage_key);
+    if (previewKey) return sendFileRange(request, response, storyAssetPath(previewKey), 'image/jpeg', 'private, max-age=86400');
+    const fullKey = safeStoryStorageKey(row.image_storage_key);
+    if (!fullKey) return response.status(404).end();
+    return sendFileRange(request, response, storyAssetPath(fullKey), row.image_mime_type || 'image/jpeg', 'private, max-age=86400');
+  } catch (error) {
+    console.error('Story preview load failed:', error.message);
+    if (!response.headersSent) response.status(500).end();
+  }
+});
+
+app.get('/api/stories/:storyId/medium', requireApiAuth, async (request, response) => {
+  const storyId = String(request.params.storyId || '');
+  if (!validNumericId(storyId)) return response.status(400).end();
+  try {
+    await ensureDatabase();
+    const row = await storyMediaAccess(storyId, request.user.id);
+    if (row === null) return response.status(404).end();
+    if (row === false) return response.status(403).end();
+    const key = safeStoryStorageKey(row.medium_storage_key) ||
+                safeStoryStorageKey(row.preview_storage_key) ||
+                safeStoryStorageKey(row.image_storage_key);
+    if (!key) return response.status(404).end();
+    return sendFileRange(request, response, storyAssetPath(key), 'image/jpeg', 'private, max-age=86400');
+  } catch (error) {
+    console.error('Story medium load failed:', error.message);
+    if (!response.headersSent) response.status(500).end();
+  }
+});
+
+const storyRawUpload = express.raw({ type: '*/*', limit: '2mb' });
+
+app.post('/api/story-media/:kind', requireApiAuth, storyRawUpload, async (request, response) => {
+  const kind = String(request.params.kind || '').trim().toLowerCase();
+  if (!['micro', 'preview', 'medium', 'full'].includes(kind)) {
+    return response.status(400).json({ error: 'Invalid Story media kind.' });
+  }
+
+  const bytes = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
+  const maxBytes = kind === 'micro' ? 64 * 1024
+    : kind === 'preview' ? 160 * 1024
+    : kind === 'medium' ? 512 * 1024
+    : 1400 * 1024;
+  if (!bytes.length || bytes.length > maxBytes) {
+    return response.status(400).json({ error: 'Story media size is invalid.' });
+  }
+
+  const mimeType = String(request.headers['content-type'] || 'image/jpeg')
+    .split(';')[0].trim().toLowerCase();
+  if (!['image/jpeg', 'image/webp', 'application/octet-stream'].includes(mimeType)) {
+    return response.status(415).json({ error: 'Unsupported Story media type.' });
+  }
+
+  let storageKey = '';
+  try {
+    await ensureDatabase();
+    storageKey = writeStoryAsset(bytes);
+    await pool.query(
+      `INSERT INTO story_media_uploads(storage_key,user_id,media_kind,mime_type)
+       VALUES($1,$2,$3,$4)`,
+      [storageKey, request.user.id, kind, mimeType === 'application/octet-stream' ? 'image/jpeg' : mimeType]
+    );
+    response.status(201).json({ ok: true, storageKey });
+  } catch (error) {
+    deleteStoryAsset(storageKey);
+    console.error('Story binary upload failed:', error.message);
+    response.status(500).json({ error: 'Could not upload Story media.' });
+  }
+});
+
 app.post('/api/stories', requireApiAuth, async (request, response) => {
-  const image = request.body?.image || '';
+  const microStorageKey = safeStoryStorageKey(request.body?.microStorageKey);
+  const previewStorageKey = safeStoryStorageKey(request.body?.previewStorageKey);
+  const mediumStorageKey = safeStoryStorageKey(request.body?.mediumStorageKey);
+  const imageStorageKey = safeStoryStorageKey(request.body?.imageStorageKey);
+  const imageMimeType = String(request.body?.imageMimeType || 'image/jpeg').trim().toLowerCase();
 
   const editData =
     request.body?.editData &&
@@ -16239,6 +16542,7 @@ app.post('/api/stories', requireApiAuth, async (request, response) => {
       error: 'Story edit data is too large.'
     });
   }
+
   const visibility = String(
     request.body?.visibility || 'public'
   ).trim().toLowerCase();
@@ -16257,13 +16561,14 @@ app.post('/api/stories', requireApiAuth, async (request, response) => {
       ].slice(0, 30)
     : [];
 
-  if (!image || !validImageData(image)) {
-    return response.status(400).json({
-      error: 'Choose a valid story photo smaller than 6 MB.'
-    });
+  if (!microStorageKey || !previewStorageKey || !mediumStorageKey || !imageStorageKey) {
+    return response.status(400).json({ error: 'Story media upload is incomplete.' });
+  }
+  if (!['image/jpeg', 'image/webp'].includes(imageMimeType)) {
+    return response.status(400).json({ error: 'Story media type is invalid.' });
   }
 
-  if (caption.length > 500) {
+if (caption.length > 500) {
     return response.status(400).json({
       error: 'Story text is too long.'
     });
@@ -16272,35 +16577,58 @@ app.post('/api/stories', requireApiAuth, async (request, response) => {
   try {
     await ensureDatabase();
 
+    const uploaded = await pool.query(
+      `SELECT storage_key, media_kind, mime_type
+         FROM story_media_uploads
+        WHERE user_id=$1
+          AND storage_key = ANY($2::text[])`,
+      [request.user.id, [microStorageKey, previewStorageKey, mediumStorageKey, imageStorageKey]]
+    );
+
+    const uploadMap = new Map(uploaded.rows.map(row => [String(row.storage_key), row]));
+    const microUpload = uploadMap.get(microStorageKey);
+    const previewUpload = uploadMap.get(previewStorageKey);
+    const mediumUpload = uploadMap.get(mediumStorageKey);
+    const fullUpload = uploadMap.get(imageStorageKey);
+    if (!microUpload || microUpload.media_kind !== 'micro' ||
+        !previewUpload || previewUpload.media_kind !== 'preview' ||
+        !mediumUpload || mediumUpload.media_kind !== 'medium' ||
+        !fullUpload || fullUpload.media_kind !== 'full') {
+      return response.status(400).json({ error: 'Story media upload is missing or expired.' });
+    }
+
     const result = await pool.query(
       `INSERT INTO stories (
          user_id,
-         image_data,
-         caption,
-         edit_data
-       )
-       VALUES ($1, $2, $3, $4::jsonb)
-       RETURNING
-         id,
-         user_id,
-         image_data,
          caption,
          edit_data,
-         created_at`,
+         image_storage_key,
+         micro_storage_key,
+         preview_storage_key,
+         medium_storage_key,
+         image_mime_type
+       )
+       VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8)
+       RETURNING id, user_id, caption, edit_data, created_at`,
       [
         request.user.id,
-        image,
         caption,
-        editDataJson
+        editDataJson,
+        imageStorageKey,
+        microStorageKey,
+        previewStorageKey,
+        mediumStorageKey,
+        fullUpload.mime_type || imageMimeType || 'image/jpeg'
       ]
     );
 
+    await pool.query(
+      `DELETE FROM story_media_uploads
+        WHERE user_id=$1 AND storage_key = ANY($2::text[])`,
+      [request.user.id, [microStorageKey, previewStorageKey, mediumStorageKey, imageStorageKey]]
+    );
+
     if (requestedMentions.length) {
-      /*
-       * Never trust user IDs supplied by the Android client.
-       * Only accounts that currently exist are allowed to receive
-       * a mention notification.
-       */
       const verified = await pool.query(
         `SELECT id
            FROM users
@@ -16322,11 +16650,20 @@ app.post('/api/stories', requireApiAuth, async (request, response) => {
       }
     }
 
+    const createdStory = result.rows[0] || {};
     response.status(201).json({
       ok: true,
-      story: result.rows[0]
+      story: {
+        ...createdStory,
+        id: String(createdStory.id || ''),
+        userId: String(createdStory.user_id || request.user.id),
+        image: `/api/stories/${encodeURIComponent(String(createdStory.id))}/media`,
+        previewImage: `/api/stories/${encodeURIComponent(String(createdStory.id))}/preview`
+      }
     });
   } catch (error) {
+    deleteStoryAsset(imageStorageKey);
+    deleteStoryAsset(previewStorageKey);
     console.error(
       'Story creation failed:',
       error.message
@@ -16637,6 +16974,10 @@ app.delete('/api/stories/:storyId', requireApiAuth, async (request, response) =>
     if (!isModerator && ownerId !== String(request.user.id)) return response.status(403).json({ error: 'You cannot delete this story.' });
     await pool.query('INSERT INTO admin_deleted_content (user_id, content_type, original_id, content) VALUES ($1,$2,$3,$4::jsonb)', [story.rows[0].user_id, 'story', String(storyId), JSON.stringify({ story:story.rows[0] })]);
     await pool.query('DELETE FROM stories WHERE id=$1', [storyId]);
+    deleteStoryAsset(story.rows[0].image_storage_key);
+    deleteStoryAsset(story.rows[0].micro_storage_key);
+    deleteStoryAsset(story.rows[0].preview_storage_key);
+    deleteStoryAsset(story.rows[0].medium_storage_key);
     response.json({ ok:true, storyId:String(storyId) });
   } catch (error) { console.error('Story deletion failed:', error.message); response.status(500).json({ error:'Could not delete the story.' }); }
 });
