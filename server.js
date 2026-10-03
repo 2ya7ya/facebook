@@ -11902,7 +11902,7 @@ app.get('/api/health', async (_request, response) => {
 
 // ALOE_SIGNUP_EMAIL_VERIFICATION_V258B
 const ALOE_SIGNUP_CODE_TTL_MINUTES = 10;
-const ALOE_SIGNUP_RESEND_SECONDS = 45;
+const ALOE_SIGNUP_RESEND_SECONDS = 60;
 
 function aloeSignupCodeHash(identifier, code) {
   return crypto
@@ -12024,7 +12024,7 @@ app.post('/api/register', async (request, response) => {
         VALUES (
           $1, $2, $3, $4, 0, NOW(),
           NOW() + INTERVAL '10 minutes',
-          NOW() + INTERVAL '45 seconds'
+          NOW() + INTERVAL '60 seconds'
         )
         ON CONFLICT (identifier)
         DO UPDATE SET
@@ -12034,7 +12034,7 @@ app.post('/api/register', async (request, response) => {
           attempts = 0,
           created_at = NOW(),
           expires_at = NOW() + INTERVAL '10 minutes',
-          resend_available_at = NOW() + INTERVAL '45 seconds'
+          resend_available_at = NOW() + INTERVAL '60 seconds'
       `,
       [identifier, fullName, passwordPayload, codeHash]
     );
@@ -12122,7 +12122,7 @@ app.post('/api/register/resend', async (request, response) => {
           attempts = 0,
           created_at = NOW(),
           expires_at = NOW() + INTERVAL '10 minutes',
-          resend_available_at = NOW() + INTERVAL '45 seconds'
+          resend_available_at = NOW() + INTERVAL '60 seconds'
         WHERE identifier = $2
       `,
       [codeHash, identifier]
@@ -18061,7 +18061,9 @@ function friendUserPayload(row) {
     profileFrameName: row.profile_frame_name || '',
     createdAt: row.created_at || null,
     lastSeenAt: row.last_seen_at || null,
-    isOnline: Boolean(row.is_online)
+    isOnline: Boolean(row.is_online),
+    friendState: row.is_friend ? 'friends' : (row.incoming_request_id ? 'incoming' : (row.outgoing_request_id ? 'requested' : 'none')),
+    requestId: row.incoming_request_id ? String(row.incoming_request_id) : ''
   };
 }
 
@@ -18196,10 +18198,18 @@ app.get('/api/members', requireApiAuth, async (request, response) => {
     await pool.query('UPDATE users SET last_seen_at = NOW() WHERE id = $1', [request.user.id]);
     const [result, countsResult] = await Promise.all([
       pool.query(
-        `SELECT id, full_name, profile_photo, profile_frame_name, created_at, last_seen_at,
-                (last_seen_at >= NOW() - INTERVAL '2 minutes') AS is_online
-         FROM users
-         ORDER BY created_at DESC NULLS LAST, id DESC
+        `SELECT u.id, u.full_name, u.profile_photo, u.profile_frame_name, u.created_at, u.last_seen_at,
+                (u.last_seen_at >= NOW() - INTERVAL '2 minutes') AS is_online,
+                EXISTS(
+                  SELECT 1 FROM friendships f
+                  WHERE (f.user_one_id = $1 AND f.user_two_id = u.id)
+                     OR (f.user_two_id = $1 AND f.user_one_id = u.id)
+                ) AS is_friend,
+                (SELECT fr.id FROM friend_requests fr WHERE fr.sender_id = $1 AND fr.receiver_id = u.id LIMIT 1) AS outgoing_request_id,
+                (SELECT fr.id FROM friend_requests fr WHERE fr.sender_id = u.id AND fr.receiver_id = $1 LIMIT 1) AS incoming_request_id
+         FROM users u
+         WHERE u.id <> $1
+         ORDER BY u.created_at DESC NULLS LAST, u.id DESC
          LIMIT 250`
       ),
       pool.query(
