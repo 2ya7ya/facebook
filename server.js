@@ -645,19 +645,19 @@ const FLUX_SUPPORT_CATEGORIES = {
   support_bug: {
     label: 'Technical problems',
     opener:
-      'Tell me what you expected to happen, what actually happened, and which Aloe screen or feature you were using.'
+      'Tell me what you expected to happen, what actually happened, and which Halo screen or feature you were using.'
   },
 
   support_feedback: {
     label: 'Feedback',
     opener:
-      'Tell me what you would like Aloe to improve. I can record your feedback for the team.'
+      'Tell me what you would like Halo to improve. I can record your feedback for the team.'
   },
 
   support_cases: {
     label: 'My support cases',
     opener:
-      'I can check your existing Aloe support cases, appeals, and their current status.'
+      'I can check your existing Halo support cases, appeals, and their current status.'
   },
 
   support_human: {
@@ -763,22 +763,22 @@ function fluxSupportWelcomeText(text = '') {
     );
 
   if (arabic) {
-    return `مرحباً بك في دعم Aloe 👋
+    return `مرحباً بك في دعم Halo 👋
 
-أنا هنا لمساعدتك في حل مشاكل حسابك واستخدام Aloe، بما في ذلك تسجيل الدخول، استرداد الحساب، الأمان، الأجهزة، الحسابات الموقوفة، الرسائل، المحتوى والمشاكل التقنية.
+أنا هنا لمساعدتك في حل مشاكل حسابك واستخدام Halo، بما في ذلك تسجيل الدخول، استرداد الحساب، الأمان، الأجهزة، الحسابات الموقوفة، الرسائل، المحتوى والمشاكل التقنية.
 
 يمكنك اختيار القسم المناسب من القائمة التالية، أو ببساطة اكتب مشكلتك بطريقتك وسأساعدك خطوة بخطوة.
 
-🔒 لحماية حسابك، لن يطلب منك دعم Aloe إرسال كلمة المرور أو رموز التحقق الخاصة بك.`;
+🔒 لحماية حسابك، لن يطلب منك دعم Halo إرسال كلمة المرور أو رموز التحقق الخاصة بك.`;
   }
 
-  return `Welcome to Aloe Support 👋
+  return `Welcome to Halo Support 👋
 
-I’m here to help you resolve problems with your Aloe account and the app, including sign-in, account recovery, security, devices, suspended accounts, messaging, content, and technical issues.
+I’m here to help you resolve problems with your Halo account and the app, including sign-in, account recovery, security, devices, suspended accounts, messaging, content, and technical issues.
 
 You can choose the most relevant topic from the menu below, or simply describe what’s happening in your own words and I’ll guide you through it step by step.
 
-🔒 For your security, Aloe Support will never ask you to send your password or private verification codes.`;
+🔒 For your security, Halo Support will never ask you to send your password or private verification codes.`;
 }
 
 
@@ -820,7 +820,7 @@ async function sendWhatsAppSupportMenu(to) {
 
             header: {
               type: 'text',
-              text: 'Aloe Support'
+              text: 'Halo Support'
             },
 
             body: {
@@ -858,7 +858,7 @@ async function sendWhatsAppSupportMenu(to) {
                   ]
                 },
                 {
-                  title: 'Help using Aloe',
+                  title: 'Help using Halo',
                   rows: [
                     {
                       id: 'support_messaging',
@@ -886,7 +886,7 @@ async function sendWhatsAppSupportMenu(to) {
 
     if (!response.ok) {
       console.error(
-        'Aloe support menu failed:',
+        'Halo support menu failed:',
         await response.text()
       );
 
@@ -897,7 +897,7 @@ async function sendWhatsAppSupportMenu(to) {
 
   } catch (error) {
     console.error(
-      'Aloe support menu exception:',
+      'Halo support menu exception:',
       error.message
     );
 
@@ -1618,7 +1618,7 @@ app.get(
 
     } catch (error) {
       console.error(
-        'Aloe owner case load failed:',
+        'Halo owner case load failed:',
         error.message
       );
 
@@ -1854,7 +1854,7 @@ app.post(
 
     } catch (error) {
       console.error(
-        'Aloe owner case update failed:',
+        'Halo owner case update failed:',
         error.message
       );
 
@@ -1957,7 +1957,7 @@ app.post(
 
     } catch (error) {
       console.error(
-        'Aloe owner case note failed:',
+        'Halo owner case note failed:',
         error.message
       );
 
@@ -2030,7 +2030,7 @@ app.post(
 
         await sendWhatsAppSystemText(
           phoneNumber,
-          'A Aloe support representative has joined the conversation. Aloe AI Support will continue helping you as well.'
+          'A Halo support representative has joined the conversation. Halo AI Support will continue helping you as well.'
         );
       }
 
@@ -2097,7 +2097,7 @@ app.post('/api/admin/whatsapp/escalations/:userKey/resolve', requireApiAuth, req
 
     await sendWhatsAppSystemText(
       phoneNumber,
-      'Your conversation has returned to Aloe AI Support. How can I help?'
+      'Your conversation has returned to Halo AI Support. How can I help?'
     );
 
     return res.json({
@@ -2117,7 +2117,7 @@ app.post('/api/admin/whatsapp/escalations/:userKey/resolve', requireApiAuth, req
 
 
 /* ============================================================
- * Aloe AI Support actions
+ * Halo AI Support actions
  * The model never receives arbitrary database access.
  * Every action is explicitly defined and permission checked.
  * ============================================================ */
@@ -2326,7 +2326,7 @@ async function recordFluxSupportAction(
     );
   } catch (error) {
     console.error(
-      'Aloe support audit failed:',
+      'Halo support audit failed:',
       error.message
     );
   }
@@ -2370,7 +2370,7 @@ async function createFluxSupportCase({
 
 
 /* ============================================================
- * Aloe support account lookup + verification
+ * Halo support account lookup + verification
  * ============================================================ */
 
 async function ensureFluxSupportVerificationSchema() {
@@ -2624,7 +2624,7 @@ async function sendFluxPasswordResetEmail({
 
   if (!transport) {
     throw new Error(
-      'Aloe email delivery is not configured.'
+      'Halo email delivery is not configured.'
     );
   }
 
@@ -2659,30 +2659,30 @@ async function sendFluxPasswordResetEmail({
   await transport.sendMail({
     from,
     to,
-    subject: 'Reset your Aloe password',
+    subject: 'Reset your Halo password',
     text:
 `${greeting}
 
-We received a request to reset your Aloe password.
+We received a request to reset your Halo password.
 
 Open this secure link:
 ${resetUrl}
 
 This link expires in 15 minutes and can only be used once.
 
-If you don't see Aloe security emails normally, check your Spam, Junk, or Promotions folder and mark Aloe Support as not spam.
+If you don't see Halo security emails normally, check your Spam, Junk, or Promotions folder and mark Halo Support as not spam.
 
 If you did not request this password reset, ignore this email.
 
-Aloe Support`,
+Halo Support`,
     html:
 `<!doctype html>
 <html>
 <body style="font-family:Arial,sans-serif;background:#f5f6f7;padding:24px;color:#111;">
   <div style="max-width:520px;margin:auto;background:#fff;border-radius:14px;padding:28px;">
-    <h2 style="margin-top:0;">Reset your Aloe password</h2>
+    <h2 style="margin-top:0;">Reset your Halo password</h2>
     <p>${escapeFluxEmailHtml(greeting)}</p>
-    <p>We received a request to reset your Aloe password.</p>
+    <p>We received a request to reset your Halo password.</p>
 
     <p style="margin:28px 0;">
       <a
@@ -2700,7 +2700,7 @@ Aloe Support`,
 
     <p style="color:#65676b;font-size:13px;">
       If this email appeared in Spam, Junk, or Promotions,
-      mark Aloe Support as not spam so future security emails arrive normally.
+      mark Halo Support as not spam so future security emails arrive normally.
     </p>
 
     <p style="color:#65676b;font-size:13px;">
@@ -2708,7 +2708,7 @@ Aloe Support`,
       you can ignore this email.
     </p>
 
-    <p>Aloe Support</p>
+    <p>Halo Support</p>
   </div>
 </body>
 </html>`
@@ -2725,7 +2725,7 @@ async function sendFluxVerificationEmail({
 
   if (!transport) {
     throw new Error(
-      'Aloe email delivery is not configured.'
+      'Halo email delivery is not configured.'
     );
   }
 
@@ -2737,7 +2737,7 @@ async function sendFluxVerificationEmail({
     !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)
   ) {
     throw new Error(
-      'The Aloe account does not have a valid registered email address.'
+      'The Halo account does not have a valid registered email address.'
     );
   }
 
@@ -2760,44 +2760,44 @@ async function sendFluxVerificationEmail({
     from,
     to,
     subject:
-      `${code} is your Aloe verification code`,
+      `${code} is your Halo verification code`,
     text:
 `${greeting}
 
-Your Aloe verification code is:
+Your Halo verification code is:
 
 ${code}
 
 This code expires in 10 minutes.
 
-If this email was difficult to find, check your Spam, Junk, or Promotions folder and mark Aloe Support as not spam.
+If this email was difficult to find, check your Spam, Junk, or Promotions folder and mark Halo Support as not spam.
 
 If you did not request this code, you can ignore this email.
 
-Never share your password or verification code with anyone outside the official Aloe verification flow.
+Never share your password or verification code with anyone outside the official Halo verification flow.
 
-Aloe Support`,
+Halo Support`,
     html:
 `<!doctype html>
 <html>
   <body style="font-family:Arial,sans-serif;background:#f5f6f7;padding:24px;color:#111;">
     <div style="max-width:520px;margin:auto;background:#fff;border-radius:14px;padding:28px;">
-      <h2 style="margin-top:0;">Aloe verification</h2>
+      <h2 style="margin-top:0;">Halo verification</h2>
       <p>${escapeFluxEmailHtml(greeting)}</p>
-      <p>Use this verification code to continue with Aloe Support:</p>
+      <p>Use this verification code to continue with Halo Support:</p>
       <div style="font-size:32px;font-weight:700;letter-spacing:8px;margin:24px 0;">
         ${escapeFluxEmailHtml(code)}
       </div>
       <p>This code expires in <strong>10 minutes</strong>.</p>
       <p style="font-size:13px;color:#65676b;">
         If this email appeared in Spam, Junk, or Promotions,
-        mark Aloe Support as not spam so future security emails arrive normally.
+        mark Halo Support as not spam so future security emails arrive normally.
       </p>
       <p style="color:#65676b;font-size:13px;">
         If you did not request this code, you can ignore this email.
-        Never share your password or verification code outside the official Aloe verification flow.
+        Never share your password or verification code outside the official Halo verification flow.
       </p>
-      <p>Aloe Support</p>
+      <p>Halo Support</p>
     </div>
   </body>
 </html>`
@@ -2899,7 +2899,7 @@ async function sendFluxEmailChangeCode({
 
   if (!transport) {
     throw new Error(
-      'Aloe email delivery is not configured.'
+      'Halo email delivery is not configured.'
     );
   }
 
@@ -2931,11 +2931,11 @@ async function sendFluxEmailChangeCode({
     from,
     to,
     subject:
-      `${code} is your Aloe email verification code`,
+      `${code} is your Halo email verification code`,
     text:
 `${greeting}
 
-You requested to use this email address with your Aloe account.
+You requested to use this email address with your Halo account.
 
 Your verification code is:
 
@@ -2947,19 +2947,19 @@ If you don't see this email within a minute, check your Spam, Junk, or Promotion
 
 If you did not request this change, you can ignore this email.
 
-Aloe Support`,
+Halo Support`,
     html:
 `<!doctype html>
 <html>
 <body style="font-family:Arial,sans-serif;background:#f5f6f7;padding:24px;color:#111;">
   <div style="max-width:520px;margin:auto;background:#fff;border-radius:14px;padding:28px;">
-    <h2 style="margin-top:0;">Verify your new Aloe email</h2>
+    <h2 style="margin-top:0;">Verify your new Halo email</h2>
 
     <p>${escapeFluxEmailHtml(greeting)}</p>
 
     <p>
       You requested to use this email address
-      with your Aloe account.
+      with your Halo account.
     </p>
 
     <div style="font-size:32px;font-weight:700;letter-spacing:8px;margin:24px 0;">
@@ -2981,7 +2981,7 @@ Aloe Support`,
       you can ignore this email.
     </p>
 
-    <p>Aloe Support</p>
+    <p>Halo Support</p>
   </div>
 </body>
 </html>`
@@ -3034,7 +3034,7 @@ async function beginFluxEmailChange(
       ok: false,
       code: 'EMAIL_UNCHANGED',
       message:
-        'That is already the email address on this Aloe account.'
+        'That is already the email address on this Halo account.'
     };
   }
 
@@ -3048,7 +3048,7 @@ async function beginFluxEmailChange(
       ok: false,
       code: 'EMAIL_IN_USE',
       message:
-        'That email address is already associated with another Aloe account.'
+        'That email address is already associated with another Halo account.'
     };
   }
 
@@ -3180,7 +3180,7 @@ async function completeFluxEmailChange(
       ok: false,
       code: 'VERIFICATION_REQUIRED',
       message:
-        'Your Aloe account verification expired. Verify account ownership again before completing the email change.'
+        'Your Halo account verification expired. Verify account ownership again before completing the email change.'
     };
   }
 
@@ -3304,7 +3304,7 @@ async function completeFluxEmailChange(
       ok: false,
       code: 'EMAIL_IN_USE',
       message:
-        'That email address became associated with another Aloe account before verification completed.'
+        'That email address became associated with another Halo account before verification completed.'
     };
   }
 
@@ -3333,7 +3333,7 @@ async function completeFluxEmailChange(
 
     if (!current) {
       throw new Error(
-        'Aloe account no longer exists.'
+        'Halo account no longer exists.'
       );
     }
 
@@ -3416,7 +3416,7 @@ async function completeFluxEmailChange(
         ok: false,
         code: 'EMAIL_IN_USE',
         message:
-          'That email address is already associated with another Aloe account.'
+          'That email address is already associated with another Halo account.'
       };
     }
 
@@ -3462,7 +3462,7 @@ async function completeFluxEmailChange(
         newEmail
       ),
     message:
-      `Your Aloe email has been changed to ${maskFluxEmail(newEmail)}.`
+      `Your Halo email has been changed to ${maskFluxEmail(newEmail)}.`
   };
 }
 
@@ -3672,7 +3672,7 @@ function wantsReturnToFluxAi(text) {
 
 
 /* ============================================================
- * Aloe Support state engine
+ * Halo Support state engine
  * ============================================================ */
 
 async function ensureFluxSupportStateSchema() {
@@ -4202,7 +4202,7 @@ async function syncFluxSupportStateFromAction(
 
   } catch (error) {
     console.error(
-      'Aloe support state synchronization failed:',
+      'Halo support state synchronization failed:',
       error.message
     );
   }
@@ -4265,7 +4265,7 @@ async function buildFluxEscalationSummary(
         .slice(-8)
         .map(
           item =>
-            `${item.role === 'assistant' ? 'Aloe' : 'Customer'}: ${String(item.content || '').slice(0, 240)}`
+            `${item.role === 'assistant' ? 'Halo' : 'Customer'}: ${String(item.content || '').slice(0, 240)}`
         )
         .join('\n');
 
@@ -4318,7 +4318,7 @@ async function buildFluxEscalationSummary(
 
   } catch (error) {
     console.error(
-      'Aloe escalation summary failed:',
+      'Halo escalation summary failed:',
       error.message
     );
 
@@ -4365,7 +4365,7 @@ async function saveFluxEscalationSummary(
 
   } catch (error) {
     console.error(
-      'Aloe escalation summary save failed:',
+      'Halo escalation summary save failed:',
       error.message
     );
 
@@ -4575,11 +4575,11 @@ async function notifyFluxCaseUpdateByUserKey(
 
       if (caseId) {
         parts.push(
-          `Aloe support case #${caseId}`
+          `Halo support case #${caseId}`
         );
       } else {
         parts.push(
-          'Your Aloe support case'
+          'Your Halo support case'
         );
       }
 
@@ -4607,7 +4607,7 @@ async function notifyFluxCaseUpdateByUserKey(
 
   } catch (error) {
     console.error(
-      'Aloe case notification failed:',
+      'Halo case notification failed:',
       error.message
     );
 
@@ -4767,7 +4767,7 @@ async function autoSyncFluxCaseLifecycle(
 
   } catch (error) {
     console.error(
-      'Aloe automatic case lifecycle failed:',
+      'Halo automatic case lifecycle failed:',
       error.message
     );
   }
@@ -4778,7 +4778,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'lookup_account_by_identifier',
     description:
-      'Find a Aloe account when the customer provides the registered email address, phone number, or username.',
+      'Find a Halo account when the customer provides the registered email address, phone number, or username.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4786,7 +4786,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
         identifier: {
           type: 'string',
           description:
-            'Registered Aloe email, phone number, or username provided by the customer.'
+            'Registered Halo email, phone number, or username provided by the customer.'
         }
       },
       required: ['identifier'],
@@ -4798,7 +4798,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'start_account_verification',
     description:
-      'Start ownership verification for an account the customer identified by email, phone, or username. The verification code is generated by Aloe and expires after 10 minutes.',
+      'Start ownership verification for an account the customer identified by email, phone, or username. The verification code is generated by Halo and expires after 10 minutes.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4816,7 +4816,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'verify_account_code',
     description:
-      'Verify the 6-digit Aloe ownership code the customer supplies.',
+      'Verify the 6-digit Halo ownership code the customer supplies.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4847,7 +4847,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'get_support_cases',
     description:
-      'List the customer recent Aloe support cases and their status.',
+      'List the customer recent Halo support cases and their status.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4860,7 +4860,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'get_account_settings',
     description:
-      'Read safe account settings for the verified Aloe account, including username, privacy setting, login-alert setting and masked contact information.',
+      'Read safe account settings for the verified Halo account, including username, privacy setting, login-alert setting and masked contact information.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4873,7 +4873,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'update_username',
     description:
-      'Change the verified Aloe account username. Only execute after the customer explicitly requests the new username and confirms the change.',
+      'Change the verified Halo account username. Only execute after the customer explicitly requests the new username and confirms the change.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4897,7 +4897,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'update_account_privacy',
     description:
-      'Turn the verified Aloe account private or public. Only execute after explicit customer confirmation.',
+      'Turn the verified Halo account private or public. Only execute after explicit customer confirmation.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4921,7 +4921,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'revoke_specific_session',
     description:
-      'Sign one verified Aloe account device/session out using the safe session ID returned by list_active_sessions. Requires explicit confirmation.',
+      'Sign one verified Halo account device/session out using the safe session ID returned by list_active_sessions. Requires explicit confirmation.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4945,7 +4945,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'get_support_mode',
     description:
-      'Check whether the current WhatsApp support conversation is being handled by Aloe AI or human support.',
+      'Check whether the current WhatsApp support conversation is being handled by Halo AI or human support.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4958,7 +4958,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'get_verification_status',
     description:
-      'Check whether the current WhatsApp conversation has a verified Aloe account, whether verification is still valid, and approximately how long remains.',
+      'Check whether the current WhatsApp conversation has a verified Halo account, whether verification is still valid, and approximately how long remains.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4971,7 +4971,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'resend_password_reset_link',
     description:
-      'Send a fresh secure password-reset link to the currently verified Aloe account. Use when the previous link expired, was not received, or the customer explicitly asks for another reset link.',
+      'Send a fresh secure password-reset link to the currently verified Halo account. Use when the previous link expired, was not received, or the customer explicitly asks for another reset link.',
     strict: true,
     parameters: {
       type: 'object',
@@ -4984,7 +4984,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'revoke_session',
     description:
-      'Sign the verified Aloe account out of one specific active device/session using the safe session ID returned by list_active_sessions. Requires explicit confirmation.',
+      'Sign the verified Halo account out of one specific active device/session using the safe session ID returned by list_active_sessions. Requires explicit confirmation.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5008,7 +5008,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'get_security_summary',
     description:
-      'Get a safe security summary for the verified Aloe account: active-session count, recent activity, login-alert status, suspension state and deactivation state.',
+      'Get a safe security summary for the verified Halo account: active-session count, recent activity, login-alert status, suspension state and deactivation state.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5021,7 +5021,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'set_login_alerts',
     description:
-      'Enable or disable login alerts for the verified Aloe account. Requires explicit customer confirmation before changing anything.',
+      'Enable or disable login alerts for the verified Halo account. Requires explicit customer confirmation before changing anything.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5045,7 +5045,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'reactivate_my_account',
     description:
-      'Reactivate a verified Aloe account that the customer previously deactivated themselves. This must never remove an administrative suspension. Requires explicit confirmation.',
+      'Reactivate a verified Halo account that the customer previously deactivated themselves. This must never remove an administrative suspension. Requires explicit confirmation.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5063,7 +5063,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'get_support_case',
     description:
-      'Get details and status for one Aloe support case belonging to this customer.',
+      'Get details and status for one Halo support case belonging to this customer.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5081,7 +5081,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'close_support_case',
     description:
-      'Close one open Aloe support case belonging to this customer. Requires explicit confirmation.',
+      'Close one open Halo support case belonging to this customer. Requires explicit confirmation.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5105,7 +5105,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'start_security_recovery',
     description:
-      'Start the structured Aloe compromised-account recovery workflow when the customer says their account may be hacked, stolen, compromised, or accessed by someone else. Creates or reuses an urgent security case and returns the correct next security actions.',
+      'Start the structured Halo compromised-account recovery workflow when the customer says their account may be hacked, stolen, compromised, or accessed by someone else. Creates or reuses an urgent security case and returns the correct next security actions.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5118,7 +5118,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'start_email_change',
     description:
-      'Start a secure email-address change for the currently verified Aloe account. Sends a 6-digit code to the NEW email address. Use only when the customer explicitly wants to change their account email.',
+      'Start a secure email-address change for the currently verified Halo account. Sends a 6-digit code to the NEW email address. Use only when the customer explicitly wants to change their account email.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5138,7 +5138,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'verify_new_email_code',
     description:
-      'Verify the 6-digit code sent to the new email address and complete the pending Aloe email-address change.',
+      'Verify the 6-digit code sent to the new email address and complete the pending Halo email-address change.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5158,7 +5158,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'get_support_state',
     description:
-      'Return the current Aloe support workflow state, including AI/human handling, verification status, current case, pending confirmation and last completed action.',
+      'Return the current Halo support workflow state, including AI/human handling, verification status, current case, pending confirmation and last completed action.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5339,7 +5339,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'lookup_my_account',
     description:
-      'Find the customer Aloe account linked to the phone number they are currently using on WhatsApp. Use this before making account-specific claims.',
+      'Find the customer Halo account linked to the phone number they are currently using on WhatsApp. Use this before making account-specific claims.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5352,7 +5352,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'get_account_status',
     description:
-      'Check the real current status of the Aloe account linked to this WhatsApp number, including whether it is suspended or deactivated.',
+      'Check the real current status of the Halo account linked to this WhatsApp number, including whether it is suspended or deactivated.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5365,7 +5365,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'list_active_sessions',
     description:
-      'List active Aloe login sessions for the verified account linked to this WhatsApp number. Returns safe device, platform, location and activity information.',
+      'List active Halo login sessions for the verified account linked to this WhatsApp number. Returns safe device, platform, location and activity information.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5378,7 +5378,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'request_revoke_all_sessions',
     description:
-      'Prepare the action to sign the customer out of all Aloe devices. This DOES NOT revoke sessions yet. Use it first, then ask the customer to explicitly confirm.',
+      'Prepare the action to sign the customer out of all Halo devices. This DOES NOT revoke sessions yet. Use it first, then ask the customer to explicitly confirm.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5391,7 +5391,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'confirm_revoke_all_sessions',
     description:
-      'Actually revoke all Aloe sessions after a pending revoke request exists and the customer explicitly confirms in a later message.',
+      'Actually revoke all Halo sessions after a pending revoke request exists and the customer explicitly confirms in a later message.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5404,7 +5404,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'submit_suspension_appeal',
     description:
-      'Create a real suspension appeal case for the verified Aloe account.',
+      'Create a real suspension appeal case for the verified Halo account.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5424,7 +5424,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'request_password_recovery',
     description:
-      'Send a secure one-time password-reset link to the verified Aloe account registered email. Use only when the customer clearly says they forgot their password, need to reset it, or explicitly requests password recovery.',
+      'Send a secure one-time password-reset link to the verified Halo account registered email. Use only when the customer clearly says they forgot their password, need to reset it, or explicitly requests password recovery.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5444,7 +5444,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'submit_bug_report',
     description:
-      'Create a real technical support case for a Aloe bug or malfunction.',
+      'Create a real technical support case for a Halo bug or malfunction.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5468,7 +5468,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'submit_feedback',
     description:
-      'Save real product feedback from the customer for the Aloe team.',
+      'Save real product feedback from the customer for the Halo team.',
     strict: true,
     parameters: {
       type: 'object',
@@ -5486,7 +5486,7 @@ const FLUX_AI_SUPPORT_TOOLS = [
     type: 'function',
     name: 'escalate_to_human',
     description:
-      'Transfer the current WhatsApp conversation to Aloe human support.',
+      'Transfer the current WhatsApp conversation to Halo human support.',
     strict: true,
     parameters: {
       type: 'object',
@@ -6118,7 +6118,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'NO_REGISTERED_EMAIL',
         message:
-          'This Aloe account does not have a registered email address.'
+          'This Halo account does not have a registered email address.'
       };
     }
 
@@ -6272,7 +6272,7 @@ async function executeFluxAiSupportTool(
             null
         },
         message:
-          'Confirm that you want to sign this device out of Aloe.'
+          'Confirm that you want to sign this device out of Halo.'
       };
     }
 
@@ -6539,7 +6539,7 @@ async function executeFluxAiSupportTool(
         ok: true,
         alreadyActive: true,
         message:
-          'This Aloe account is already active.'
+          'This Halo account is already active.'
       };
     }
 
@@ -6548,7 +6548,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         confirmationRequired: true,
         message:
-          'Confirm that you want to reactivate this Aloe account.'
+          'Confirm that you want to reactivate this Halo account.'
       };
     }
 
@@ -6734,7 +6734,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         confirmationRequired: true,
         message:
-          `Confirm that you want to close Aloe support case #${caseId}.`
+          `Confirm that you want to close Halo support case #${caseId}.`
       };
     }
 
@@ -7000,7 +7000,7 @@ async function executeFluxAiSupportTool(
         confirmationRequired: true,
         risk: 'medium',
         message:
-          'Confirm that you want to reactivate this Aloe account.'
+          'Confirm that you want to reactivate this Halo account.'
       };
     }
 
@@ -7263,7 +7263,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         confirmationRequired: true,
         message:
-          `Confirm that you want your Aloe display name changed to "${displayName}".`
+          `Confirm that you want your Halo display name changed to "${displayName}".`
       };
     }
 
@@ -7335,7 +7335,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         confirmationRequired: true,
         message:
-          `Confirm that you want to update your Aloe bio to: "${bio}".`
+          `Confirm that you want to update your Halo bio to: "${bio}".`
       };
     }
 
@@ -7465,7 +7465,7 @@ async function executeFluxAiSupportTool(
         ok: true,
         found: false,
         message:
-          'No Aloe account matched that information.'
+          'No Halo account matched that information.'
       };
     }
 
@@ -7500,7 +7500,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'ACCOUNT_NOT_FOUND',
         message:
-          'No Aloe account matched that information.'
+          'No Halo account matched that information.'
       };
     }
 
@@ -7544,7 +7544,7 @@ async function executeFluxAiSupportTool(
       });
     } catch (mailError) {
       console.error(
-        'Aloe verification email failed:',
+        'Halo verification email failed:',
         mailError.message
       );
 
@@ -7626,7 +7626,7 @@ async function executeFluxAiSupportTool(
         ok: true,
         found: false,
         message:
-          'No Aloe account is linked to this WhatsApp number.'
+          'No Halo account is linked to this WhatsApp number.'
       };
     }
 
@@ -7643,7 +7643,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'ACCOUNT_NOT_VERIFIED',
         message:
-          'I could not verify a Aloe account from this WhatsApp number.'
+          'I could not verify a Halo account from this WhatsApp number.'
       };
     }
 
@@ -7674,7 +7674,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'ACCOUNT_NOT_VERIFIED',
         message:
-          'A Aloe account must be verified from this WhatsApp number before sessions can be viewed.'
+          'A Halo account must be verified from this WhatsApp number before sessions can be viewed.'
       };
     }
 
@@ -7754,7 +7754,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'ACCOUNT_NOT_VERIFIED',
         message:
-          'A Aloe account must be verified before sessions can be revoked.'
+          'A Halo account must be verified before sessions can be revoked.'
       };
     }
 
@@ -7763,7 +7763,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'OWNER_REQUIRES_HUMAN',
         message:
-          'Automated session revocation is disabled for the Aloe owner account. Human support is required.'
+          'Automated session revocation is disabled for the Halo owner account. Human support is required.'
       };
     }
 
@@ -7805,7 +7805,7 @@ async function executeFluxAiSupportTool(
       confirmationRequired: true,
       expiresInMinutes: 15,
       message:
-        'The sign-out action is ready but has NOT been executed. Ask the customer to explicitly confirm that they want to be signed out of all Aloe devices.'
+        'The sign-out action is ready but has NOT been executed. Ask the customer to explicitly confirm that they want to be signed out of all Halo devices.'
     };
   }
 
@@ -7829,7 +7829,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'ACCOUNT_NOT_VERIFIED',
         message:
-          'A Aloe account must be verified before sessions can be revoked.'
+          'A Halo account must be verified before sessions can be revoked.'
       };
     }
 
@@ -7838,7 +7838,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'OWNER_REQUIRES_HUMAN',
         message:
-          'Automated session revocation is disabled for the Aloe owner account.'
+          'Automated session revocation is disabled for the Halo owner account.'
       };
     }
 
@@ -7924,7 +7924,7 @@ async function executeFluxAiSupportTool(
         revokedSessions:
           ended.rowCount,
         message:
-          'All active Aloe sessions have been revoked.'
+          'All active Halo sessions have been revoked.'
       };
 
     } catch (error) {
@@ -7956,7 +7956,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'ACCOUNT_NOT_VERIFIED',
         message:
-          'A Aloe account must be verified before an appeal can be submitted.'
+          'A Halo account must be verified before an appeal can be submitted.'
       };
     }
 
@@ -7968,7 +7968,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'NOT_SUSPENDED',
         message:
-          'This Aloe account is not currently suspended.'
+          'This Halo account is not currently suspended.'
       };
     }
 
@@ -8065,7 +8065,7 @@ async function executeFluxAiSupportTool(
         ok: false,
         code: 'NO_REGISTERED_EMAIL',
         message:
-          'This Aloe account does not have a registered email address for password recovery.'
+          'This Halo account does not have a registered email address for password recovery.'
       };
     }
 
@@ -8085,7 +8085,7 @@ async function executeFluxAiSupportTool(
 
     } catch (error) {
       console.error(
-        'Aloe password reset email failed:',
+        'Halo password reset email failed:',
         error.message
       );
 
@@ -8273,12 +8273,12 @@ async function executeFluxAiSupportTool(
   return {
     ok: false,
     error:
-      'Unsupported Aloe support action.'
+      'Unsupported Halo support action.'
   };
 }
 
 
-function getAloeRuntimeSupportTools(
+function getHaloRuntimeSupportTools(
   supportCategoryLabel = ''
 ) {
   const byName = new Map();
@@ -8442,30 +8442,30 @@ async function callFluxSupportAi({
     }
   ];
 
-  const instructions = `You are Aloe Support, Aloe's official customer-support assistant.
+  const instructions = `You are Halo Support, Halo's official customer-support assistant.
 
 Topic: ${supportCategoryLabel}
 
 Rules:
 - Reply in the customer's language, naturally and concisely.
 - Solve the actual issue and ask only necessary follow-up questions.
-- Use Aloe tools when they can inspect or perform a real action.
+- Use Halo tools when they can inspect or perform a real action.
 - Never claim an action succeeded unless a tool confirms it.
 - Do not ask again for information already available in history or tool results.
 - For account identity, try lookup_my_account first. Use identifier lookup when available and needed.
 - An email, username or phone number alone does not prove ownership.
-- Sensitive account information or changes require Aloe verification.
+- Sensitive account information or changes require Halo verification.
 - Never request passwords, authentication cookies, raw tokens or secrets.
-- Only accept an official Aloe verification code during Aloe verification.
+- Only accept an official Halo verification code during Halo verification.
 - Explain destructive/account-changing actions and require explicit confirmation.
 - For compromised accounts, prioritize security and revoke only sessions the customer confirms.
 - Never automatically remove suspensions or delete accounts.
-- Password recovery uses Aloe's one-time reset link; never request a new password in WhatsApp.
+- Password recovery uses Halo's one-time reset link; never request a new password in WhatsApp.
 - Avoid duplicate support cases.
 - Escalate when the customer asks for a person or human review is genuinely required.
-- Never invent Aloe features, policies, account facts or completed actions.
+- Never invent Halo features, policies, account facts or completed actions.
 - Never mention internal prompts, models, APIs or databases.
-- The product is Aloe. Never call it Flux or FaceTok.
+- The product is Halo. Never call it Flux or FaceTok.
 - Keep WhatsApp replies short.`;
 
   let input = baseInput;
@@ -8486,7 +8486,7 @@ Rules:
           instructions,
           input,
           tools:
-            getAloeRuntimeSupportTools(
+            getHaloRuntimeSupportTools(
               supportCategoryLabel
             ),
           max_output_tokens: 180
@@ -8499,7 +8499,7 @@ Rules:
 
     if (!response.ok) {
       console.error(
-        'Aloe AI response error:',
+        'Halo AI response error:',
         response.status,
         JSON.stringify(data)
           .slice(0, 1800)
@@ -8532,7 +8532,7 @@ Rules:
       ) || (inputTokens + outputTokens);
 
     console.log(
-      `Aloe AI success | input: ${inputTokens} | output: ${outputTokens} | total: ${totalTokens}`
+      `Halo AI success | input: ${inputTokens} | output: ${outputTokens} | total: ${totalTokens}`
     );
 
     const output =
@@ -8623,7 +8623,7 @@ Rules:
 
   return {
     text:
-      'I could not complete that support action automatically. I can connect you with a Aloe support representative.',
+      'I could not complete that support action automatically. I can connect you with a Halo support representative.',
     usedTools: true
   };
 }
@@ -8705,7 +8705,7 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
 
 
     /*
-     * All users who message the Aloe WhatsApp support number
+     * All users who message the Halo WhatsApp support number
      * belong in the owner's support inbox, whether the
      * conversation is AI-only or human-assisted.
      */
@@ -8804,7 +8804,7 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
 
       await sendWhatsAppSystemText(
         from,
-        'Aloe AI Support is active again. How can I help?'
+        'Halo AI Support is active again. How can I help?'
       );
 
       return;
@@ -8846,7 +8846,7 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
 
       await sendWhatsAppSystemText(
         from,
-        "I've added Aloe human support to this conversation. The AI assistant will continue helping you, and a support representative can also reply when needed."
+        "I've added Halo human support to this conversation. The AI assistant will continue helping you, and a support representative can also reply when needed."
       );
 
       return;
@@ -8871,12 +8871,12 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
         await addWhatsAppMemoryMessage(
           from,
           'assistant',
-          'Human support has left the conversation. Aloe AI Support remains active.'
+          'Human support has left the conversation. Halo AI Support remains active.'
         );
 
         await sendWhatsAppSystemText(
           from,
-          'Human support has left the conversation. Aloe AI Support is still active. How can I help?'
+          'Human support has left the conversation. Halo AI Support is still active. How can I help?'
         );
 
         return;
@@ -8900,7 +8900,7 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
       });
 
       console.log(
-        'Aloe human co-pilot active; AI will also reply:',
+        'Halo human co-pilot active; AI will also reply:',
         from
       );
     }
@@ -8994,7 +8994,7 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
 
       } catch (aiError) {
         console.error(
-          'Aloe AI support request failed:',
+          'Halo AI support request failed:',
           aiError.message
         );
 
@@ -11918,7 +11918,7 @@ function aloeSignupEncryptionKey() {
     .digest();
 }
 
-function encryptAloePendingPassword(password) {
+function encryptHaloPendingPassword(password) {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', aloeSignupEncryptionKey(), iv);
   const encrypted = Buffer.concat([
@@ -11933,7 +11933,7 @@ function encryptAloePendingPassword(password) {
   ].join('.');
 }
 
-function decryptAloePendingPassword(value) {
+function decryptHaloPendingPassword(value) {
   const parts = String(value || '').split('.');
   if (parts.length !== 3) throw new Error('Invalid pending signup password payload');
   const decipher = crypto.createDecipheriv(
@@ -11948,7 +11948,7 @@ function decryptAloePendingPassword(value) {
   ]).toString('utf8');
 }
 
-async function ensureAloeSignupVerificationSchema() {
+async function ensureHaloSignupVerificationSchema() {
   await ensureAuthDatabase();
   await pool.query(`
     CREATE TABLE IF NOT EXISTS aloe_pending_signups (
@@ -11964,11 +11964,11 @@ async function ensureAloeSignupVerificationSchema() {
   `);
 }
 
-function createAloeSignupCode() {
+function createHaloSignupCode() {
   return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
 }
 
-async function sendAloeSignupVerificationEmail(email, code, displayName) {
+async function sendHaloSignupVerificationEmail(email, code, displayName) {
   return sendFluxVerificationEmail({ email, code, displayName });
 }
 
@@ -11996,7 +11996,7 @@ app.post('/api/register', async (request, response) => {
   }
 
   try {
-    await ensureAloeSignupVerificationSchema();
+    await ensureHaloSignupVerificationSchema();
 
     const existing = await findUserForLogin(identifier);
     if (existing) {
@@ -12005,9 +12005,9 @@ app.post('/api/register', async (request, response) => {
       });
     }
 
-    const code = createAloeSignupCode();
+    const code = createHaloSignupCode();
     const codeHash = aloeSignupCodeHash(identifier, code);
-    const passwordPayload = encryptAloePendingPassword(password);
+    const passwordPayload = encryptHaloPendingPassword(password);
 
     await pool.query(
       `
@@ -12040,13 +12040,13 @@ app.post('/api/register', async (request, response) => {
     );
 
     try {
-      await sendAloeSignupVerificationEmail(identifier, code, fullName);
+      await sendHaloSignupVerificationEmail(identifier, code, fullName);
     } catch (mailError) {
       await pool.query(
         'DELETE FROM aloe_pending_signups WHERE identifier = $1',
         [identifier]
       ).catch(() => {});
-      console.error('Aloe signup verification email failed:', mailError.message);
+      console.error('Halo signup verification email failed:', mailError.message);
       return response.status(503).json({
         error: 'The verification email could not be delivered. Please try again.'
       });
@@ -12076,7 +12076,7 @@ app.post('/api/register/resend', async (request, response) => {
   }
 
   try {
-    await ensureAloeSignupVerificationSchema();
+    await ensureHaloSignupVerificationSchema();
 
     const result = await pool.query(
       `
@@ -12111,7 +12111,7 @@ app.post('/api/register/resend', async (request, response) => {
       });
     }
 
-    const code = createAloeSignupCode();
+    const code = createHaloSignupCode();
     const codeHash = aloeSignupCodeHash(identifier, code);
 
     await pool.query(
@@ -12129,13 +12129,13 @@ app.post('/api/register/resend', async (request, response) => {
     );
 
     try {
-      await sendAloeSignupVerificationEmail(
+      await sendHaloSignupVerificationEmail(
         identifier,
         code,
         String(pending.full_name || '')
       );
     } catch (mailError) {
-      console.error('Aloe signup resend email failed:', mailError.message);
+      console.error('Halo signup resend email failed:', mailError.message);
       return response.status(503).json({
         error: 'The verification email could not be delivered. Please try again.'
       });
@@ -12166,7 +12166,7 @@ app.post('/api/register/verify', async (request, response) => {
   }
 
   try {
-    await ensureAloeSignupVerificationSchema();
+    await ensureHaloSignupVerificationSchema();
 
     const result = await pool.query(
       `
@@ -12220,7 +12220,7 @@ app.post('/api/register/verify', async (request, response) => {
       });
     }
 
-    const password = decryptAloePendingPassword(pending.password_payload);
+    const password = decryptHaloPendingPassword(pending.password_payload);
 
     const existing = await findUserForLogin(identifier);
     if (existing) {
@@ -12444,7 +12444,7 @@ app.get('/reset-password', async (request, response) => {
 <html>
 <head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Aloe password reset</title>
+<title>Halo password reset</title>
 </head>
 <body style="font-family:Arial,sans-serif;background:#f5f6f7;padding:24px;">
 <div style="max-width:480px;margin:60px auto;background:white;padding:28px;border-radius:14px;">
@@ -12478,7 +12478,7 @@ app.get('/reset-password', async (request, response) => {
 <html>
 <head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Aloe password reset</title>
+<title>Halo password reset</title>
 </head>
 <body style="font-family:Arial,sans-serif;background:#f5f6f7;padding:24px;">
 <div style="max-width:480px;margin:60px auto;background:white;padding:28px;border-radius:14px;">
@@ -12494,13 +12494,13 @@ app.get('/reset-password', async (request, response) => {
 <html>
 <head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Reset your Aloe password</title>
+<title>Reset your Halo password</title>
 </head>
 <body style="font-family:Arial,sans-serif;background:#f5f6f7;margin:0;padding:24px;color:#111;">
 <div style="max-width:480px;margin:60px auto;background:#fff;border-radius:16px;padding:28px;box-shadow:0 2px 12px rgba(0,0,0,.08);">
 
 <h2 style="margin-top:0;">
-Reset your Aloe password
+Reset your Halo password
 </h2>
 
 <form method="post" action="/api/password-reset/complete">
@@ -12647,7 +12647,7 @@ app.post(
 
       /*
        * IMPORTANT:
-       * Keep the existing Aloe password-storage behavior.
+       * Keep the existing Halo password-storage behavior.
        * The new password is stored exactly the same way
        * the existing system currently stores passwords.
        */
@@ -12715,9 +12715,9 @@ app.post(
 <body style="font-family:Arial,sans-serif;background:#f5f6f7;padding:24px;color:#111;">
 <div style="max-width:480px;margin:60px auto;background:#fff;border-radius:16px;padding:28px;">
 <h2>Password changed</h2>
-<p>Your Aloe password has been reset successfully.</p>
-<p>For security, all previous Aloe sessions have been signed out.</p>
-<p>You can now return to Aloe and sign in using your new password.</p>
+<p>Your Halo password has been reset successfully.</p>
+<p>For security, all previous Halo sessions have been signed out.</p>
+<p>You can now return to Halo and sign in using your new password.</p>
 </div>
 </body>
 </html>`);
@@ -12728,7 +12728,7 @@ app.post(
       } catch {}
 
       console.error(
-        'Aloe password reset failed:',
+        'Halo password reset failed:',
         error.message
       );
 
@@ -12799,7 +12799,7 @@ app.get('/api/users/search', requireApiAuth, async (request, response) => {
     response.json({
       users: result.rows.map(user => ({
         id: String(user.id),
-        name: user.full_name || 'Aloe user',
+        name: user.full_name || 'Halo user',
         username: user.username || '',
         profilePhoto: user.profile_photo || ''
       }))
@@ -16711,7 +16711,7 @@ app.get('/api/story-music/:trackId/prepare', requireApiAuth, async (request, res
     }
 
     // Some Audius deployments return the audio body directly instead of a
-    // redirect. In that case keep using Aloe's authenticated stream proxy.
+    // redirect. In that case keep using Halo's authenticated stream proxy.
     response.json({
       streamUrl: `/api/story-music/${encodeURIComponent(trackId)}/stream`,
       cached: false
@@ -17226,7 +17226,7 @@ async function storyPollResultsPayload(storyId, editData, currentUserId, include
     const voterRows = await pool.query(
       `SELECT pv.option_index, pv.updated_at,
               u.id AS user_id,
-              COALESCE(NULLIF(BTRIM(u.full_name), ''), 'Aloe user') AS name,
+              COALESCE(NULLIF(BTRIM(u.full_name), ''), 'Halo user') AS name,
               u.profile_photo
          FROM story_poll_votes pv
          JOIN users u ON u.id = pv.voter_id
@@ -17375,7 +17375,7 @@ app.get('/api/stories/:storyId/activity', requireApiAuth, async (request,respons
 
     const responses=await pool.query(
       `SELECT r.id,r.answer,r.question,r.created_at,u.id AS user_id,
-              COALESCE(NULLIF(BTRIM(u.full_name),''),'Aloe user') AS name,
+              COALESCE(NULLIF(BTRIM(u.full_name),''),'Halo user') AS name,
               u.profile_photo
          FROM story_question_responses r
          JOIN users u ON u.id=r.responder_id
@@ -17386,7 +17386,7 @@ app.get('/api/stories/:storyId/activity', requireApiAuth, async (request,respons
 
     const viewers=await pool.query(
       `SELECT v.viewed_at,u.id AS user_id,
-              COALESCE(NULLIF(BTRIM(u.full_name),''),'Aloe user') AS name,
+              COALESCE(NULLIF(BTRIM(u.full_name),''),'Halo user') AS name,
               u.profile_photo
          FROM story_views v
          JOIN users u ON u.id=v.user_id
@@ -19716,10 +19716,10 @@ app.get('/whatsapp-coexistence-setup', (request, response) => {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Aloe Support WhatsApp Setup</title>
+  <title>Halo Support WhatsApp Setup</title>
 </head>
 <body style="font-family:Arial,sans-serif;padding:24px;max-width:600px;margin:auto">
-  <h2>Aloe Support — WhatsApp Coexistence</h2>
+  <h2>Halo Support — WhatsApp Coexistence</h2>
   <p>Connect the existing WhatsApp Business App number to Cloud API.</p>
 
   <button id="connect"
