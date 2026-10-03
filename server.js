@@ -11900,23 +11900,371 @@ app.get('/api/health', async (_request, response) => {
   }
 });
 
+// ALOE_SIGNUP_EMAIL_VERIFICATION_V258B
+const ALOE_SIGNUP_CODE_TTL_MINUTES = 10;
+const ALOE_SIGNUP_RESEND_SECONDS = 45;
+
+function aloeSignupCodeHash(identifier, code) {
+  return crypto
+    .createHmac('sha256', authSecret)
+    .update(`aloe-signup:${String(identifier || '').toLowerCase()}:${String(code || '')}`)
+    .digest('hex');
+}
+
+function aloeSignupEncryptionKey() {
+  return crypto
+    .createHash('sha256')
+    .update(`aloe-signup-pending:${authSecret}`)
+    .digest();
+}
+
+function encryptAloePendingPassword(password) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', aloeSignupEncryptionKey(), iv);
+  const encrypted = Buffer.concat([
+    cipher.update(String(password || ''), 'utf8'),
+    cipher.final()
+  ]);
+  const tag = cipher.getAuthTag();
+  return [
+    iv.toString('base64url'),
+    tag.toString('base64url'),
+    encrypted.toString('base64url')
+  ].join('.');
+}
+
+function decryptAloePendingPassword(value) {
+  const parts = String(value || '').split('.');
+  if (parts.length !== 3) throw new Error('Invalid pending signup password payload');
+  const decipher = crypto.createDecipheriv(
+    'aes-256-gcm',
+    aloeSignupEncryptionKey(),
+    Buffer.from(parts[0], 'base64url')
+  );
+  decipher.setAuthTag(Buffer.from(parts[1], 'base64url'));
+  return Buffer.concat([
+    decipher.update(Buffer.from(parts[2], 'base64url')),
+    decipher.final()
+  ]).toString('utf8');
+}
+
+async function ensureAloeSignupVerificationSchema() {
+  await ensureAuthDatabase();
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS aloe_pending_signups (
+      identifier VARCHAR(255) PRIMARY KEY,
+      full_name VARCHAR(120) NOT NULL,
+      password_payload TEXT NOT NULL,
+      code_hash VARCHAR(128) NOT NULL,
+      attempts INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      resend_available_at TIMESTAMPTZ NOT NULL
+    )
+  `);
+}
+
+function createAloeSignupCode() {
+  return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+}
+
+async function sendAloeSignupVerificationEmail(email, code, displayName) {
+  return sendFluxVerificationEmail({ email, code, displayName });
+}
+
 app.post('/api/register', async (request, response) => {
   const fullName = String(request.body?.fullName || '').trim();
   const identifier = normalizeIdentifier(request.body?.identifier);
   const password = String(request.body?.password || '');
-  if (fullName.length < 2 || fullName.length > 120) return response.status(400).json({ error: 'Enter your full name.' });
-  if (identifier.length < 5 || identifier.length > 255) return response.status(400).json({ error: 'Enter a valid mobile number or email.' });
-  if (password.length < 6 || password.length > 200) return response.status(400).json({ error: 'Password must contain at least 6 characters.' });
+
+  if (fullName.length < 2 || fullName.length > 120) {
+    return response.status(400).json({ error: 'Enter your full name.' });
+  }
+
+  if (
+    identifier.length < 5 ||
+    identifier.length > 255 ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier)
+  ) {
+    return response.status(400).json({ error: 'Enter a valid email address.' });
+  }
+
+  if (password.length < 6 || password.length > 200) {
+    return response.status(400).json({
+      error: 'Password must contain at least 6 characters.'
+    });
+  }
+
   try {
-    const user = await createUserAccount(fullName, identifier, password);
+    await ensureAloeSignupVerificationSchema();
+
+    const existing = await findUserForLogin(identifier);
+    if (existing) {
+      return response.status(409).json({
+        error: 'An account already exists for this email address.'
+      });
+    }
+
+    const code = createAloeSignupCode();
+    const codeHash = aloeSignupCodeHash(identifier, code);
+    const passwordPayload = encryptAloePendingPassword(password);
+
+    await pool.query(
+      `
+        INSERT INTO aloe_pending_signups (
+          identifier,
+          full_name,
+          password_payload,
+          code_hash,
+          attempts,
+          created_at,
+          expires_at,
+          resend_available_at
+        )
+        VALUES (
+          $1, $2, $3, $4, 0, NOW(),
+          NOW() + INTERVAL '10 minutes',
+          NOW() + INTERVAL '45 seconds'
+        )
+        ON CONFLICT (identifier)
+        DO UPDATE SET
+          full_name = EXCLUDED.full_name,
+          password_payload = EXCLUDED.password_payload,
+          code_hash = EXCLUDED.code_hash,
+          attempts = 0,
+          created_at = NOW(),
+          expires_at = NOW() + INTERVAL '10 minutes',
+          resend_available_at = NOW() + INTERVAL '45 seconds'
+      `,
+      [identifier, fullName, passwordPayload, codeHash]
+    );
+
+    try {
+      await sendAloeSignupVerificationEmail(identifier, code, fullName);
+    } catch (mailError) {
+      await pool.query(
+        'DELETE FROM aloe_pending_signups WHERE identifier = $1',
+        [identifier]
+      ).catch(() => {});
+      console.error('Aloe signup verification email failed:', mailError.message);
+      return response.status(503).json({
+        error: 'The verification email could not be delivered. Please try again.'
+      });
+    }
+
+    return response.status(202).json({
+      ok: true,
+      verificationRequired: true,
+      deliveryMethod: 'email',
+      identifier,
+      expiresInMinutes: ALOE_SIGNUP_CODE_TTL_MINUTES,
+      resendAfterSeconds: ALOE_SIGNUP_RESEND_SECONDS
+    });
+  } catch (error) {
+    console.error('Registration verification start failed:', error.message);
+    return response.status(500).json({
+      error: 'Could not start email verification. Try again.'
+    });
+  }
+});
+
+app.post('/api/register/resend', async (request, response) => {
+  const identifier = normalizeIdentifier(request.body?.identifier);
+
+  if (!identifier) {
+    return response.status(400).json({ error: 'Email address is required.' });
+  }
+
+  try {
+    await ensureAloeSignupVerificationSchema();
+
+    const result = await pool.query(
+      `
+        SELECT identifier, full_name, resend_available_at
+        FROM aloe_pending_signups
+        WHERE identifier = $1
+        LIMIT 1
+      `,
+      [identifier]
+    );
+
+    const pending = result.rows[0];
+    if (!pending) {
+      return response.status(404).json({
+        error: 'No pending verification was found. Create the account again.'
+      });
+    }
+
+    if (
+      pending.resend_available_at &&
+      new Date(pending.resend_available_at).getTime() > Date.now()
+    ) {
+      const retryAfterSeconds = Math.max(
+        1,
+        Math.ceil(
+          (new Date(pending.resend_available_at).getTime() - Date.now()) / 1000
+        )
+      );
+      return response.status(429).json({
+        error: `Please wait ${retryAfterSeconds} seconds before requesting another code.`,
+        retryAfterSeconds
+      });
+    }
+
+    const code = createAloeSignupCode();
+    const codeHash = aloeSignupCodeHash(identifier, code);
+
+    await pool.query(
+      `
+        UPDATE aloe_pending_signups
+        SET
+          code_hash = $1,
+          attempts = 0,
+          created_at = NOW(),
+          expires_at = NOW() + INTERVAL '10 minutes',
+          resend_available_at = NOW() + INTERVAL '45 seconds'
+        WHERE identifier = $2
+      `,
+      [codeHash, identifier]
+    );
+
+    try {
+      await sendAloeSignupVerificationEmail(
+        identifier,
+        code,
+        String(pending.full_name || '')
+      );
+    } catch (mailError) {
+      console.error('Aloe signup resend email failed:', mailError.message);
+      return response.status(503).json({
+        error: 'The verification email could not be delivered. Please try again.'
+      });
+    }
+
+    return response.json({
+      ok: true,
+      resent: true,
+      expiresInMinutes: ALOE_SIGNUP_CODE_TTL_MINUTES,
+      resendAfterSeconds: ALOE_SIGNUP_RESEND_SECONDS
+    });
+  } catch (error) {
+    console.error('Registration verification resend failed:', error.message);
+    return response.status(500).json({
+      error: 'Could not resend the verification code.'
+    });
+  }
+});
+
+app.post('/api/register/verify', async (request, response) => {
+  const identifier = normalizeIdentifier(request.body?.identifier);
+  const code = String(request.body?.code || '').trim();
+
+  if (!identifier || !/^[0-9]{6}$/.test(code)) {
+    return response.status(400).json({
+      error: 'Enter the 6-digit verification code.'
+    });
+  }
+
+  try {
+    await ensureAloeSignupVerificationSchema();
+
+    const result = await pool.query(
+      `
+        SELECT identifier, full_name, password_payload, code_hash, attempts, expires_at
+        FROM aloe_pending_signups
+        WHERE identifier = $1
+        LIMIT 1
+      `,
+      [identifier]
+    );
+
+    const pending = result.rows[0];
+    if (!pending) {
+      return response.status(404).json({
+        error: 'No pending verification was found. Create the account again.'
+      });
+    }
+
+    if (new Date(pending.expires_at).getTime() <= Date.now()) {
+      return response.status(410).json({
+        error: 'The verification code has expired. Request a new code.'
+      });
+    }
+
+    if (Number(pending.attempts || 0) >= 5) {
+      return response.status(429).json({
+        error: 'Too many incorrect attempts. Request a new code.'
+      });
+    }
+
+    const expected = String(pending.code_hash || '');
+    const candidate = aloeSignupCodeHash(identifier, code);
+
+    const sameLength = expected.length === candidate.length;
+    const matches = sameLength && crypto.timingSafeEqual(
+      Buffer.from(expected),
+      Buffer.from(candidate)
+    );
+
+    if (!matches) {
+      await pool.query(
+        `
+          UPDATE aloe_pending_signups
+          SET attempts = attempts + 1
+          WHERE identifier = $1
+        `,
+        [identifier]
+      );
+      return response.status(400).json({
+        error: 'The verification code is incorrect.'
+      });
+    }
+
+    const password = decryptAloePendingPassword(pending.password_payload);
+
+    const existing = await findUserForLogin(identifier);
+    if (existing) {
+      await pool.query(
+        'DELETE FROM aloe_pending_signups WHERE identifier = $1',
+        [identifier]
+      ).catch(() => {});
+      return response.status(409).json({
+        error: 'An account already exists for this email address.'
+      });
+    }
+
+    const user = await createUserAccount(
+      String(pending.full_name || ''),
+      identifier,
+      password
+    );
+
+    await pool.query(
+      'DELETE FROM aloe_pending_signups WHERE identifier = $1',
+      [identifier]
+    );
+
     const sessionId = crypto.randomUUID();
     setSessionCookie(response, user, sessionId);
-    recordAccountLoginSession(request, user.id, sessionId).catch(error => console.error('Session history record failed:', error.message));
-    response.status(201).json({ ok: true, redirect: '/app' });
+    recordAccountLoginSession(request, user.id, sessionId).catch(error =>
+      console.error('Session history record failed:', error.message)
+    );
+
+    return response.status(201).json({
+      ok: true,
+      verified: true,
+      redirect: '/app'
+    });
   } catch (error) {
-    if (error.code === '23505') return response.status(409).json({ error: 'An account already exists for this mobile number or email.' });
-    console.error('Registration failed:', error.message);
-    response.status(500).json({ error: 'Could not create the account. Try again.' });
+    if (error.code === '23505') {
+      return response.status(409).json({
+        error: 'An account already exists for this email address.'
+      });
+    }
+    console.error('Registration verification failed:', error.message);
+    return response.status(500).json({
+      error: 'Could not verify this account. Try again.'
+    });
   }
 });
 
