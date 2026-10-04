@@ -9072,7 +9072,7 @@ let pool = null;
 if (process.env.DATABASE_URL) {
   const ca = process.env.DATABASE_CA_CERT?.replace(/\\n/g, '\n');
   pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString: String(process.env.DATABASE_URL || '').replace(/\?sslmode=require(?:&|$)/i, '?').replace(/&sslmode=require(?:&|$)/i, '&').replace(/[?&]$/, ''), // HALO_AIVEN_TLS_INLINE_FIX_V259C
     ssl: ca ? { ca, rejectUnauthorized: true } : { rejectUnauthorized: false },
     max: 5,
     idleTimeoutMillis: 30000,
