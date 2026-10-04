@@ -10765,6 +10765,14 @@ function normalizeStoredPostMedia(value, legacyImage = '') {
       const type = String(item.type || postMediaTypeFromMime(mimeType));
       if (!['image','video'].includes(type)) return null;
       const normalized = { type, mimeType, storageKey, binary:true, name:String(item.name || '').slice(0,255) };
+      if (type === 'image' && item.variants && typeof item.variants === 'object') {
+        const variants = {};
+        for (const kind of ['micro','preview','medium','full']) {
+          const key = safePostStorageKey(item.variants[kind]);
+          if (key) variants[kind] = key;
+        }
+        if (Object.keys(variants).length) normalized.variants = variants;
+      }
       if (type === 'video' && item.editData && typeof item.editData === 'object') normalized.editData = normalizeReelEdits(item.editData);
       if (item.reelId) normalized.reelId = String(item.reelId);
       return normalized;
@@ -10797,7 +10805,15 @@ function validatePostMedia(value) {
       const type = String(item.type || postMediaTypeFromMime(mimeType));
       if (!['image','video'].includes(type) || postMediaTypeFromMime(mimeType) !== type) return { error:'Choose valid photos or videos.' };
       const normalized = { type, mimeType, uploadToken, name:String(item.name || '').slice(0,255) };
-      if (type === 'video' && item.editData && typeof item.editData === 'object') normalized.editData = normalizeReelEdits(item.editData);
+       if (type === 'image' && item.variantUploadTokens && typeof item.variantUploadTokens === 'object') {
+         const variantUploadTokens = {};
+         for (const kind of ['micro','preview','medium','full']) {
+           const token = safePostUploadToken(item.variantUploadTokens[kind]);
+           if (token) variantUploadTokens[kind] = token;
+         }
+         if (Object.keys(variantUploadTokens).length) normalized.variantUploadTokens = variantUploadTokens;
+       }
+       if (type === 'video' && item.editData && typeof item.editData === 'object') normalized.editData = normalizeReelEdits(item.editData);
       media.push(normalized);
       continue;
     }
@@ -10835,6 +10851,16 @@ async function materializePostMedia(userId, media) {
       storageKey=writePostAsset(decoded.bytes); mimeType=decoded.mimeType || mimeType;
     } else continue;
     const normalized={type:item.type,mimeType,name,storageKey,binary:true};
+    if(item.type==='image'&&item.variantUploadTokens&&typeof item.variantUploadTokens==='object'){
+      const variants={};
+      for(const kind of ['micro','preview','medium','full']){
+        const token=safePostUploadToken(item.variantUploadTokens[kind]);
+        if(!token)continue;
+        const asset=consumePostUpload(token,userId,'image');
+        variants[kind]=asset.storageKey;
+      }
+      if(Object.keys(variants).length)normalized.variants=variants;
+    }
     if(item.type==='video'&&item.editData&&typeof item.editData==='object')normalized.editData=normalizeReelEdits(item.editData);
     stored.push(normalized);
   }
@@ -15164,6 +15190,12 @@ app.get('/api/posts', requireApiAuth, async (request, response) => {
         mimeType: item.mimeType || '',
         name: item.name || '',
         url: `/api/posts/${encodeURIComponent(String(row.id))}/media/${index}`,
+        ...(item.type === 'image' && item.variants ? {
+          microUrl: `/api/posts/${encodeURIComponent(String(row.id))}/media/${index}/micro`,
+          previewUrl: `/api/posts/${encodeURIComponent(String(row.id))}/media/${index}/preview`,
+          mediumUrl: `/api/posts/${encodeURIComponent(String(row.id))}/media/${index}/medium`,
+          fullUrl: `/api/posts/${encodeURIComponent(String(row.id))}/media/${index}/full`
+        } : {}),
         ...(item.editData && typeof item.editData === 'object' ? { editData: item.editData } : {}),
         reelId: sourceReelsByPost.get(String(row.id))?.get(index) || item.reelId || '',
         contentKey: `post:${row.id}:media:${index}`
@@ -15323,6 +15355,12 @@ app.patch('/api/posts/:postId', requireApiAuth, async (request, response) => {
         mimeType: item.mimeType || '',
         name: item.name || '',
         url: `/api/posts/${encodeURIComponent(String(post.id))}/media/${index}`,
+        ...(item.type === 'image' && item.variants ? {
+          microUrl: `/api/posts/${encodeURIComponent(String(post.id))}/media/${index}/micro`,
+          previewUrl: `/api/posts/${encodeURIComponent(String(post.id))}/media/${index}/preview`,
+          mediumUrl: `/api/posts/${encodeURIComponent(String(post.id))}/media/${index}/medium`,
+          fullUrl: `/api/posts/${encodeURIComponent(String(post.id))}/media/${index}/full`
+        } : {}),
         ...(item.editData && typeof item.editData === 'object' ? { editData: item.editData } : {}),
         reelId: post._linkedReels?.find(link => link.mediaIndex === index)?.id || item.reelId || '',
         contentKey: `post:${post.id}:media:${index}`
@@ -15623,6 +15661,58 @@ async function postRowForPrivateAsset(postId,userId) {
 }
 app.get('/api/posts/:postId/sound',requireApiAuth,async(request,response)=>{const postId=request.params.postId;if(!validNumericId(postId))return response.status(400).end();try{await ensureDatabase();const row=await postRowForPrivateAsset(postId,request.user.id);if(row===null)return response.status(404).end();if(row===false)return response.status(403).end();const sound=row.post_extras&&row.post_extras.sound;if(!sound)return response.status(404).end();const key=safePostStorageKey(sound.storageKey);if(key)return sendFileRange(request,response,postAssetPath(key),sound.mimeType||'audio/mpeg','private, max-age=31536000, immutable');if(sound.data){const decoded=dataUrlBuffer(sound.data,'audio');if(decoded&&decoded.bytes)return sendBufferRange(request,response,decoded.bytes,decoded.mimeType||sound.mimeType||'audio/mpeg','private, max-age=31536000, immutable');}response.status(404).end();}catch(error){console.error('Post sound load failed:',error.message);response.status(500).end();}});
 app.get('/api/posts/:postId/sound-cover',requireApiAuth,async(request,response)=>{const postId=request.params.postId;if(!validNumericId(postId))return response.status(400).end();try{await ensureDatabase();const row=await postRowForPrivateAsset(postId,request.user.id);if(row===null)return response.status(404).end();if(row===false)return response.status(403).end();const sound=row.post_extras&&row.post_extras.sound;if(!sound)return response.status(404).end();const key=safePostStorageKey(sound.coverStorageKey);if(key)return sendFileRange(request,response,postAssetPath(key),sound.coverMimeType||'image/jpeg','private, max-age=31536000, immutable');if(sound.coverData){const decoded=dataUrlBuffer(sound.coverData,'image');if(decoded&&decoded.bytes)return sendBufferRange(request,response,decoded.bytes,decoded.mimeType||'image/jpeg','private, max-age=31536000, immutable');}response.status(404).end();}catch(error){console.error('Post sound cover load failed:',error.message);response.status(500).end();}});
+
+// ALOE_POST_IMAGE_VARIANTS_V260F
+app.get('/api/posts/:postId/media/:mediaIndex/:variant', requireApiAuth, async (request, response) => {
+  const postId = request.params.postId;
+  const mediaIndex = Number(request.params.mediaIndex);
+  const variant = String(request.params.variant || '').toLowerCase();
+  if (!validNumericId(postId) || !Number.isInteger(mediaIndex) || mediaIndex < 0 ||
+      !['micro','preview','medium','full'].includes(variant)) {
+    return response.status(400).json({ error: 'Invalid post media variant.' });
+  }
+  try {
+    await ensureDatabase();
+    const result = await pool.query(
+      `SELECT p.user_id,p.visibility,p.media_items,p.image_data,u.account_private
+         FROM posts p
+         JOIN users u ON u.id=p.user_id
+        WHERE p.id=$1 LIMIT 1`,
+      [postId]
+    );
+    const row = result.rows[0];
+    if (!row) return response.status(404).end();
+
+    let allowed = String(row.user_id) === String(request.user.id);
+    if (!allowed && String(row.visibility || 'public') !== 'only-me') {
+      if (!row.account_private) allowed = true;
+      else {
+        const f = await pool.query(
+          `SELECT 1 FROM friendships
+            WHERE (user_one_id=$1 AND user_two_id=$2)
+               OR (user_one_id=$2 AND user_two_id=$1)
+            LIMIT 1`,
+          [request.user.id,row.user_id]
+        );
+        allowed = f.rowCount > 0;
+      }
+    }
+    if (!allowed) return response.status(403).end();
+
+    const media = normalizeStoredPostMedia(row.media_items,row.image_data || '');
+    const item = media[mediaIndex];
+    if (!item || item.type !== 'image') return response.status(404).end();
+
+    const key = safePostStorageKey(item.variants && item.variants[variant]) ||
+                safePostStorageKey(item.storageKey);
+    if (!key) return response.status(404).end();
+
+    return sendFileRange(request,response,postAssetPath(key),'image/jpeg','private, max-age=31536000, immutable');
+  } catch (error) {
+    console.error('Post image variant load failed:', error.message);
+    response.status(500).end();
+  }
+});
 
 app.get('/api/posts/:postId/media/:mediaIndex', requireApiAuth, async (request, response) => {
   const postId = request.params.postId;
