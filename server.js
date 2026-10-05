@@ -15663,7 +15663,24 @@ app.get('/api/posts/:postId/sound',requireApiAuth,async(request,response)=>{cons
 app.get('/api/posts/:postId/sound-cover',requireApiAuth,async(request,response)=>{const postId=request.params.postId;if(!validNumericId(postId))return response.status(400).end();try{await ensureDatabase();const row=await postRowForPrivateAsset(postId,request.user.id);if(row===null)return response.status(404).end();if(row===false)return response.status(403).end();const sound=row.post_extras&&row.post_extras.sound;if(!sound)return response.status(404).end();const key=safePostStorageKey(sound.coverStorageKey);if(key)return sendFileRange(request,response,postAssetPath(key),sound.coverMimeType||'image/jpeg','private, max-age=31536000, immutable');if(sound.coverData){const decoded=dataUrlBuffer(sound.coverData,'image');if(decoded&&decoded.bytes)return sendBufferRange(request,response,decoded.bytes,decoded.mimeType||'image/jpeg','private, max-age=31536000, immutable');}response.status(404).end();}catch(error){console.error('Post sound cover load failed:',error.message);response.status(500).end();}});
 
 // ALOE_POST_IMAGE_VARIANTS_V260F
-app.get('/api/posts/:postId/media/:mediaIndex/:variant', requireApiAuth, async (request, response) => {
+// HALO_POST_VARIANT_SERVER_TIMING_V263K
+app.get('/api/posts/:postId/media/:mediaIndex/:variant',
+  (request,response,next)=>{
+    request._haloVariantTiming={
+      matchedAt:process.hrtime.bigint(),
+      authDoneAt:null,
+      ensureDoneAt:null,
+      queryDoneAt:null,
+      privacyDoneAt:null,
+      normalizedAt:null,
+      sendStartAt:null
+    };
+    next();
+  },
+  requireApiAuth,
+  async (request, response) => {
+    const haloTiming=request._haloVariantTiming || {matchedAt:process.hrtime.bigint()};
+    haloTiming.authDoneAt=process.hrtime.bigint();
   const postId = request.params.postId;
   const mediaIndex = Number(request.params.mediaIndex);
   const variant = String(request.params.variant || '').toLowerCase();
@@ -15673,6 +15690,7 @@ app.get('/api/posts/:postId/media/:mediaIndex/:variant', requireApiAuth, async (
   }
   try {
     await ensureDatabase();
+    haloTiming.ensureDoneAt=process.hrtime.bigint();
     const result = await pool.query(
       `SELECT p.user_id,p.visibility,p.media_items,p.image_data,u.account_private
          FROM posts p
@@ -15680,6 +15698,7 @@ app.get('/api/posts/:postId/media/:mediaIndex/:variant', requireApiAuth, async (
         WHERE p.id=$1 LIMIT 1`,
       [postId]
     );
+    haloTiming.queryDoneAt=process.hrtime.bigint();
     const row = result.rows[0];
     if (!row) return response.status(404).end();
 
@@ -15697,15 +15716,53 @@ app.get('/api/posts/:postId/media/:mediaIndex/:variant', requireApiAuth, async (
         allowed = f.rowCount > 0;
       }
     }
+    haloTiming.privacyDoneAt=process.hrtime.bigint();
     if (!allowed) return response.status(403).end();
 
     const media = normalizeStoredPostMedia(row.media_items,row.image_data || '');
     const item = media[mediaIndex];
+    haloTiming.normalizedAt=process.hrtime.bigint();
     if (!item || item.type !== 'image') return response.status(404).end();
 
     const key = safePostStorageKey(item.variants && item.variants[variant]) ||
                 safePostStorageKey(item.storageKey);
     if (!key) return response.status(404).end();
+
+    haloTiming.sendStartAt=process.hrtime.bigint();
+    const haloMs=(a,b)=>a&&b?Number(b-a)/1e6:null;
+    const haloFmt=(v)=>v==null?'?':v.toFixed(1);
+    const haloMatched=haloTiming.matchedAt;
+    const haloAuth=haloTiming.authDoneAt;
+    const haloEnsure=haloTiming.ensureDoneAt;
+    const haloQuery=haloTiming.queryDoneAt;
+    const haloPrivacy=haloTiming.privacyDoneAt;
+    const haloNorm=haloTiming.normalizedAt;
+    const haloSend=haloTiming.sendStartAt;
+
+    response.setHeader('Server-Timing',
+      `auth;dur=${haloFmt(haloMs(haloMatched,haloAuth))}, `+
+      `ensure;dur=${haloFmt(haloMs(haloAuth,haloEnsure))}, `+
+      `query;dur=${haloFmt(haloMs(haloEnsure,haloQuery))}, `+
+      `privacy;dur=${haloFmt(haloMs(haloQuery,haloPrivacy))}, `+
+      `normalize;dur=${haloFmt(haloMs(haloPrivacy,haloNorm))}, `+
+      `prep;dur=${haloFmt(haloMs(haloNorm,haloSend))}`);
+
+    response.once('finish',()=>{
+      try{
+        const end=process.hrtime.bigint();
+        console.log(
+          `[HALO_VARIANT_TIMING] post=${postId} index=${mediaIndex} variant=${variant}`+
+          ` auth=${haloFmt(haloMs(haloMatched,haloAuth))}ms`+
+          ` ensure=${haloFmt(haloMs(haloAuth,haloEnsure))}ms`+
+          ` query=${haloFmt(haloMs(haloEnsure,haloQuery))}ms`+
+          ` privacy=${haloFmt(haloMs(haloQuery,haloPrivacy))}ms`+
+          ` normalize=${haloFmt(haloMs(haloPrivacy,haloNorm))}ms`+
+          ` prep=${haloFmt(haloMs(haloNorm,haloSend))}ms`+
+          ` send=${haloFmt(haloMs(haloSend,end))}ms`+
+          ` total=${haloFmt(haloMs(haloMatched,end))}ms`
+        );
+      }catch(_error){}
+    });
 
     return sendFileRange(request,response,postAssetPath(key),'image/jpeg','private, max-age=31536000, immutable');
   } catch (error) {
