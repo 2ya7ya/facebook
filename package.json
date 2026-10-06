@@ -12,6 +12,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1146.0",
     "@bestcodes/edge-tts": "^3.0.1",
     "@fingerprintjs/fingerprintjs": "^5.2.0",
     "@mediapipe/face_mesh": "^0.4.1633559619",

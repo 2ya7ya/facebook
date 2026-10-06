@@ -8,6 +8,8 @@ const { promisify } = require('util');
 const express = require('express');
 const compression = require('compression');
 const { Pool } = require('pg');
+// HALO_R2_POST_MEDIA_V264B
+const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
@@ -33,6 +35,49 @@ const sessionLocationCache = new Map();
 const postMediaRoot = process.env.POST_MEDIA_ROOT || path.join(process.env.HOME || os.homedir(), 'facebook-media', 'posts');
 const postMediaUploadRoot = path.join(postMediaRoot, '_uploads');
 const postMediaAssetRoot = path.join(postMediaRoot, 'assets');
+
+// HALO_R2_POST_MEDIA_V264B
+const r2Bucket=String(process.env.R2_BUCKET||'').trim();
+const r2Endpoint=String(process.env.R2_ENDPOINT||'').trim();
+const r2AccessKeyId=String(process.env.R2_ACCESS_KEY_ID||'').trim();
+const r2SecretAccessKey=String(process.env.R2_SECRET_ACCESS_KEY||'').trim();
+const r2PostMediaEnabled=Boolean(r2Bucket&&r2Endpoint&&r2AccessKeyId&&r2SecretAccessKey);
+const r2PostMedia=r2PostMediaEnabled?new S3Client({
+  region:'auto',
+  endpoint:r2Endpoint,
+  credentials:{accessKeyId:r2AccessKeyId,secretAccessKey:r2SecretAccessKey}
+}):null;
+
+function postR2ObjectKey(storageKey){
+  const key=safePostStorageKey(storageKey);
+  if(!key)throw new Error('Invalid post storage key.');
+  return `posts/assets/${key}.bin`;
+}
+function r2ObjectMissing(error){
+  const status=Number(error&&error.$metadata&&error.$metadata.httpStatusCode||0);
+  return status===404||error?.name==='NoSuchKey'||error?.name==='NotFound';
+}
+async function putPostAssetR2(storageKey,body,mimeType,contentLength){
+  if(!r2PostMediaEnabled)throw new Error('R2 post-media storage is not configured.');
+  const input={Bucket:r2Bucket,Key:postR2ObjectKey(storageKey),Body:body,ContentType:String(mimeType||'application/octet-stream')};
+  if(Number.isFinite(Number(contentLength))&&Number(contentLength)>=0)input.ContentLength=Number(contentLength);
+  await r2PostMedia.send(new PutObjectCommand(input));
+}
+async function getPostAssetR2(storageKey,range){
+  if(!r2PostMediaEnabled)return null;
+  try{
+    return await r2PostMedia.send(new GetObjectCommand({
+      Bucket:r2Bucket,Key:postR2ObjectKey(storageKey),...(range?{Range:range}:{})
+    }));
+  }catch(error){
+    if(r2ObjectMissing(error))return null;
+    throw error;
+  }
+}
+async function deletePostAssetR2(storageKey){
+  if(!r2PostMediaEnabled)return;
+  await r2PostMedia.send(new DeleteObjectCommand({Bucket:r2Bucket,Key:postR2ObjectKey(storageKey)}));
+}
 const storyMediaRoot = process.env.STORY_MEDIA_ROOT || path.join(process.env.HOME || os.homedir(), 'facebook-media', 'stories');
 
 function dataNamespaceCookie(secure) {
@@ -10738,13 +10783,20 @@ function readPostUpload(token, userId) {
   if (!meta.expiresAt || Date.parse(meta.expiresAt) <= Date.now()) throw new Error('This media upload expired. Try posting again.');
   return { token:safe, files, meta };
 }
-function consumePostUpload(token, userId, expectedType) {
+async function consumePostUpload(token, userId, expectedType) {
   const upload = readPostUpload(token, userId);
   const actualType = postMediaTypeFromMime(upload.meta.mimeType);
   if (expectedType && actualType !== expectedType) throw new Error(`Uploaded ${expectedType} has an invalid file type.`);
-  fs.mkdirSync(postMediaAssetRoot, { recursive:true });
   const storageKey = crypto.randomBytes(24).toString('hex');
-  fs.renameSync(upload.files.data, postAssetPath(storageKey));
+  if (r2PostMediaEnabled) {
+    await putPostAssetR2(storageKey,fs.createReadStream(upload.files.data),
+      String(upload.meta.mimeType || 'application/octet-stream'),
+      Number(upload.meta.size || fs.statSync(upload.files.data).size || 0));
+    try { fs.unlinkSync(upload.files.data); } catch (_error) {}
+  } else {
+    fs.mkdirSync(postMediaAssetRoot, { recursive:true });
+    fs.renameSync(upload.files.data, postAssetPath(storageKey));
+  }
   try { fs.unlinkSync(upload.files.meta); } catch (_error) {}
   return {
     storageKey,
@@ -10832,10 +10884,13 @@ function validatePostMedia(value) {
   return { media };
 }
 
-function writePostAsset(bytes) {
-  fs.mkdirSync(postMediaAssetRoot, { recursive:true });
+async function writePostAsset(bytes, mimeType='application/octet-stream') {
   const storageKey = crypto.randomBytes(24).toString('hex');
-  fs.writeFileSync(postAssetPath(storageKey), bytes);
+  if(r2PostMediaEnabled) await putPostAssetR2(storageKey,bytes,mimeType,bytes?bytes.length:0);
+  else {
+    fs.mkdirSync(postMediaAssetRoot,{recursive:true});
+    fs.writeFileSync(postAssetPath(storageKey),bytes);
+  }
   return storageKey;
 }
 async function materializePostMedia(userId, media) {
@@ -10843,12 +10898,12 @@ async function materializePostMedia(userId, media) {
   for (const item of Array.isArray(media) ? media : []) {
     let storageKey='', mimeType=item.mimeType || '', name=item.name || '';
     if (item.uploadToken) {
-      const asset=consumePostUpload(item.uploadToken,userId,item.type);
+      const asset=await consumePostUpload(item.uploadToken,userId,item.type);
       storageKey=asset.storageKey; mimeType=asset.mimeType; name=asset.name || name;
     } else if (item.data) {
       const decoded=dataUrlBuffer(item.data,item.type || '');
       if (!decoded || !decoded.bytes || !decoded.bytes.length) throw new Error('Could not decode post media.');
-      storageKey=writePostAsset(decoded.bytes); mimeType=decoded.mimeType || mimeType;
+      storageKey=await writePostAsset(decoded.bytes,decoded.mimeType || mimeType); mimeType=decoded.mimeType || mimeType;
     } else continue;
     const normalized={type:item.type,mimeType,name,storageKey,binary:true};
     if(item.type==='image'&&item.variantUploadTokens&&typeof item.variantUploadTokens==='object'){
@@ -10856,7 +10911,7 @@ async function materializePostMedia(userId, media) {
       for(const kind of ['micro','preview','medium','full']){
         const token=safePostUploadToken(item.variantUploadTokens[kind]);
         if(!token)continue;
-        const asset=consumePostUpload(token,userId,'image');
+        const asset=await consumePostUpload(token,userId,'image');
         variants[kind]=asset.storageKey;
       }
       if(Object.keys(variants).length)normalized.variants=variants;
@@ -10867,9 +10922,16 @@ async function materializePostMedia(userId, media) {
   return stored;
 }
 
-function postMediaBytes(item) {
+async function postMediaBytes(item) {
   const key=safePostStorageKey(item && item.storageKey);
   if (key) {
+    if(r2PostMediaEnabled){
+      const object=await getPostAssetR2(key,'');
+      if(object&&object.Body){
+        const bytes=Buffer.from(await object.Body.transformToByteArray());
+        return {bytes,mimeType:item.mimeType||object.ContentType||'application/octet-stream'};
+      }
+    }
     const file=postAssetPath(key);
     if (fs.existsSync(file)) return { bytes:fs.readFileSync(file), mimeType:item.mimeType || 'application/octet-stream' };
   }
@@ -10898,7 +10960,7 @@ async function syncPostVideoReels(queryable, { postId, userId, caption, visibili
       [userId, String(caption || '').slice(0, 500), item.mimeType || postMediaMimeType(item.data) || 'video/mp4', visibility, JSON.stringify(editData), createdAt || null, postId, index]
     );
     if (result.rows[0]) {
-      const reelId=String(result.rows[0].id), source=postMediaBytes(item);
+      const reelId=String(result.rows[0].id), source=await postMediaBytes(item);
       if(source && source.bytes && source.bytes.length) await storeReelVariant(queryable,reelId,'source',source.mimeType || item.mimeType || 'video/mp4',source.bytes);
       linked.push({ id:reelId, mediaIndex:Number(result.rows[0].source_media_index) });
     }
@@ -11012,7 +11074,7 @@ async function materializePostExtras(queryable,userId,extras) {
   if (!sound) return stored;
   let bytes=null,mimeType=String(sound.mimeType || 'audio/mpeg');
   if (sound.uploadToken) {
-    const asset=consumePostUpload(sound.uploadToken,userId,'audio');
+    const asset=await consumePostUpload(sound.uploadToken,userId,'audio');
     sound.storageKey=asset.storageKey; sound.mimeType=asset.mimeType || mimeType;
   } else if (sound.key && !sound.data) {
     const found=await queryable.query('SELECT audio_data,mime_type FROM liked_songs WHERE user_id=$1 AND song_key=$2 LIMIT 1',[userId,String(sound.key)]);
@@ -11025,11 +11087,11 @@ async function materializePostExtras(queryable,userId,extras) {
     if(!decoded || !decoded.bytes || !decoded.bytes.length) throw new Error('Could not decode the selected music.');
     bytes=decoded.bytes; mimeType=decoded.mimeType || mimeType;
   }
-  if(bytes){sound.storageKey=writePostAsset(bytes);sound.mimeType=mimeType;}
+  if(bytes){sound.storageKey=await writePostAsset(bytes,mimeType);sound.mimeType=mimeType;}
   delete sound.uploadToken; delete sound.data; delete sound.localPath; delete sound.localUri;
   if(sound.coverData){
     const cover=dataUrlBuffer(sound.coverData,'image');
-    if(cover && cover.bytes && cover.bytes.length){sound.coverStorageKey=writePostAsset(cover.bytes);sound.coverMimeType=cover.mimeType || 'image/jpeg';}
+    if(cover && cover.bytes && cover.bytes.length){sound.coverStorageKey=await writePostAsset(cover.bytes,cover.mimeType || 'image/jpeg');sound.coverMimeType=cover.mimeType || 'image/jpeg';}
     delete sound.coverData;
   }
   return stored;
@@ -11260,6 +11322,35 @@ function sendFileRange(request,response,filePath,mimeType,cacheControl) {
     return fs.createReadStream(filePath,{start,end}).pipe(response);
   }
   response.set('Content-Length',String(total));return fs.createReadStream(filePath).pipe(response);
+}
+
+// HALO_R2_POST_MEDIA_V264B
+async function sendPostAssetRange(request,response,storageKey,mimeType,cacheControl){
+  const key=safePostStorageKey(storageKey);
+  if(!key)return response.status(404).end();
+  const range=String(request.headers.range||'').trim();
+  if(r2PostMediaEnabled){
+    try{
+      const object=await getPostAssetR2(key,range);
+      if(object&&object.Body){
+        response.set('Accept-Ranges',object.AcceptRanges||'bytes');
+        response.set('Content-Type',object.ContentType||mimeType||'application/octet-stream');
+        response.set('Cache-Control',cacheControl||'private, max-age=31536000, immutable');
+        if(object.ETag)response.set('ETag',object.ETag);
+        if(object.ContentRange)response.set('Content-Range',object.ContentRange);
+        if(Number.isFinite(Number(object.ContentLength)))response.set('Content-Length',String(object.ContentLength));
+        response.status(range||object.ContentRange?206:200);
+        for await(const chunk of object.Body)response.write(chunk);
+        response.end();
+        return;
+      }
+    }catch(error){
+      const status=Number(error&&error.$metadata&&error.$metadata.httpStatusCode||0);
+      if(status===416)return response.status(416).end();
+      throw error;
+    }
+  }
+  return await sendPostAssetRange(request,response,key,mimeType,cacheControl);
 }
 
 function acquireReelThumbnailSlot(){return new Promise(resolve=>{if(reelThumbnailActive<2){reelThumbnailActive+=1;resolve();}else reelThumbnailWaiters.push(resolve);});}
@@ -15537,7 +15628,7 @@ app.get('/api/posts/:postId/comments/:commentId/media',requireApiAuth,async(requ
     const row=found.rows[0];
     if(!row||row.media_type!=='image')return response.status(404).end();
     const key=safePostStorageKey(row.media_storage_key);
-    if(key)return sendFileRange(request,response,postAssetPath(key),row.media_mime_type||'image/jpeg','private, max-age=31536000, immutable');
+    if(key)return await sendPostAssetRange(request,response,key,row.media_mime_type||'image/jpeg','private, max-age=31536000, immutable');
     if(row.media_data){
       const decoded=dataUrlBuffer(row.media_data,'image');
       if(decoded&&decoded.bytes)return sendBufferRange(request,response,decoded.bytes,decoded.mimeType||row.media_mime_type||'image/jpeg','private, max-age=31536000, immutable');
@@ -15576,7 +15667,7 @@ app.post('/api/posts/:postId/comments', requireApiAuth, async (request, response
     let commentStorageKey = null;
     let commentMimeType = null;
     if (mediaUploadToken) {
-      const uploaded = consumePostUpload(mediaUploadToken, request.user.id, 'image');
+      const uploaded = await consumePostUpload(mediaUploadToken, request.user.id, 'image');
       commentStorageKey = uploaded.storageKey;
       commentMimeType = uploaded.mimeType || 'image/jpeg';
       commentMediaData = null;
@@ -15585,7 +15676,7 @@ app.post('/api/posts/:postId/comments', requireApiAuth, async (request, response
       if (!decoded || !decoded.bytes || !decoded.bytes.length) {
         return response.status(400).json({ error: 'Choose a valid comment photo.' });
       }
-      commentStorageKey = writePostAsset(decoded.bytes);
+      commentStorageKey = await writePostAsset(decoded.bytes,decoded.mimeType || 'image/jpeg');
       commentMimeType = decoded.mimeType || 'image/jpeg';
       commentMediaData = null;
     }
@@ -15659,8 +15750,8 @@ async function postRowForPrivateAsset(postId,userId) {
   if(!allowed&&String(row.visibility||'public')!=='only-me'){if(!row.account_private)allowed=true;else{const f=await pool.query(`SELECT 1 FROM friendships WHERE (user_one_id=$1 AND user_two_id=$2) OR (user_one_id=$2 AND user_two_id=$1) LIMIT 1`,[userId,row.user_id]);allowed=f.rowCount>0;}}
   return allowed?row:false;
 }
-app.get('/api/posts/:postId/sound',requireApiAuth,async(request,response)=>{const postId=request.params.postId;if(!validNumericId(postId))return response.status(400).end();try{await ensureDatabase();const row=await postRowForPrivateAsset(postId,request.user.id);if(row===null)return response.status(404).end();if(row===false)return response.status(403).end();const sound=row.post_extras&&row.post_extras.sound;if(!sound)return response.status(404).end();const key=safePostStorageKey(sound.storageKey);if(key)return sendFileRange(request,response,postAssetPath(key),sound.mimeType||'audio/mpeg','private, max-age=31536000, immutable');if(sound.data){const decoded=dataUrlBuffer(sound.data,'audio');if(decoded&&decoded.bytes)return sendBufferRange(request,response,decoded.bytes,decoded.mimeType||sound.mimeType||'audio/mpeg','private, max-age=31536000, immutable');}response.status(404).end();}catch(error){console.error('Post sound load failed:',error.message);response.status(500).end();}});
-app.get('/api/posts/:postId/sound-cover',requireApiAuth,async(request,response)=>{const postId=request.params.postId;if(!validNumericId(postId))return response.status(400).end();try{await ensureDatabase();const row=await postRowForPrivateAsset(postId,request.user.id);if(row===null)return response.status(404).end();if(row===false)return response.status(403).end();const sound=row.post_extras&&row.post_extras.sound;if(!sound)return response.status(404).end();const key=safePostStorageKey(sound.coverStorageKey);if(key)return sendFileRange(request,response,postAssetPath(key),sound.coverMimeType||'image/jpeg','private, max-age=31536000, immutable');if(sound.coverData){const decoded=dataUrlBuffer(sound.coverData,'image');if(decoded&&decoded.bytes)return sendBufferRange(request,response,decoded.bytes,decoded.mimeType||'image/jpeg','private, max-age=31536000, immutable');}response.status(404).end();}catch(error){console.error('Post sound cover load failed:',error.message);response.status(500).end();}});
+app.get('/api/posts/:postId/sound',requireApiAuth,async(request,response)=>{const postId=request.params.postId;if(!validNumericId(postId))return response.status(400).end();try{await ensureDatabase();const row=await postRowForPrivateAsset(postId,request.user.id);if(row===null)return response.status(404).end();if(row===false)return response.status(403).end();const sound=row.post_extras&&row.post_extras.sound;if(!sound)return response.status(404).end();const key=safePostStorageKey(sound.storageKey);if(key)return await sendPostAssetRange(request,response,key,sound.mimeType||'audio/mpeg','private, max-age=31536000, immutable');if(sound.data){const decoded=dataUrlBuffer(sound.data,'audio');if(decoded&&decoded.bytes)return sendBufferRange(request,response,decoded.bytes,decoded.mimeType||sound.mimeType||'audio/mpeg','private, max-age=31536000, immutable');}response.status(404).end();}catch(error){console.error('Post sound load failed:',error.message);response.status(500).end();}});
+app.get('/api/posts/:postId/sound-cover',requireApiAuth,async(request,response)=>{const postId=request.params.postId;if(!validNumericId(postId))return response.status(400).end();try{await ensureDatabase();const row=await postRowForPrivateAsset(postId,request.user.id);if(row===null)return response.status(404).end();if(row===false)return response.status(403).end();const sound=row.post_extras&&row.post_extras.sound;if(!sound)return response.status(404).end();const key=safePostStorageKey(sound.coverStorageKey);if(key)return await sendPostAssetRange(request,response,key,sound.coverMimeType||'image/jpeg','private, max-age=31536000, immutable');if(sound.coverData){const decoded=dataUrlBuffer(sound.coverData,'image');if(decoded&&decoded.bytes)return sendBufferRange(request,response,decoded.bytes,decoded.mimeType||'image/jpeg','private, max-age=31536000, immutable');}response.status(404).end();}catch(error){console.error('Post sound cover load failed:',error.message);response.status(500).end();}});
 
 // ALOE_POST_IMAGE_VARIANTS_V260F
 app.get('/api/posts/:postId/media/:mediaIndex/:variant', requireApiAuth, async (request, response) => {
@@ -15707,7 +15798,7 @@ app.get('/api/posts/:postId/media/:mediaIndex/:variant', requireApiAuth, async (
                 safePostStorageKey(item.storageKey);
     if (!key) return response.status(404).end();
 
-    return sendFileRange(request,response,postAssetPath(key),'image/jpeg','private, max-age=31536000, immutable');
+    return await sendPostAssetRange(request,response,key,'image/jpeg','private, max-age=31536000, immutable');
   } catch (error) {
     console.error('Post image variant load failed:', error.message);
     response.status(500).end();
@@ -15755,7 +15846,7 @@ app.get('/api/posts/:postId/media/:mediaIndex', requireApiAuth, async (request, 
     const item = media[mediaIndex];
     if (!item) return response.status(404).end();
     const storageKey=safePostStorageKey(item.storageKey);
-    if(storageKey)return sendFileRange(request,response,postAssetPath(storageKey),item.mimeType || 'application/octet-stream','private, max-age=31536000, immutable');
+    if(storageKey)return await sendPostAssetRange(request,response,storageKey,item.mimeType || 'application/octet-stream','private, max-age=31536000, immutable');
     if(!item.data)return response.status(404).end();
     const decoded=dataUrlBuffer(item.data,item.type || '');if(!decoded||!decoded.bytes||!decoded.bytes.length)return response.status(404).end();
     return sendBufferRange(request,response,decoded.bytes,decoded.mimeType || item.mimeType || 'application/octet-stream','private, max-age=31536000, immutable');
