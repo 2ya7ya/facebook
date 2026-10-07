@@ -8,6 +8,7 @@ const { promisify } = require('util');
 const express = require('express');
 const compression = require('compression');
 const { Pool } = require('pg');
+// HALO_MULTI_MEDIA_CAPTIONS_V264P
 // HALO_R2_POST_MEDIA_V264B
 const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const fs = require('fs');
@@ -10817,6 +10818,7 @@ function normalizeStoredPostMedia(value, legacyImage = '') {
       const type = String(item.type || postMediaTypeFromMime(mimeType));
       if (!['image','video'].includes(type)) return null;
       const normalized = { type, mimeType, storageKey, binary:true, name:String(item.name || '').slice(0,255) };
+      const mediaCaption=String(item.caption || '').trim().slice(0,500); if(mediaCaption) normalized.caption=mediaCaption;
       if (type === 'image' && item.variants && typeof item.variants === 'object') {
         const variants = {};
         for (const kind of ['micro','preview','medium','full']) {
@@ -10834,6 +10836,8 @@ function normalizeStoredPostMedia(value, legacyImage = '') {
     const type = mimeType.startsWith('video/') ? 'video' : (mimeType.startsWith('image/') ? 'image' : '');
     if (!type || !data) return null;
     const normalized = { type, mimeType, data, name:String(item.name || '').slice(0,255) };
+    const validatedMediaCaption=String(item.caption || '').trim().slice(0,500); if(validatedMediaCaption) normalized.caption=validatedMediaCaption;
+    const storedMediaCaption=String(item.caption || '').trim().slice(0,500); if(storedMediaCaption) normalized.caption=storedMediaCaption;
     if (type === 'video' && item.editData && typeof item.editData === 'object') normalized.editData = normalizeReelEdits(item.editData);
     if (item.reelId) normalized.reelId = String(item.reelId);
     return normalized;
@@ -10857,6 +10861,7 @@ function validatePostMedia(value) {
       const type = String(item.type || postMediaTypeFromMime(mimeType));
       if (!['image','video'].includes(type) || postMediaTypeFromMime(mimeType) !== type) return { error:'Choose valid photos or videos.' };
       const normalized = { type, mimeType, uploadToken, name:String(item.name || '').slice(0,255) };
+      const mediaCaption=String(item.caption || '').trim().slice(0,500); if(mediaCaption) normalized.caption=mediaCaption;
        if (type === 'image' && item.variantUploadTokens && typeof item.variantUploadTokens === 'object') {
          const variantUploadTokens = {};
          for (const kind of ['micro','preview','medium','full']) {
@@ -10906,6 +10911,7 @@ async function materializePostMedia(userId, media) {
       storageKey=await writePostAsset(decoded.bytes,decoded.mimeType || mimeType); mimeType=decoded.mimeType || mimeType;
     } else continue;
     const normalized={type:item.type,mimeType,name,storageKey,binary:true};
+    const mediaCaption=String(item.caption||'').trim().slice(0,500);if(mediaCaption)normalized.caption=mediaCaption;
     if(item.type==='image'&&item.variantUploadTokens&&typeof item.variantUploadTokens==='object'){
       const variants={};
       for(const kind of ['micro','preview','medium','full']){
