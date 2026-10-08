@@ -1,3 +1,4 @@
+// HALO_DB_POOL_MEMBERS_FIX_V264W
 // HALO_EDIT_MEDIA_CAPTION_PROGRESS_V264T
 // HALO_PROFILE_PREVIEW_FRAMES_FEED_V253C
 // HALO_MEMBERS_PUBLIC_FRAME_BACKEND_V252S
@@ -9121,9 +9122,9 @@ if (process.env.DATABASE_URL) {
   pool = new Pool({
     connectionString: String(process.env.DATABASE_URL || '').replace(/\?sslmode=require(?:&|$)/i, '?').replace(/&sslmode=require(?:&|$)/i, '&').replace(/[?&]$/, ''), // HALO_AIVEN_TLS_INLINE_FIX_V259C
     ssl: ca ? { ca, rejectUnauthorized: true } : { rejectUnauthorized: false },
-    max: 5,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 10000,
+    max: 8,
+    idleTimeoutMillis: 60000,
+    connectionTimeoutMillis: 20000,
     keepAlive: true,
     application_name: 'facebook-render'
   });
@@ -15047,7 +15048,7 @@ app.delete('/api/profile/photo-temporary', requireApiAuth, async (request, respo
   }
 });
 
-const haloTemporaryProfileTimer = setInterval(restoreExpiredTemporaryProfilePhotos, 15000);
+const haloTemporaryProfileTimer = setInterval(restoreExpiredTemporaryProfilePhotos, 60000);
 if (haloTemporaryProfileTimer.unref) haloTemporaryProfileTimer.unref();
 
 app.put('/api/profile', requireApiAuth, async (request, response) => {
@@ -18432,7 +18433,8 @@ app.get('/api/members', requireApiAuth, async (request, response) => {
          FROM users u
          WHERE u.id <> $1
          ORDER BY u.created_at DESC NULLS LAST, u.id DESC
-         LIMIT 250`
+         LIMIT 250`,
+        [request.user.id]
       ),
       pool.query(
         `SELECT COUNT(*)::int AS total_count,
