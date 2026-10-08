@@ -11098,13 +11098,32 @@ function validatePostExtras(value) {
     }
     stickers.push(sticker);
   }
+  // HALO_GIPHY_POST_EXTRA_V265N
+  if (source.gif && typeof source.gif === "object" && !Array.isArray(source.gif)) {
+    const provider = String(source.gif.provider || "").trim().toLowerCase();
+    const id = String(source.gif.id || "").trim().slice(0, 160);
+    const title = String(source.gif.title || "").trim().slice(0, 240);
+    const rawUrl = String(source.gif.url || "").trim();
+    if (provider && provider !== "giphy") return { error: "Choose a valid GIF." };
+    if (!rawUrl || rawUrl.length > 4096) return { error: "Choose a valid GIF." };
+    try {
+      const parsed = new URL(rawUrl);
+      const host = String(parsed.hostname || "").toLowerCase();
+      const validHost = host === "giphy.com" || host.endsWith(".giphy.com");
+      if (parsed.protocol !== "https:" || !validHost) return { error: "Choose a valid GIF." };
+    } catch (_error) {
+      return { error: "Choose a valid GIF." };
+    }
+    extras.gif = { provider: "giphy", url: rawUrl, ...(id ? { id } : {}), ...(title ? { title } : {}) };
+  }
+
   if (stickers.length) extras.stickers = stickers;
 
   return { extras };
 }
 
 function postExtrasHasContent(extras) {
-  return Boolean(extras && (extras.feeling || extras.location || extras.sound || extras.marketplaceListing || (Array.isArray(extras.stickers) && extras.stickers.length) || extras.sticker));
+  return Boolean(extras && (extras.feeling || extras.location || extras.sound || extras.marketplaceListing || extras.gif || (Array.isArray(extras.stickers) && extras.stickers.length) || extras.sticker));
 }
 
 async function materializePostExtras(queryable,userId,extras) {
@@ -15377,7 +15396,7 @@ app.post('/api/posts', requireApiAuth, async (request, response) => {
   const mediaResult=mediaWasProvided?validatePostMedia(request.body.media):validatePostMedia(legacyImage?[{data:legacyImage}]:[]);
   if(mediaResult.error)return response.status(400).json({error:mediaResult.error});
   const extrasResult=validatePostExtras(request.body?.extras);if(extrasResult.error)return response.status(400).json({error:extrasResult.error});
-  if(!body&&!mediaResult.media.length&&!postExtrasHasContent(extrasResult.extras))return response.status(400).json({error:'Add text, media, a feeling, location, sound, or sticker.'});
+  if(!body&&!mediaResult.media.length&&!postExtrasHasContent(extrasResult.extras))return response.status(400).json({error:'Add text, media, a feeling, location, sound, sticker, or GIF.'});
   if(body.length>5000)return response.status(400).json({error:'Post text is too long.'});
   if(!['public','friends','only-me'].includes(visibility))return response.status(400).json({error:'Choose a valid post audience.'});
   try{
@@ -15448,7 +15467,7 @@ app.patch('/api/posts/:postId', requireApiAuth, async (request, response) => {
 
       if (!body && !finalMedia.length && !postExtrasHasContent(finalExtras)) {
         await client.query('ROLLBACK');
-        return response.status(400).json({ error: 'Add text, media, a feeling, location, sound, or sticker.' });
+        return response.status(400).json({ error: 'Add text, media, a feeling, location, sound, sticker, or GIF.' });
       }
 
       const result = await client.query(
