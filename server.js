@@ -1,3 +1,4 @@
+// HALO_EDIT_MEDIA_CAPTION_PROGRESS_V264T
 // HALO_PROFILE_PREVIEW_FRAMES_FEED_V253C
 // HALO_MEMBERS_PUBLIC_FRAME_BACKEND_V252S
 // HALO_FRAME_PUBLIC_PROFILE_MEMBERS_FIX_V252Q3
@@ -10848,13 +10849,32 @@ function normalizeStoredPostMedia(value, legacyImage = '') {
   return normalized;
 }
 
-function validatePostMedia(value) {
+function postExistingMediaIndex(item, postId) {
+  if (!item || typeof item !== 'object' || !postId) return -1;
+  let raw = String(item.url || '').trim();
+  if (!raw) return -1;
+  try { if (/^https?:\/\//i.test(raw)) raw = new URL(raw).pathname; } catch (_error) {}
+  const prefix = `/api/posts/${encodeURIComponent(String(postId))}/media/`;
+  if (!raw.startsWith(prefix)) return -1;
+  const tail = raw.slice(prefix.length).split('/')[0];
+  if (!/^\d+$/.test(tail)) return -1;
+  return Number(tail);
+}
+
+function validatePostMedia(value, updatePostId = '') {
   if (!Array.isArray(value)) return { error: 'Choose valid photos or videos.' };
   if (value.length > 10) return { error: 'You can add up to 10 photos or videos to one post.' };
   let encodedSize = 0;
   const media = [];
   for (const item of value) {
     if (!item || typeof item !== 'object') return { error:'Choose valid photos or videos.' };
+    const existingIndex = postExistingMediaIndex(item, updatePostId);
+    if (existingIndex >= 0) {
+      const existing = { existingIndex, captionProvided:Object.prototype.hasOwnProperty.call(item,'caption') };
+      if (existing.captionProvided) existing.caption=String(item.caption || '').trim().slice(0,500);
+      media.push(existing);
+      continue;
+    }
     const uploadToken = safePostUploadToken(item.uploadToken);
     if (uploadToken) {
       const mimeType = String(item.mimeType || '').toLowerCase().split(';')[0];
@@ -10882,6 +10902,7 @@ function validatePostMedia(value) {
     if (type === 'video' && !validVideoData(data)) return { error: 'Each video must be 50 MB or smaller.' };
     encodedSize += data.length;
     const normalized = { type, mimeType, data, name:String(item.name || '').slice(0,255) };
+    const mediaCaption=String(item.caption || '').trim().slice(0,500); if(mediaCaption) normalized.caption=mediaCaption;
     if (type === 'video' && item.editData && typeof item.editData === 'object') normalized.editData = normalizeReelEdits(item.editData);
     media.push(normalized);
   }
@@ -10898,9 +10919,20 @@ async function writePostAsset(bytes, mimeType='application/octet-stream') {
   }
   return storageKey;
 }
-async function materializePostMedia(userId, media) {
+async function materializePostMedia(userId, media, currentMedia = []) {
   const stored=[];
   for (const item of Array.isArray(media) ? media : []) {
+    if (Number.isInteger(item && item.existingIndex)) {
+      const prior=currentMedia[item.existingIndex];
+      if (!prior || typeof prior !== 'object') throw new Error('Existing post media is no longer available.');
+      const normalized=JSON.parse(JSON.stringify(prior));
+      if (item.captionProvided) {
+        const mediaCaption=String(item.caption || '').trim().slice(0,500);
+        if (mediaCaption) normalized.caption=mediaCaption; else delete normalized.caption;
+      }
+      stored.push(normalized);
+      continue;
+    }
     let storageKey='', mimeType=item.mimeType || '', name=item.name || '';
     if (item.uploadToken) {
       const asset=await consumePostUpload(item.uploadToken,userId,item.type);
@@ -15286,6 +15318,7 @@ app.get('/api/posts', requireApiAuth, async (request, response) => {
         type: item.type || '',
         mimeType: item.mimeType || '',
         name: item.name || '',
+        caption: item.caption || '',
         url: `/api/posts/${encodeURIComponent(String(row.id))}/media/${index}`,
         ...(item.type === 'image' && item.variants ? {
           microUrl: `/api/posts/${encodeURIComponent(String(row.id))}/media/${index}/micro`,
@@ -15358,7 +15391,7 @@ app.post('/api/posts', requireApiAuth, async (request, response) => {
       await client.query('COMMIT');
     }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
     await createMentionNotifications(pool,request.user.id,body,post.id);
-    response.status(201).json({ok:true,post:{...post,image:'',contentKey:`post:${post.id}`,media:normalizeStoredPostMedia(post.media_items,'').map((item,index)=>({type:item.type||'',mimeType:item.mimeType||'',name:item.name||'',url:`/api/posts/${encodeURIComponent(String(post.id))}/media/${index}`,...(item.editData&&typeof item.editData==='object'?{editData:item.editData}:{}),reelId:post._linkedReels?.find(link=>link.mediaIndex===index)?.id||'',contentKey:`post:${post.id}:media:${index}`})),extras:publicPostExtras(post.post_extras,post.id)}});
+    response.status(201).json({ok:true,post:{...post,image:'',contentKey:`post:${post.id}`,media:normalizeStoredPostMedia(post.media_items,'').map((item,index)=>({type:item.type||'',mimeType:item.mimeType||'',name:item.name||'',caption:item.caption||'',url:`/api/posts/${encodeURIComponent(String(post.id))}/media/${index}`,...(item.editData&&typeof item.editData==='object'?{editData:item.editData}:{}),reelId:post._linkedReels?.find(link=>link.mediaIndex===index)?.id||'',contentKey:`post:${post.id}:media:${index}`})),extras:publicPostExtras(post.post_extras,post.id)}});
   }catch(error){console.error('Post creation failed:',error.message);response.status(500).json({error:error.message&&error.message.includes('upload')?error.message:'Could not save the post.'});}
 });
 
@@ -15380,7 +15413,7 @@ app.patch('/api/posts/:postId', requireApiAuth, async (request, response) => {
   if (!['public', 'friends', 'only-me'].includes(visibility)) return response.status(400).json({ error: 'Choose a valid post audience.' });
   let providedMedia = null;
   if (mediaWasProvided) {
-    const validation = validatePostMedia(request.body.media);
+    const validation = validatePostMedia(request.body.media, postId);
     if (validation.error) return response.status(400).json({ error: validation.error });
     providedMedia = validation.media;
   } else if (imageWasProvided) {
@@ -15404,9 +15437,10 @@ app.patch('/api/posts/:postId', requireApiAuth, async (request, response) => {
         return response.status(404).json({ error: 'Post not found.' });
       }
 
+      const currentMedia = normalizeStoredPostMedia(current.rows[0].media_items, current.rows[0].image_data || '');
       finalMedia = providedMedia === null
-        ? normalizeStoredPostMedia(current.rows[0].media_items, current.rows[0].image_data || '')
-        : await materializePostMedia(request.user.id, providedMedia);
+        ? currentMedia
+        : await materializePostMedia(request.user.id, providedMedia, currentMedia);
       finalExtras = providedExtras === null
         ? (current.rows[0].post_extras && typeof current.rows[0].post_extras === 'object' ? current.rows[0].post_extras : {})
         : await materializePostExtras(client, request.user.id, providedExtras);
@@ -15451,6 +15485,7 @@ app.patch('/api/posts/:postId', requireApiAuth, async (request, response) => {
         type: item.type || '',
         mimeType: item.mimeType || '',
         name: item.name || '',
+        caption: item.caption || '',
         url: `/api/posts/${encodeURIComponent(String(post.id))}/media/${index}`,
         ...(item.type === 'image' && item.variants ? {
           microUrl: `/api/posts/${encodeURIComponent(String(post.id))}/media/${index}/micro`,
