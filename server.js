@@ -10821,6 +10821,7 @@ function normalizeStoredPostMedia(value, legacyImage = '') {
       if (!['image','video'].includes(type)) return null;
       const normalized = { type, mimeType, storageKey, binary:true, name:String(item.name || '').slice(0,255) };
       const mediaCaption=String(item.caption || '').trim().slice(0,500); if(mediaCaption) normalized.caption=mediaCaption;
+      if (type === 'image' && item.editData && typeof item.editData === 'object') { const editData=normalizePostImageEditData(item.editData); if(editData) normalized.editData=editData; }
       if (type === 'image' && item.variants && typeof item.variants === 'object') {
         const variants = {};
         for (const kind of ['micro','preview','medium','full']) {
@@ -10829,7 +10830,8 @@ function normalizeStoredPostMedia(value, legacyImage = '') {
         }
         if (Object.keys(variants).length) normalized.variants = variants;
       }
-      if (type === 'video' && item.editData && typeof item.editData === 'object') normalized.editData = normalizeReelEdits(item.editData);
+      if (type === 'image' && item.editData && typeof item.editData === 'object') { const editData=normalizePostImageEditData(item.editData); if(editData) normalized.editData=editData; }
+    if (type === 'video' && item.editData && typeof item.editData === 'object') normalized.editData = normalizeReelEdits(item.editData);
       if (item.reelId) normalized.reelId = String(item.reelId);
       return normalized;
     }
@@ -10840,6 +10842,7 @@ function normalizeStoredPostMedia(value, legacyImage = '') {
     const normalized = { type, mimeType, data, name:String(item.name || '').slice(0,255) };
     const validatedMediaCaption=String(item.caption || '').trim().slice(0,500); if(validatedMediaCaption) normalized.caption=validatedMediaCaption;
     const storedMediaCaption=String(item.caption || '').trim().slice(0,500); if(storedMediaCaption) normalized.caption=storedMediaCaption;
+    if (type === 'image' && item.editData && typeof item.editData === 'object') { const editData=normalizePostImageEditData(item.editData); if(editData) normalized.editData=editData; }
     if (type === 'video' && item.editData && typeof item.editData === 'object') normalized.editData = normalizeReelEdits(item.editData);
     if (item.reelId) normalized.reelId = String(item.reelId);
     return normalized;
@@ -10862,6 +10865,17 @@ function postExistingMediaIndex(item, postId) {
   return Number(tail);
 }
 
+function normalizePostImageEditData(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  try {
+    const raw=JSON.stringify(value);
+    if(raw.length>180000)return null;
+    const clean=JSON.parse(raw);
+    if(typeof clean.backgroundUri==='string' && /^(file:|content:)/i.test(clean.backgroundUri))clean.backgroundUri='';
+    return clean;
+  } catch(_error){ return null; }
+} // HALO_POST_EDIT_PROJECT_V266I
+
 function validatePostMedia(value, updatePostId = '') {
   if (!Array.isArray(value)) return { error: 'Choose valid photos or videos.' };
   if (value.length > 10) return { error: 'You can add up to 10 photos or videos to one post.' };
@@ -10873,6 +10887,7 @@ function validatePostMedia(value, updatePostId = '') {
     if (existingIndex >= 0) {
       const existing = { existingIndex, captionProvided:Object.prototype.hasOwnProperty.call(item,'caption') };
       if (existing.captionProvided) existing.caption=String(item.caption || '').trim().slice(0,500);
+      if (item.editData && typeof item.editData === 'object') { const editData=normalizePostImageEditData(item.editData); if(editData) existing.editData=editData; }
       media.push(existing);
       continue;
     }
@@ -10891,6 +10906,7 @@ function validatePostMedia(value, updatePostId = '') {
          }
          if (Object.keys(variantUploadTokens).length) normalized.variantUploadTokens = variantUploadTokens;
        }
+       if (type === 'image' && item.editData && typeof item.editData === 'object') { const editData=normalizePostImageEditData(item.editData); if(editData) normalized.editData=editData; }
        if (type === 'video' && item.editData && typeof item.editData === 'object') normalized.editData = normalizeReelEdits(item.editData);
       media.push(normalized);
       continue;
@@ -10903,7 +10919,7 @@ function validatePostMedia(value, updatePostId = '') {
     if (type === 'video' && !validVideoData(data)) return { error: 'Each video must be 50 MB or smaller.' };
     encodedSize += data.length;
     const normalized = { type, mimeType, data, name:String(item.name || '').slice(0,255) };
-    const mediaCaption=String(item.caption || '').trim().slice(0,500); if(mediaCaption) normalized.caption=mediaCaption;
+    if (type === 'image' && item.editData && typeof item.editData === 'object') { const editData=normalizePostImageEditData(item.editData); if(editData) normalized.editData=editData; }
     if (type === 'video' && item.editData && typeof item.editData === 'object') normalized.editData = normalizeReelEdits(item.editData);
     media.push(normalized);
   }
@@ -10931,6 +10947,7 @@ async function materializePostMedia(userId, media, currentMedia = []) {
         const mediaCaption=String(item.caption || '').trim().slice(0,500);
         if (mediaCaption) normalized.caption=mediaCaption; else delete normalized.caption;
       }
+      if (normalized.type === 'image' && item.editData && typeof item.editData === 'object') { const editData=normalizePostImageEditData(item.editData); if(editData) normalized.editData=editData; }
       stored.push(normalized);
       continue;
     }
@@ -10945,6 +10962,7 @@ async function materializePostMedia(userId, media, currentMedia = []) {
     } else continue;
     const normalized={type:item.type,mimeType,name,storageKey,binary:true};
     const mediaCaption=String(item.caption||'').trim().slice(0,500);if(mediaCaption)normalized.caption=mediaCaption;
+    if(item.type==='image'&&item.editData&&typeof item.editData==='object'){const editData=normalizePostImageEditData(item.editData);if(editData)normalized.editData=editData;}
     if(item.type==='image'&&item.variantUploadTokens&&typeof item.variantUploadTokens==='object'){
       const variants={};
       for(const kind of ['micro','preview','medium','full']){
@@ -14568,63 +14586,46 @@ app.get('/api/mapbox/static', requireApiAuth, async (request, response) => {
   }
 });
 
-app.get('/api/mapbox/search', requireApiAuth, async (request, response) => {
-  const accessToken = String(process.env.MAPBOX_ACCESS_TOKEN || process.env.MAPBOX_TOKEN || '').trim();
-  const query = String(request.query.q || '').trim();
-  if (!accessToken) return response.status(503).json({ error: 'Map search is not configured.' });
-  if (query.length < 2 || query.length > 256) return response.json({ features: [] });
-  try {
-    const legacyParameters = new URLSearchParams({
-      access_token: accessToken,
-      autocomplete: 'true',
-      limit: '8',
-      types: 'country,region,place,locality,neighborhood,poi,address',
-      language: 'en'
-    });
-    const legacyUrl = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?${legacyParameters.toString()}`;
-    const legacyResponse = await fetch(legacyUrl);
-    const legacyPayload = await legacyResponse.json().catch(() => ({}));
-    if (legacyResponse.ok && Array.isArray(legacyPayload.features)) {
-      response.set('Cache-Control', 'private, max-age=30');
-      return response.json({ features: legacyPayload.features });
-    }
+async function aloeFallbackLocationSearch(query) {
+  const params=new URLSearchParams({q:String(query||''),format:'jsonv2',addressdetails:'1',limit:'8'});
+  const fallback=await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`,{
+    headers:{'User-Agent':'Aloe/1.0 location search','Accept':'application/json'}
+  });
+  const rows=await fallback.json().catch(()=>[]);
+  return Array.isArray(rows)?rows.map((row)=>({
+    id:`osm:${row.osm_type||''}:${row.osm_id||''}`,
+    text:String(row.name||String(row.display_name||'').split(',')[0]||''),
+    place_name:String(row.display_name||row.name||''),
+    center:[Number(row.lon)||0,Number(row.lat)||0]
+  })) : [];
+}
 
-    const parameters = new URLSearchParams({
-      q: query,
-      access_token: accessToken,
-      autocomplete: 'true',
-      limit: '8',
-      types: 'country,region,place,locality,neighborhood,address',
-      language: 'en'
-    });
-    const mapboxResponse = await fetch(`https://api.mapbox.com/search/geocode/v6/forward?${parameters.toString()}`);
-    const payload = await mapboxResponse.json().catch(() => ({}));
-    if (!mapboxResponse.ok) {
-      console.error('Mapbox search failed:', mapboxResponse.status, payload.message || payload.error || 'Unknown error');
-      return response.status(mapboxResponse.status).json({ error: 'Could not search locations.' });
+app.get('/api/mapbox/search', requireApiAuth, async (request, response) => {
+  const accessToken=String(process.env.MAPBOX_ACCESS_TOKEN||process.env.MAPBOX_TOKEN||'').trim();
+  const query=String(request.query.q||'').trim();
+  if(query.length<2||query.length>256)return response.json({features:[]});
+  try{
+    if(accessToken){
+      const legacyParameters=new URLSearchParams({access_token:accessToken,autocomplete:'true',limit:'8',types:'country,region,place,locality,neighborhood,poi,address',language:'en'});
+      const legacyUrl=`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?${legacyParameters.toString()}`;
+      const legacyResponse=await fetch(legacyUrl);
+      const legacyPayload=await legacyResponse.json().catch(()=>({}));
+      if(legacyResponse.ok&&Array.isArray(legacyPayload.features)&&legacyPayload.features.length){response.set('Cache-Control','private, max-age=60');return response.json({features:legacyPayload.features});}
+      const parameters=new URLSearchParams({q:query,access_token:accessToken,autocomplete:'true',limit:'8',types:'country,region,place,locality,neighborhood,address',language:'en'});
+      const mapboxResponse=await fetch(`https://api.mapbox.com/search/geocode/v6/forward?${parameters.toString()}`);
+      const payload=await mapboxResponse.json().catch(()=>({}));
+      if(mapboxResponse.ok&&Array.isArray(payload.features)){
+        const features=payload.features.map((feature)=>{const properties=feature&&feature.properties||{};const contextValues=properties.context&&typeof properties.context==='object'?Object.values(properties.context).filter(Boolean):[];const name=properties.name||properties.name_preferred||'';const placeName=properties.full_address||[name,properties.place_formatted].filter(Boolean).join(', ');return{id:properties.mapbox_id||feature.id||'',text:name||placeName,place_name:placeName||name,center:feature.geometry&&Array.isArray(feature.geometry.coordinates)?feature.geometry.coordinates:[],context:contextValues.map((part)=>({text:part.name||part.name_preferred||''})).filter((part)=>part.text)};}).filter((feature)=>feature.text||feature.place_name);
+        if(features.length){response.set('Cache-Control','private, max-age=60');return response.json({features});}
+      }
     }
-    const features = Array.isArray(payload.features) ? payload.features.map((feature) => {
-      const properties = feature && feature.properties || {};
-      const contextValues = properties.context && typeof properties.context === 'object'
-        ? Object.values(properties.context).filter(Boolean)
-        : [];
-      const name = properties.name || properties.name_preferred || '';
-      const placeName = properties.full_address || [name, properties.place_formatted].filter(Boolean).join(', ');
-      return {
-        id: properties.mapbox_id || feature.id || '',
-        text: name || placeName,
-        place_name: placeName || name,
-        center: feature.geometry && Array.isArray(feature.geometry.coordinates) ? feature.geometry.coordinates : [],
-        context: contextValues.map((part) => ({ text: part.name || part.name_preferred || '' })).filter((part) => part.text)
-      };
-    }) : [];
-    response.set('Cache-Control', 'private, max-age=30');
-    response.json({ features });
-  } catch (error) {
-    console.error('Mapbox proxy failed:', error.message);
-    response.status(502).json({ error: 'Could not search locations.' });
+    const fallbackFeatures=await aloeFallbackLocationSearch(query);response.set('Cache-Control','private, max-age=60');return response.json({features:fallbackFeatures});
+  }catch(error){
+    console.error('Location search proxy failed:',error.message);
+    try{const fallbackFeatures=await aloeFallbackLocationSearch(query);response.set('Cache-Control','private, max-age=60');return response.json({features:fallbackFeatures});}
+    catch(fallbackError){console.error('Location fallback failed:',fallbackError.message);return response.status(502).json({error:'Could not search locations.'});}
   }
-});
+}); /* HALO_POST_EDIT_PROJECT_V266I */
 
 app.get('/api/mapbox/reverse', requireApiAuth, async (request, response) => {
   const accessToken = String(process.env.MAPBOX_ACCESS_TOKEN || process.env.MAPBOX_TOKEN || '').trim();
@@ -20077,3 +20078,5 @@ async function shutdown() {
 
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
+
+/* ALOE_POST_IMAGE_EDITDATA_V266J1 */
