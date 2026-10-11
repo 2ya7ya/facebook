@@ -9871,6 +9871,29 @@ async function ensureDatabase() {
     PRIMARY KEY (post_id, media_index, sticker_id, voter_id)
   )`);
   await pool.query('CREATE INDEX IF NOT EXISTS post_poll_votes_recent_idx ON post_poll_votes(post_id, media_index, sticker_id, updated_at DESC)');
+  // LISA_POST_INTERACTIVE_V266J2W1: per-post/photo/sticker responses.
+  await pool.query(`CREATE TABLE IF NOT EXISTS post_question_responses (
+    id BIGSERIAL PRIMARY KEY,
+    post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    media_index INTEGER NOT NULL CHECK(media_index>=0),
+    sticker_id TEXT NOT NULL,
+    responder_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    answer TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS post_question_recent_idx ON post_question_responses(post_id,media_index,sticker_id,created_at DESC)');
+  await pool.query(`CREATE TABLE IF NOT EXISTS post_slider_responses (
+    post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    media_index INTEGER NOT NULL CHECK(media_index>=0),
+    sticker_id TEXT NOT NULL,
+    responder_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    value DOUBLE PRECISION NOT NULL CHECK(value>=0 AND value<=100),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY(post_id,media_index,sticker_id,responder_id)
+  )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS post_slider_recent_idx ON post_slider_responses(post_id,media_index,sticker_id,updated_at DESC)');
+
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS story_hidden_users (
@@ -15661,6 +15684,68 @@ app.post('/api/posts/:postId/poll-vote',requireApiAuth,async(req,res)=>{
   }catch(e){console.error('Post poll vote failed:',e.message);return res.status(500).json({error:'Could not save vote.'});}
 });
 
+
+// LISA_POST_INTERACTIVE_V266J2W1: source-validated post Questions / Emoji Slider APIs.
+function lisaPostInteractiveDef(mediaItems,index,stickerId,type){
+  const items=Array.isArray(mediaItems)?mediaItems:[];
+  if(!Number.isInteger(index)||index<0||index>=items.length||!stickerId||stickerId.length>200)return null;
+  let edit=items[index]&&items[index].editData;
+  if(typeof edit==='string'){try{edit=JSON.parse(edit);}catch{return null;}}
+  if(!edit||!Array.isArray(edit.elements))return null;
+  return edit.elements.find(e=>e&&e.type===type&&String(e.id||'')===stickerId)||null;
+}
+async function lisaPostInteractiveAccess(req,res,ownerOnly=false){
+  const id=req.params.postId;
+  if(!validNumericId(id)){res.status(400).json({error:'Invalid post.'});return null;}
+  await ensureDatabase();
+  const q=await pool.query('SELECT user_id,media_items,visibility FROM posts WHERE id=$1 LIMIT 1',[id]);
+  if(!q.rowCount){res.status(404).json({error:'Post not found.'});return null;}
+  const row=q.rows[0],owner=String(row.user_id)===String(req.user.id);
+  if((ownerOnly&&!owner)||(row.visibility==='only-me'&&!owner)){
+    res.status(403).json({error:'Not allowed.'});return null;
+  }
+  return {...row,owner};
+}
+app.post('/api/posts/:postId/question-responses',requireApiAuth,async(req,res)=>{
+  const mediaIndex=Number(req.body?.mediaIndex),stickerId=String(req.body?.stickerId||''),answer=String(req.body?.answer||'').trim();
+  if(!Number.isInteger(mediaIndex)||mediaIndex<0||!answer||answer.length>1000)return res.status(400).json({error:'Invalid question response.'});
+  try{
+    const post=await lisaPostInteractiveAccess(req,res);if(!post)return;
+    const element=lisaPostInteractiveDef(post.media_items,mediaIndex,stickerId,'question');
+    if(!element)return res.status(404).json({error:'Question sticker not found.'});
+    if(post.owner)return res.status(400).json({error:'You cannot reply to your own question.'});
+    const q=await pool.query(`INSERT INTO post_question_responses(post_id,media_index,sticker_id,responder_id,answer)
+      VALUES($1,$2,$3,$4,$5) RETURNING id,created_at`,[req.params.postId,mediaIndex,stickerId,req.user.id,answer]);
+    return res.status(201).json({ok:true,responseId:String(q.rows[0].id),createdAt:q.rows[0].created_at});
+  }catch(e){console.error('Post question response failed:',e.message);return res.status(500).json({error:'Could not save response.'});}
+});
+app.post('/api/posts/:postId/slider-response',requireApiAuth,async(req,res)=>{
+  const mediaIndex=Number(req.body?.mediaIndex),stickerId=String(req.body?.stickerId||''),value=Number(req.body?.value);
+  if(!Number.isInteger(mediaIndex)||mediaIndex<0||!Number.isFinite(value)||value<0||value>100)
+    return res.status(400).json({error:'Invalid slider rating.'});
+  try{
+    const post=await lisaPostInteractiveAccess(req,res);if(!post)return;
+    if(!lisaPostInteractiveDef(post.media_items,mediaIndex,stickerId,'slider'))return res.status(404).json({error:'Slider sticker not found.'});
+    await pool.query(`INSERT INTO post_slider_responses(post_id,media_index,sticker_id,responder_id,value)
+      VALUES($1,$2,$3,$4,$5) ON CONFLICT(post_id,media_index,sticker_id,responder_id)
+      DO UPDATE SET value=EXCLUDED.value,updated_at=NOW()`,[req.params.postId,mediaIndex,stickerId,req.user.id,value]);
+    const q=await pool.query('SELECT COUNT(*)::int AS count,AVG(value)::float AS average FROM post_slider_responses WHERE post_id=$1 AND media_index=$2 AND sticker_id=$3',[req.params.postId,mediaIndex,stickerId]);
+    return res.json({ok:true,totalRatings:q.rows[0].count,average:Number(q.rows[0].average||0),myRating:value});
+  }catch(e){console.error('Post slider response failed:',e.message);return res.status(500).json({error:'Could not save slider rating.'});}
+});
+app.get('/api/posts/:postId/slider-results',requireApiAuth,async(req,res)=>{
+  const mediaIndex=Number(req.query.mediaIndex),stickerId=String(req.query.stickerId||'');
+  if(!Number.isInteger(mediaIndex)||mediaIndex<0)return res.status(400).json({error:'Invalid slider.'});
+  try{
+    const post=await lisaPostInteractiveAccess(req,res);if(!post)return;
+    if(!lisaPostInteractiveDef(post.media_items,mediaIndex,stickerId,'slider'))return res.status(404).json({error:'Slider sticker not found.'});
+    const q=await pool.query(`SELECT COUNT(*)::int AS count,AVG(value)::float AS average,
+      MAX(value) FILTER (WHERE responder_id=$4)::float AS mine
+      FROM post_slider_responses WHERE post_id=$1 AND media_index=$2 AND sticker_id=$3`,[req.params.postId,mediaIndex,stickerId,req.user.id]);
+    return res.json({totalRatings:q.rows[0].count,average:Number(q.rows[0].average||0),myRating:q.rows[0].mine});
+  }catch(e){console.error('Post slider results failed:',e.message);return res.status(500).json({error:'Could not load slider results.'});}
+});
+
 // ALOE_POST_ACTIVITY_USERS_V266J2U2
 // Returns actual post likers to the post owner; never fabricates post views.
 app.get('/api/posts/:postId/activity', requireApiAuth, async (request, response) => {
@@ -15688,9 +15773,20 @@ app.get('/api/posts/:postId/activity', requireApiAuth, async (request, response)
         if(definition){postPoll=await lisaPostPollPayload(postId,index,definition,request.user.id,true);break;}
       }
     }
+    // LISA_POST_INTERACTIVE_V266J2W1: owner-only sticker response rows for Story-style activity sections.
+    const questions=await pool.query(`SELECT r.id,r.media_index,r.sticker_id,r.answer,r.created_at,u.id AS user_id,u.full_name,u.profile_photo
+      FROM post_question_responses r JOIN users u ON u.id=r.responder_id
+      WHERE r.post_id=$1 ORDER BY r.created_at DESC LIMIT 300`,[postId]);
+    const sliders=await pool.query(`SELECT r.media_index,r.sticker_id,r.value,r.updated_at,u.id AS user_id,u.full_name,u.profile_photo
+      FROM post_slider_responses r JOIN users u ON u.id=r.responder_id
+      WHERE r.post_id=$1 ORDER BY r.updated_at DESC LIMIT 300`,[postId]);
+    const responseRows=questions.rows.map(r=>({id:String(r.id),mediaIndex:r.media_index,stickerId:r.sticker_id,
+      userId:String(r.user_id),name:r.full_name||'Lisa user',profilePhoto:r.profile_photo||'',answer:r.answer,createdAt:r.created_at}));
+    const sliderRows=sliders.rows.map(r=>({mediaIndex:r.media_index,stickerId:r.sticker_id,
+      userId:String(r.user_id),name:r.full_name||'Lisa user',profilePhoto:r.profile_photo||'',value:Number(r.value),createdAt:r.updated_at}));
     return response.json({likeCount:Number(count.rows[0].n),commentCount:Number(comments.rows[0].n),viewCount:Number(count.rows[0].n),
       viewers:people.rows.map(row=>({userId:String(row.user_id),name:row.full_name||'Aloe user',profilePhoto:row.profile_photo||'',createdAt:row.created_at})),
-      poll:postPoll,responses:[],activityType:'post_likes',viewerTracking:false});
+      poll:postPoll,responses:responseRows,sliderResponses:sliderRows,activityType:'post_likes',viewerTracking:false});
   } catch (error) {
     console.error('Post activity failed:',error.message);
     return response.status(500).json({error:'Could not load post activity.'});
