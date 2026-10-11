@@ -15587,6 +15587,31 @@ app.delete('/api/posts/:postId', requireApiAuth, async (request, response) => {
   }
 });
 
+// ALOE_POST_ACTIVITY_USERS_V266J2U2
+// Returns actual post likers to the post owner; never fabricates post views.
+app.get('/api/posts/:postId/activity', requireApiAuth, async (request, response) => {
+  const postId = request.params.postId;
+  if (!validNumericId(postId)) return response.status(400).json({error:'Invalid post.'});
+  try {
+    await ensureDatabase();
+    const own = await pool.query('SELECT user_id FROM posts WHERE id=$1 LIMIT 1',[postId]);
+    if (!own.rows.length) return response.status(404).json({error:'Post not found.'});
+    if (String(own.rows[0].user_id)!==String(request.user.id)) return response.status(403).json({error:'Only the post owner can view activity.'});
+    const people = await pool.query(`
+      SELECT pl.user_id, pl.created_at, u.full_name, u.profile_photo
+      FROM post_likes pl JOIN users u ON u.id=pl.user_id
+      WHERE pl.post_id=$1 ORDER BY pl.created_at DESC LIMIT 150
+    `,[postId]);
+    const count = await pool.query('SELECT COUNT(*)::int AS n FROM post_likes WHERE post_id=$1',[postId]);
+    return response.json({likeCount:Number(count.rows[0].n),viewCount:Number(count.rows[0].n),
+      viewers:people.rows.map(row=>({userId:String(row.user_id),name:row.full_name||'Aloe user',profilePhoto:row.profile_photo||'',createdAt:row.created_at})),
+      responses:[],activityType:'post_likes',viewerTracking:false});
+  } catch (error) {
+    console.error('Post activity failed:',error.message);
+    return response.status(500).json({error:'Could not load post activity.'});
+  }
+});
+
 app.post('/api/posts/:postId/like', requireApiAuth, async (request, response) => {
   const postId = request.params.postId;
   if (!validNumericId(postId)) return response.status(400).json({ error: 'Invalid post.' });
