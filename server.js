@@ -9859,6 +9859,19 @@ async function ensureDatabase() {
     )
   `);
   await pool.query('CREATE INDEX IF NOT EXISTS story_poll_votes_story_idx ON story_poll_votes (story_id, option_index, updated_at DESC)');
+  // LISA_POST_POLL_V266J2V3A - votes separated by post/photo/sticker.
+  await pool.query(`CREATE TABLE IF NOT EXISTS post_poll_votes (
+    post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    media_index INTEGER NOT NULL CHECK (media_index >= 0),
+    sticker_id TEXT NOT NULL,
+    voter_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    option_index INTEGER NOT NULL CHECK (option_index >= 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (post_id, media_index, sticker_id, voter_id)
+  )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS post_poll_votes_recent_idx ON post_poll_votes(post_id, media_index, sticker_id, updated_at DESC)');
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS story_hidden_users (
       owner_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -15587,6 +15600,67 @@ app.delete('/api/posts/:postId', requireApiAuth, async (request, response) => {
   }
 });
 
+// LISA_POST_POLL_V266J2V3A
+// Resolve poll from server-side persisted post media; never trust client-supplied options.
+function lisaPostPollDef(mediaItems, mediaIndex, stickerId) {
+  const items=Array.isArray(mediaItems)?mediaItems:[];
+  if(!Number.isInteger(mediaIndex)||mediaIndex<0||mediaIndex>=items.length)return null;
+  const item=items[mediaIndex];
+  let edit=item && item.editData;
+  if(typeof edit==='string'){try{edit=JSON.parse(edit);}catch{return null;}}
+  if(!edit||!Array.isArray(edit.elements))return null;
+  const pollElements=edit.elements.filter(e=>e&&e.type==='poll');
+  const element=stickerId?pollElements.find(e=>String(e.id||'')===stickerId):pollElements[0];
+  if(!element)return null;
+  const def=storyPollDefinition({elements:[element]});
+  if(!def)return null;
+  return {...def, stickerId:String(element.id||'default')};
+}
+async function lisaPostPollPayload(postId,mediaIndex,def,userId,owner) {
+  const params=[postId,mediaIndex,def.stickerId];
+  const groups=await pool.query(`SELECT option_index,COUNT(*)::int AS n FROM post_poll_votes
+    WHERE post_id=$1 AND media_index=$2 AND sticker_id=$3 GROUP BY option_index`,params);
+  const counts=def.options.map(()=>0);
+  for(const row of groups.rows){const i=Number(row.option_index);if(i>=0&&i<counts.length)counts[i]=Number(row.n);}
+  const totalVotes=counts.reduce((a,b)=>a+b,0);
+  const mine=await pool.query(`SELECT option_index FROM post_poll_votes WHERE post_id=$1 AND media_index=$2 AND sticker_id=$3 AND voter_id=$4`,[...params,userId]);
+  let voters=[];
+  if(owner){const rows=await pool.query(`SELECT v.option_index,v.updated_at,u.id AS user_id,u.full_name,u.profile_photo
+    FROM post_poll_votes v JOIN users u ON u.id=v.voter_id
+    WHERE v.post_id=$1 AND v.media_index=$2 AND v.sticker_id=$3 ORDER BY v.updated_at DESC LIMIT 500`,params);
+    voters=rows.rows.map(r=>({userId:String(r.user_id),name:r.full_name||'Lisa user',profilePhoto:r.profile_photo||'',optionIndex:Number(r.option_index),option:def.options[Number(r.option_index)]||'',votedAt:r.updated_at}));
+  }
+  return {question:def.question,headerColor:def.headerColor,stickerId:def.stickerId,mediaIndex,totalVotes,
+    myVote:mine.rows.length?Number(mine.rows[0].option_index):-1,
+    options:def.options.map((text,index)=>({index,text,count:counts[index],percentage:totalVotes?Math.round(counts[index]*100/totalVotes):0})),voters};
+}
+app.get('/api/posts/:postId/poll-results',requireApiAuth,async(req,res)=>{
+  const postId=req.params.postId,mediaIndex=Number(req.query.mediaIndex||0),stickerId=String(req.query.stickerId||'');
+  if(!validNumericId(postId)||!Number.isInteger(mediaIndex)||mediaIndex<0)return res.status(400).json({error:'Invalid poll.'});
+  try{await ensureDatabase();const q=await pool.query('SELECT user_id,media_items,visibility FROM posts WHERE id=$1',[postId]);
+    if(!q.rowCount)return res.status(404).json({error:'Post not found.'});
+    const row=q.rows[0];if(row.visibility==='only-me'&&String(row.user_id)!==String(req.user.id))return res.status(403).json({error:'Private post.'});
+    const def=lisaPostPollDef(row.media_items,mediaIndex,stickerId);if(!def)return res.status(404).json({error:'Poll not found.'});
+    const poll=await lisaPostPollPayload(postId,mediaIndex,def,req.user.id,String(row.user_id)===String(req.user.id));
+    return res.json({postId,mediaIndex,poll});
+  }catch(e){console.error('Post poll results failed:',e.message);return res.status(500).json({error:'Could not load poll.'});}
+});
+app.post('/api/posts/:postId/poll-vote',requireApiAuth,async(req,res)=>{
+  const postId=req.params.postId,mediaIndex=Number(req.body?.mediaIndex??0),stickerId=String(req.body?.stickerId||''),optionIndex=Number(req.body?.optionIndex);
+  if(!validNumericId(postId)||!Number.isInteger(mediaIndex)||mediaIndex<0||!Number.isInteger(optionIndex))return res.status(400).json({error:'Invalid vote.'});
+  try{await ensureDatabase();const q=await pool.query('SELECT user_id,media_items,visibility FROM posts WHERE id=$1',[postId]);
+    if(!q.rowCount)return res.status(404).json({error:'Post not found.'});
+    const row=q.rows[0];if(row.visibility==='only-me'&&String(row.user_id)!==String(req.user.id))return res.status(403).json({error:'Private post.'});
+    const def=lisaPostPollDef(row.media_items,mediaIndex,stickerId);
+    if(!def||optionIndex<0||optionIndex>=def.options.length)return res.status(400).json({error:'Choose a valid option.'});
+    await pool.query(`INSERT INTO post_poll_votes(post_id,media_index,sticker_id,voter_id,option_index)
+      VALUES($1,$2,$3,$4,$5) ON CONFLICT(post_id,media_index,sticker_id,voter_id)
+      DO UPDATE SET option_index=EXCLUDED.option_index,updated_at=NOW()`,[postId,mediaIndex,def.stickerId,req.user.id,optionIndex]);
+    const poll=await lisaPostPollPayload(postId,mediaIndex,def,req.user.id,String(row.user_id)===String(req.user.id));
+    return res.json({ok:true,postId,mediaIndex,poll});
+  }catch(e){console.error('Post poll vote failed:',e.message);return res.status(500).json({error:'Could not save vote.'});}
+});
+
 // ALOE_POST_ACTIVITY_USERS_V266J2U2
 // Returns actual post likers to the post owner; never fabricates post views.
 app.get('/api/posts/:postId/activity', requireApiAuth, async (request, response) => {
@@ -15605,9 +15679,18 @@ app.get('/api/posts/:postId/activity', requireApiAuth, async (request, response)
     const count = await pool.query('SELECT COUNT(*)::int AS n FROM post_likes WHERE post_id=$1',[postId]);
     // ALOE_ACTIVITY_COMMENTS_V266J2U3
     const comments = await pool.query(`SELECT ((SELECT COUNT(*) FROM post_comments WHERE post_id=$1) + (SELECT COUNT(*) FROM post_media_comments WHERE post_id=$1))::int AS n`,[postId]);
+    // LISA_POST_POLL_V266J2V3A - first photo poll is included in the existing Story sheet contract.
+    const mediaRow=await pool.query('SELECT media_items FROM posts WHERE id=$1',[postId]);
+    let postPoll=null;
+    if(mediaRow.rowCount){const items=mediaRow.rows[0].media_items||[];
+      for(let index=0;index<items.length;index++){
+        const definition=lisaPostPollDef(items,index,'');
+        if(definition){postPoll=await lisaPostPollPayload(postId,index,definition,request.user.id,true);break;}
+      }
+    }
     return response.json({likeCount:Number(count.rows[0].n),commentCount:Number(comments.rows[0].n),viewCount:Number(count.rows[0].n),
       viewers:people.rows.map(row=>({userId:String(row.user_id),name:row.full_name||'Aloe user',profilePhoto:row.profile_photo||'',createdAt:row.created_at})),
-      responses:[],activityType:'post_likes',viewerTracking:false});
+      poll:postPoll,responses:[],activityType:'post_likes',viewerTracking:false});
   } catch (error) {
     console.error('Post activity failed:',error.message);
     return response.status(500).json({error:'Could not load post activity.'});
