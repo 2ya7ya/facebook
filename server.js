@@ -15603,7 +15603,9 @@ app.get('/api/posts/:postId/activity', requireApiAuth, async (request, response)
       WHERE pl.post_id=$1 ORDER BY pl.created_at DESC LIMIT 150
     `,[postId]);
     const count = await pool.query('SELECT COUNT(*)::int AS n FROM post_likes WHERE post_id=$1',[postId]);
-    return response.json({likeCount:Number(count.rows[0].n),viewCount:Number(count.rows[0].n),
+    // ALOE_ACTIVITY_COMMENTS_V266J2U3
+    const comments = await pool.query(`SELECT ((SELECT COUNT(*) FROM post_comments WHERE post_id=$1) + (SELECT COUNT(*) FROM post_media_comments WHERE post_id=$1))::int AS n`,[postId]);
+    return response.json({likeCount:Number(count.rows[0].n),commentCount:Number(comments.rows[0].n),viewCount:Number(count.rows[0].n),
       viewers:people.rows.map(row=>({userId:String(row.user_id),name:row.full_name||'Aloe user',profilePhoto:row.profile_photo||'',createdAt:row.created_at})),
       responses:[],activityType:'post_likes',viewerTracking:false});
   } catch (error) {
