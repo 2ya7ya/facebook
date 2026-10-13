@@ -15713,7 +15713,7 @@ app.post('/api/posts/:postId/question-responses',requireApiAuth,async(req,res)=>
     const post=await lisaPostInteractiveAccess(req,res);if(!post)return;
     const element=lisaPostInteractiveDef(post.media_items,mediaIndex,stickerId,'question');
     if(!element)return res.status(404).json({error:'Question sticker not found.'});
-    if(post.owner)return res.status(400).json({error:'You cannot reply to your own question.'});
+    // LISA_REMAINING_THREE_V266J2W35: owners can answer their own post Questions stickers.
     const q=await pool.query(`INSERT INTO post_question_responses(post_id,media_index,sticker_id,responder_id,answer)
       VALUES($1,$2,$3,$4,$5) RETURNING id,created_at`,[req.params.postId,mediaIndex,stickerId,req.user.id,answer]);
     return res.status(201).json({ok:true,responseId:String(q.rows[0].id),createdAt:q.rows[0].created_at});
