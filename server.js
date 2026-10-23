@@ -13095,43 +13095,83 @@ app.post('/api/feedback', requireApiAuth, async (request, response) => {
 });
 
 // Signed-out Halo problem reports for owner ID 1.
-app.post('/api/problem-reports', async (request, response) => {
-  try {
-    const description = String(request.body?.description || '').trim();
-    if (!description || description.length > 5000) return response.status(400).json({error:'Description must be 1–5000 characters.'});
-    await ensureDatabase();
-    await pool.query(`CREATE TABLE IF NOT EXISTS halo_problem_reports (
-      id BIGSERIAL PRIMARY KEY,
-      recipient_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE DEFAULT 1,
-      description TEXT NOT NULL,
-      device_info TEXT NOT NULL DEFAULT '',
-      android_version VARCHAR(80) NOT NULL DEFAULT '',
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )`);
-    const attachments = Array.isArray(request.body?.attachments) ? request.body.attachments : [];
-    if (attachments.length > 8) return response.status(400).json({error:'Attach up to 8 files.'});
-    let totalBytes = 0;
-    const prepared = [];
-    for (const item of attachments) {
-      const name = String(item?.name || 'attachment').slice(0,180);
-      const mimeType = String(item?.mimeType || '').toLowerCase();
-      const encoded = String(item?.dataBase64 || '');
-      if (!/^image\/[a-z0-9.+-]+$|^video\/[a-z0-9.+-]+$/.test(mimeType) || !encoded || encoded.length > 5600000 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return response.status(400).json({error:'Invalid attachment.'});
-      const bytes = Buffer.from(encoded, 'base64');
-      if (!bytes.length || bytes.length > 4*1024*1024 || bytes.toString('base64') !== encoded) return response.status(400).json({error:'Each attachment must be 4 MB or smaller.'});
-      totalBytes += bytes.length;
-      if (totalBytes > 16*1024*1024) return response.status(400).json({error:'Combined attachments must be 16 MB or smaller.'});
-      prepared.push({name,mimeType,bytes});
+app.post('/api/problem-reports',
+  async (request, response) => {
+    try {
+      const contentType = String(request.headers['content-type'] || '');
+      if (!contentType.toLowerCase().startsWith('multipart/form-data')) {
+        return response.status(400).json({error:'Expected a multipart report upload.'});
+      }
+      const webRequest = new Request('http://localhost/api/problem-reports', {
+        method: 'POST',
+        headers: { 'content-type': contentType },
+        body: Readable.toWeb(request),
+        duplex: 'half'
+      });
+      const form = await webRequest.formData();
+
+      const description = String(form.get('description') || '').trim();
+      if (!description || description.length > 5000)
+        return response.status(400).json({error:'Description must be 1–5000 characters.'});
+      const accountContextText = String(form.get('accountContextText') || '').trim();
+      if (accountContextText.length > 3000)
+        return response.status(400).json({error:'Account details must be 3,000 characters or fewer.'});
+
+      const files = form.getAll('attachments');
+      if (files.length > 8) return response.status(400).json({error:'Attach up to 8 files.'});
+      let totalBytes = 0;
+      const prepared = [];
+      for (const file of files) {
+        if (!file || typeof file.arrayBuffer !== 'function')
+          return response.status(400).json({error:'Invalid attachment.'});
+        const name = String(file.name || 'attachment').slice(0,180);
+        const mimeType = String(file.type || '').toLowerCase();
+        if (!/^image\/[a-z0-9.+-]+$|^video\/[a-z0-9.+-]+$/.test(mimeType))
+          return response.status(400).json({error:'Invalid attachment.'});
+        const bytes = Buffer.from(await file.arrayBuffer());
+        if (!bytes.length || bytes.length > 4*1024*1024)
+          return response.status(400).json({error:'Each attachment must be 4 MB or smaller.'});
+        totalBytes += bytes.length;
+        if (totalBytes > 16*1024*1024)
+          return response.status(400).json({error:'Combined attachments must be 16 MB or smaller.'});
+        prepared.push({name,mimeType,bytes});
+      }
+
+      await ensureDatabase();
+      await pool.query(`CREATE TABLE IF NOT EXISTS halo_problem_reports (
+        id BIGSERIAL PRIMARY KEY,
+        recipient_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE DEFAULT 1,
+        description TEXT NOT NULL, device_info TEXT NOT NULL DEFAULT '',
+        android_version VARCHAR(80) NOT NULL DEFAULT '',
+        account_context TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`);
+      await pool.query("ALTER TABLE halo_problem_reports ADD COLUMN IF NOT EXISTS account_context TEXT NOT NULL DEFAULT ''");
+      await pool.query(`CREATE TABLE IF NOT EXISTS halo_problem_report_attachments (
+        id BIGSERIAL PRIMARY KEY,
+        report_id BIGINT NOT NULL REFERENCES halo_problem_reports(id) ON DELETE CASCADE,
+        file_name VARCHAR(180) NOT NULL, mime_type VARCHAR(120) NOT NULL,
+        file_data BYTEA NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`);
+      const saved = await pool.query(
+        `INSERT INTO halo_problem_reports (recipient_user_id,description,device_info,android_version,account_context)
+         VALUES (1,$1,$2,$3,$4) RETURNING id,created_at`,
+        [description,String(form.get('deviceInfo')||'').slice(0,300),
+         String(form.get('androidVersion')||'').slice(0,80),accountContextText]);
+      for (const item of prepared) {
+        await pool.query(
+          `INSERT INTO halo_problem_report_attachments (report_id,file_name,mime_type,file_data)
+           VALUES ($1,$2,$3,$4)`,
+          [saved.rows[0].id,item.name,item.mimeType,item.bytes]);
+      }
+      return response.status(201).json({ok:true,reportId:String(saved.rows[0].id),
+        recipientUserId:1,attachmentCount:prepared.length,createdAt:saved.rows[0].created_at});
+    } catch (error) {
+      if (error && (error.type === 'entity.too.large' || error.status === 413))
+        return response.status(413).json({error:'The report attachments are too large.'});
+      console.error('Halo problem report failed:',error.message);
+      return response.status(500).json({error:'Could not submit your report right now.'});
     }
-    await pool.query(`CREATE TABLE IF NOT EXISTS halo_problem_report_attachments (id BIGSERIAL PRIMARY KEY, report_id BIGINT NOT NULL REFERENCES halo_problem_reports(id) ON DELETE CASCADE, file_name VARCHAR(180) NOT NULL, mime_type VARCHAR(120) NOT NULL, file_data BYTEA NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
-    const saved = await pool.query(`INSERT INTO halo_problem_reports (recipient_user_id,description,device_info,android_version) VALUES (1,$1,$2,$3) RETURNING id,created_at`, [description,String(request.body?.deviceInfo||'').slice(0,300),String(request.body?.androidVersion||'').slice(0,80)]);
-    for (const item of prepared) await pool.query(`INSERT INTO halo_problem_report_attachments (report_id,file_name,mime_type,file_data) VALUES ($1,$2,$3,$4)`,[saved.rows[0].id,item.name,item.mimeType,item.bytes]);
-    return response.status(201).json({ok:true,reportId:String(saved.rows[0].id),recipientUserId:1,attachmentCount:prepared.length,createdAt:saved.rows[0].created_at});
-  } catch (error) {
-    console.error('Halo problem report failed:',error.message);
-    return response.status(500).json({error:'Could not submit your report right now.'});
-  }
-});
+  });
 
 app.get('/api/admin/feedback', requireApiAuth, requireOwnerApi, async (_request, response) => {
   try {
@@ -13155,7 +13195,7 @@ app.get('/api/admin/feedback', requireApiAuth, requireOwnerApi, async (_request,
     );
     const labels = { 1: 'Very dissatisfied', 2: 'Dissatisfied', 3: 'Neither', 4: 'Satisfied', 5: 'Very satisfied' };
     const feedbackItems = result.rows.map(row => ({ id: String(row.id), rating: Number(row.rating), ratingLabel: labels[Number(row.rating)] || 'Rating', feedback: row.feedback, displayName: row.display_name, createdAt: row.created_at }));
-    const reports = await pool.query('SELECT id, description, device_info, android_version, created_at FROM halo_problem_reports WHERE recipient_user_id = 1 ORDER BY created_at DESC LIMIT 200');
+    const reports = await pool.query("SELECT id, description, device_info, android_version, account_context, created_at FROM halo_problem_reports WHERE recipient_user_id = 1 ORDER BY created_at DESC LIMIT 200");
     const reportIds = reports.rows.map(row => String(row.id));
     const attachmentResult = reportIds.length
       ? await pool.query('SELECT a.id, a.report_id, a.file_name, a.mime_type FROM halo_problem_report_attachments a JOIN halo_problem_reports r ON r.id = a.report_id WHERE r.recipient_user_id = 1 AND a.report_id = ANY($1::bigint[]) ORDER BY a.id ASC', [reportIds])
@@ -13177,7 +13217,8 @@ app.get('/api/admin/feedback', requireApiAuth, requireOwnerApi, async (_request,
         id: 'report-' + String(row.id),
         rating: 0,
         ratingLabel: 'Problem report',
-        feedback: row.description + '\n\nDevice: ' + (row.device_info || 'Not provided') + '\nAndroid: ' + (row.android_version || 'Not provided'),
+        feedback: row.description + '\n\nDevice: ' + (row.device_info || 'Not provided') + '\nAndroid: ' + (row.android_version || 'Not provided') +
+          (String(row.account_context || '').trim() ? '\n\nAccount details (provided by reporter; not verified):\n' + String(row.account_context).trim() : ''),
         displayName: 'Signed-out user',
         createdAt: row.created_at,
         attachments
