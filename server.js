@@ -13238,7 +13238,7 @@ app.get('/api/admin/problem-report-attachments/:attachmentId', requireApiAuth, r
   try {
     await ensureDatabase();
     const attachmentId = String(request.params.attachmentId || '');
-    if (!/^\\d+$/.test(attachmentId)) return response.status(400).json({ error: 'Invalid attachment ID.' });
+    if (!/^\d+$/.test(attachmentId)) return response.status(400).json({ error: 'Invalid attachment ID.' });
     const result = await pool.query(
       `SELECT a.file_name, a.mime_type, a.file_data
          FROM halo_problem_report_attachments a
