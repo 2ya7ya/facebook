@@ -5096,7 +5096,7 @@ function installMarketplacePage(){
     style.textContent += '.fb-session-delete{display:block;margin:10px 0 2px auto;padding:4px 8px;border:0;border-radius:6px;background:transparent;color:#e41e3f;font:500 12px/16px Arial}.fb-session-delete:disabled{opacity:.5}';
     style.textContent += '.fb-shared-settings-page.is-open,.fb-account-settings-page.is-open,.fb-account-editor.is-open{background:#fff!important;opacity:1!important;backdrop-filter:none!important}.fb-shared-settings-page>header,.fb-account-settings-page>header,.fb-account-editor-sheet{background:#fff!important;opacity:1!important}.fb-settings-groups{background:#f0f2f5!important;opacity:1!important}';
     style.textContent += '.fb-shared-settings-page>header button,.fb-account-settings-page>header button,.fb-account-editor-header>button{position:relative!important}.fb-shared-settings-page>header button:after,.fb-account-settings-page>header button:after,.fb-account-editor-header>button:after{content:"";position:absolute;inset:-9px;display:block}';
-    style.textContent += '.fb-admin-user-detail{padding:5px 0 15px;border-bottom:1px solid #ccd0d5}.fb-admin-detail-row{display:grid;grid-template-columns:120px minmax(0,1fr);gap:9px;padding:6px 0;font:400 12px/17px Arial}.fb-admin-detail-row strong{color:#65676b}.fb-admin-session{margin:10px 0 0;padding:10px;border:1px solid #e4e6eb;border-radius:10px;background:#f7f8fa}.fb-admin-session>strong{display:block;margin-bottom:5px;font:600 14px/19px Arial}.fb-admin-password-reset{display:flex;gap:7px;margin-top:13px}.fb-admin-password-reset input{min-width:0;flex:1;height:40px;border:1px solid #ccd0d5;border-radius:8px;padding:0 10px;font:14px Arial}.fb-admin-password-reset button,.fb-admin-delete-account{height:40px;border:0;border-radius:8px;padding:0 12px;font:500 13px Arial}.fb-admin-password-reset button{background:#0866ff;color:#fff}.fb-admin-delete-account{display:block;width:100%;margin-top:8px;background:#e41e3f;color:#fff}.fb-admin-loading{padding:18px 0;color:#65676b;font:14px Arial}';
+    style.textContent += '.fb-admin-feedback-card{padding:13px 0;border-bottom:1px solid #e4e6eb;overflow-wrap:anywhere}.fb-admin-feedback-card>strong{display:block;font:600 14px/19px Arial;color:#050505}.fb-admin-feedback-card>small{display:block;margin-top:4px;color:#65676b;font:12px/16px Arial}.fb-admin-feedback-card>p{white-space:pre-wrap;font:14px/20px Arial;color:#1c1e21}.fb-admin-feedback-media{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:10px}.fb-admin-feedback-attachment{min-width:0}.fb-admin-feedback-filename{font:12px/16px Arial;overflow-wrap:anywhere;margin-bottom:5px;color:#65676b}.fb-admin-feedback-preview{display:block;width:100%;max-height:340px;object-fit:contain;background:#18191a;border-radius:8px}.fb-admin-feedback-attachment a{display:inline-block;padding:8px 0;color:#0866ff;font:13px Arial}.fb-admin-user-detail{padding:5px 0 15px;border-bottom:1px solid #ccd0d5}.fb-admin-detail-row{display:grid;grid-template-columns:120px minmax(0,1fr);gap:9px;padding:6px 0;font:400 12px/17px Arial}.fb-admin-detail-row strong{color:#65676b}.fb-admin-session{margin:10px 0 0;padding:10px;border:1px solid #e4e6eb;border-radius:10px;background:#f7f8fa}.fb-admin-session>strong{display:block;margin-bottom:5px;font:600 14px/19px Arial}.fb-admin-password-reset{display:flex;gap:7px;margin-top:13px}.fb-admin-password-reset input{min-width:0;flex:1;height:40px;border:1px solid #ccd0d5;border-radius:8px;padding:0 10px;font:14px Arial}.fb-admin-password-reset button,.fb-admin-delete-account{height:40px;border:0;border-radius:8px;padding:0 12px;font:500 13px Arial}.fb-admin-password-reset button{background:#0866ff;color:#fff}.fb-admin-delete-account{display:block;width:100%;margin-top:8px;background:#e41e3f;color:#fff}.fb-admin-loading{padding:18px 0;color:#65676b;font:14px Arial}';
     style.textContent += '.fb-admin-search-button{width:38px;height:38px;border:0;background:transparent;display:grid;place-items:center}.fb-admin-search-button svg{width:21px;height:21px;fill:none;stroke:#050505;stroke-width:2;stroke-linecap:round}.fb-admin-search-wrap{padding:9px 16px;background:#fff}.fb-admin-search-wrap[hidden]{display:none}.fb-admin-search-wrap label{height:38px;display:flex;align-items:center;gap:8px;border-radius:20px;background:#f0f2f5;padding:0 9px 0 13px}.fb-admin-search-wrap svg{width:17px;height:17px;fill:none;stroke:#65676b;stroke-width:2}.fb-admin-search-wrap input{min-width:0;flex:1;border:0;outline:0;background:transparent;font:15px Arial;-webkit-appearance:none;appearance:none}.fb-admin-search-wrap input::-webkit-search-cancel-button{-webkit-appearance:none;appearance:none;display:none}.fb-admin-search-clear{display:none;width:26px;height:26px;flex:0 0 26px;align-items:center;justify-content:center;border:0;border-radius:50%;background:transparent;color:#050505!important;-webkit-text-fill-color:#050505!important;padding:0;font:400 24px/24px Arial}.fb-admin-search-wrap.has-value .fb-admin-search-clear{display:flex}.fb-admin-search-clear svg{width:18px!important;height:18px!important;fill:none!important;stroke:#050505!important;stroke-width:2.4!important;stroke-linecap:round!important;stroke-linejoin:round!important;color:#050505!important}.fb-admin-user-page main{background:#f0f2f5!important}.fb-admin-profile-block,.fb-admin-security-block,.fb-admin-sessions-block{margin:9px 0;padding:12px 16px;background:#fff}.fb-admin-profile-block h3,.fb-admin-security-block h3,.fb-admin-sessions-block h3{margin:0 0 8px;color:#65676b;font:600 13px/18px Arial;text-transform:uppercase;letter-spacing:.3px}.fb-admin-action-row{display:grid;width:100%;min-height:58px;grid-template-columns:34px minmax(0,1fr) 16px;align-items:center;gap:10px;border:0;border-bottom:1px solid #e4e6eb;background:#fff;padding:7px 0;color:#050505;text-align:left}.fb-admin-action-row:last-child{border-bottom:0}.fb-admin-action-icon{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:#e8f1ff;color:#0866ff;font:600 16px Arial}.fb-admin-action-row.is-warning .fb-admin-action-icon{background:#fff1dd;color:#d66b00}.fb-admin-action-row.is-danger .fb-admin-action-icon{background:#fde8ec;color:#e41e3f}.fb-admin-action-copy strong,.fb-admin-action-copy small{display:block}.fb-admin-action-copy strong{font:550 15px/20px Arial}.fb-admin-action-copy small{margin-top:2px;color:#65676b;font:12px/16px Arial}.fb-admin-action-chevron{width:7px;height:7px;border-right:1.5px solid #8a8d91;border-top:1.5px solid #8a8d91;transform:rotate(45deg)}.fb-admin-reset-panel{margin-top:10px;padding:12px;border-radius:12px;background:#f0f2f5}.fb-admin-reset-panel input{box-sizing:border-box;width:100%;height:42px;border:1px solid #ccd0d5;border-radius:9px;background:#fff;padding:0 11px;font:14px Arial}.fb-admin-reset-panel button{width:100%;height:42px;margin-top:8px;border:0;border-radius:21px;background:#0866ff;color:#fff;font:500 14px Arial}.fb-admin-session.fb-session-device-card{margin-top:0!important;padding:0!important;background:#fff!important}';
     style.textContent += '.fb-admin-action-icon svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.fb-admin-action-page main{box-sizing:border-box;padding:28px 20px;background:#fff!important}.fb-admin-action-hero{text-align:center}.fb-admin-action-hero-icon{display:grid;width:58px;height:58px;margin:4px auto 18px;place-items:center;border-radius:50%;background:#e8f1ff;color:#0866ff}.fb-admin-action-hero-icon svg{width:28px;height:28px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}.fb-admin-action-hero.is-warning .fb-admin-action-hero-icon{background:#fff1dd;color:#c75b00}.fb-admin-action-hero.is-danger .fb-admin-action-hero-icon{background:#fde8ec;color:#e41e3f}.fb-admin-action-hero h2{margin:0;color:#050505;font:600 22px/28px Arial}.fb-admin-action-hero p{max-width:340px;margin:9px auto 24px;color:#65676b;font:400 14px/20px Arial}.fb-admin-action-form input{box-sizing:border-box;width:100%;height:48px;border:1px solid #ccd0d5;border-radius:10px;padding:0 13px;font:15px Arial;outline:0}.fb-admin-action-form input:focus{border-color:#0866ff}.fb-admin-action-confirm{width:100%;height:46px;margin-top:12px;border:0;border-radius:23px;background:#0866ff;color:#fff;font:500 15px Arial;letter-spacing:.15px}.fb-admin-action-confirm.is-warning{background:#d76b00}.fb-admin-action-confirm.is-danger{background:#e41e3f}.fb-admin-session-delete{display:block;margin:12px 0 1px auto;border:0;background:transparent;color:#e41e3f;padding:3px 0;font:500 12px/17px Arial}';
     style.textContent += '.fb-admin-action-icon,.fb-admin-action-hero-icon,.fb-admin-action-hero.is-warning .fb-admin-action-hero-icon,.fb-admin-action-hero.is-danger .fb-admin-action-hero-icon{background:transparent!important;border-radius:0!important}.fb-admin-action-icon{width:27px;height:32px}.fb-admin-action-icon svg{width:21px;height:21px}.fb-admin-action-hero-icon{width:48px;height:48px;margin-bottom:14px}.fb-admin-action-hero-icon svg{width:34px;height:34px}.fb-admin-device-list{margin:4px 0 20px;border-top:1px solid #e4e6eb}.fb-admin-device-preview{display:grid;grid-template-columns:34px minmax(0,1fr);gap:10px;align-items:center;padding:11px 0;border-bottom:1px solid #e4e6eb;text-align:left}.fb-admin-device-preview svg{width:25px;height:25px}.fb-admin-device-preview strong,.fb-admin-device-preview span{display:block}.fb-admin-device-preview strong{font:550 14px/19px Arial}.fb-admin-device-preview span{color:#65676b;font:12px/16px Arial}.fb-admin-action-form label{display:block;margin:0 0 6px;color:#65676b;font:500 12px/16px Arial}.fb-admin-action-form select{box-sizing:border-box;width:100%;height:48px;border:1px solid #ccd0d5;border-radius:10px;background:#fff;padding:0 12px;font:15px Arial}.fb-admin-action-form [hidden]{display:none!important}.fb-admin-action-confirm:disabled{opacity:.45}.fb-admin-action-success{padding:15px;border-radius:10px;background:#e9f7ee;color:#19713a;text-align:center;font:500 14px/20px Arial}.fb-admin-activity-page main{background:#f0f2f5!important}.fb-admin-activity-tabs{position:sticky;z-index:3;top:0;display:flex;gap:7px;overflow-x:auto;padding:9px 12px;background:#fff;border-bottom:1px solid #e4e6eb;scrollbar-width:none}.fb-admin-activity-tabs button{height:32px;flex:0 0 auto;border:0;border-radius:16px;background:#f0f2f5;padding:0 13px;color:#050505;font:500 13px Arial}.fb-admin-activity-tabs button.is-active{background:#e7f3ff;color:#0866ff}.fb-admin-content-list{padding:10px 12px 28px}.fb-admin-content-card{margin-bottom:9px;border-radius:12px;background:#fff;padding:12px;box-shadow:0 1px 2px rgba(0,0,0,.08)}.fb-admin-content-card h3{margin:0 0 5px;font:600 14px/19px Arial}.fb-admin-content-card p{margin:0;color:#050505;font:400 14px/20px Arial;white-space:pre-wrap}.fb-admin-content-card small{display:block;margin-top:7px;color:#65676b;font:12px/16px Arial}.fb-admin-content-card img,.fb-admin-content-card video{display:block;width:100%;max-height:320px;margin-top:9px;border-radius:9px;background:#000;object-fit:contain}.fb-admin-content-card.is-deleted{border-left:3px solid #e41e3f}.fb-admin-content-empty{padding:28px 12px;color:#65676b;text-align:center;font:14px Arial}.fb-admin-retained-comments{margin-top:10px;padding-top:9px;border-top:1px solid #e4e6eb}.fb-admin-retained-comments strong{font:550 12px/17px Arial;color:#65676b}.fb-admin-retained-comments p{margin-top:5px!important;font-size:13px!important;line-height:18px!important}';
@@ -5904,7 +5904,7 @@ function installMarketplacePage(){
     section = document.createElement('section');
     section.className = 'fb-settings-group';
     section.dataset.ownerAdminSection = '1';
-    section.innerHTML = '<h2 class="fb-settings-group-title">Website administration</h2>' + settingsSectionRow('Manage users', 'admin', 'View account details, sessions, and safety controls');
+    section.innerHTML = '<h2 class="fb-settings-group-title">Website administration</h2>' + settingsSectionRow('Manage users', 'admin', 'View account details, sessions, and safety controls') + settingsSectionRow('Feedback inbox', 'feedback', 'Read problem reports and view attached photos and videos');
     const support = Array.from(page.querySelectorAll('.fb-settings-group')).find(function (item) { return /Support/i.test(item.querySelector('h2')?.textContent || ''); });
     if (support) support.before(section); else page.querySelector('main')?.appendChild(section);
   }
@@ -6634,7 +6634,8 @@ function installMarketplacePage(){
     accessibility: 'Accessibility',
     information: 'Your information',
     help: 'Help and support',
-    admin: 'Manage users'
+    admin: 'Manage users',
+    feedback: 'Feedback inbox'
   };
 
   function renderSettingsSectionPage(page, section) {
@@ -6653,6 +6654,8 @@ function installMarketplacePage(){
       content = '<section class="fb-settings-group"><h2 class="fb-settings-group-title">Display and motion</h2>' + localSettingsToggleRow('Reduce motion', 'reduceMotion', 'Minimize animations and transitions', Boolean(local.reduceMotion)) + localSettingsToggleRow('Large text', 'largeText', 'Increase text size across the website', Boolean(local.largeText)) + '</section>';
     } else if (section === 'information') {
       content = '<section class="fb-settings-group"><h2 class="fb-settings-group-title">Your account data</h2>' + settingsRow('Download your information', '', 'export', 'Get a copy of your profile and activity') + '</section>';
+    } else if (section === 'feedback') {
+      content = '<section class="fb-settings-group"><h2 class="fb-settings-group-title">User feedback and problem reports</h2><div data-admin-feedback-list>Loading feedback…</div></section>';
     } else if (section === 'admin') {
       content = '<div class="fb-admin-search-wrap" data-admin-search-wrap hidden><label><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 5 5"></path></svg><input type="text" inputmode="search" autocomplete="off" placeholder="Search users" aria-label="Search users" data-admin-user-search><button class="fb-admin-search-clear" type="button" aria-label="Clear search" data-admin-search-clear><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"></path></svg></button></label></div><section class="fb-settings-group"><h2 class="fb-settings-group-title">All users</h2><div data-admin-users-list></div></section><section class="fb-settings-group" data-admin-audit-section><h2 class="fb-settings-group-title fb-admin-audit-heading"><span>Administrative audit log</span><button class="fb-admin-clear-log" type="button" data-admin-clear-log>Clear log</button></h2><div data-admin-audit-list></div></section>';
     } else {
@@ -6661,6 +6664,154 @@ function installMarketplacePage(){
     page.querySelector('main').innerHTML = content;
     page.classList.remove('fb-admin-searching');
     if (section === 'admin') loadAdminUsers(page);
+    if (section === 'feedback') loadAdminFeedbackInbox(page);
+  }
+
+  async function loadAdminFeedbackInbox(page) {
+    const list = page && page.querySelector('[data-admin-feedback-list]');
+    if (!list) return;
+
+    (page._feedbackObjectUrls || []).forEach(function (url) {
+      try { URL.revokeObjectURL(url); } catch (_error) {}
+    });
+    page._feedbackObjectUrls = [];
+    list.textContent = 'Loading feedback…';
+
+    try {
+      const response = await fetch('/api/admin/feedback', {
+        method: 'GET',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { Accept: 'application/json' }
+      });
+      const payload = await response.json().catch(function () { return {}; });
+      if (!response.ok) {
+        throw new Error(payload.error || 'Could not load feedback.');
+      }
+
+      const items = Array.isArray(payload.feedback) ? payload.feedback : [];
+      list.replaceChildren();
+
+      if (!items.length) {
+        list.textContent = 'No feedback or problem reports yet.';
+        return;
+      }
+
+      items.forEach(function (item) {
+        const card = document.createElement('article');
+        card.className = 'fb-admin-feedback-card';
+
+        const heading = document.createElement('strong');
+        heading.textContent =
+          (item.ratingLabel || 'Feedback') + ' · ' +
+          (item.displayName || 'User');
+
+        const date = document.createElement('small');
+        const parsedDate = new Date(item.createdAt);
+        date.textContent = Number.isFinite(parsedDate.getTime())
+          ? parsedDate.toLocaleString()
+          : 'Date unavailable';
+
+        const body = document.createElement('p');
+        body.textContent = String(item.feedback || '');
+        card.append(heading, date, body);
+
+        const attachments = Array.isArray(item.attachments)
+          ? item.attachments : [];
+
+        if (attachments.length) {
+          const mediaWrap = document.createElement('div');
+          mediaWrap.className = 'fb-admin-feedback-media';
+
+          attachments.forEach(function (attachment) {
+            const entry = document.createElement('div');
+            entry.className = 'fb-admin-feedback-attachment';
+
+            const label = document.createElement('div');
+            label.className = 'fb-admin-feedback-filename';
+            label.textContent = String(attachment.name || 'Attachment');
+
+            const status = document.createElement('small');
+            status.textContent = 'Loading attachment…';
+            entry.append(label, status);
+            mediaWrap.appendChild(entry);
+
+            (async function () {
+              try {
+                const url = String(attachment.url || '');
+                if (!url.startsWith('/api/admin/problem-report-attachments/')) {
+                  throw new Error('Invalid attachment URL.');
+                }
+
+                const mediaResponse = await fetch(url, {
+                  method: 'GET',
+                  credentials: 'same-origin',
+                  cache: 'no-store'
+                });
+
+                if (!mediaResponse.ok) {
+                  throw new Error(
+                    'Attachment unavailable (' + mediaResponse.status + ').'
+                  );
+                }
+
+                const blob = await mediaResponse.blob();
+                const objectUrl = URL.createObjectURL(blob);
+                page._feedbackObjectUrls.push(objectUrl);
+
+                const mime = String(
+                  attachment.mimeType || blob.type || ''
+                ).toLowerCase();
+
+                if (mime.startsWith('image/')) {
+                  const img = document.createElement('img');
+                  img.className = 'fb-admin-feedback-preview';
+                  img.alt = String(attachment.name || 'Report image');
+                  img.loading = 'lazy';
+                  img.src = objectUrl;
+                  entry.replaceChildren(label, img);
+                } else if (mime.startsWith('video/')) {
+                  const video = document.createElement('video');
+                  video.className = 'fb-admin-feedback-preview';
+                  video.controls = true;
+                  video.preload = 'metadata';
+                  video.playsInline = true;
+                  video.src = objectUrl;
+                  entry.replaceChildren(label, video);
+                } else {
+                  const link = document.createElement('a');
+                  link.textContent = 'Download attachment';
+                  link.href = objectUrl;
+                  link.download = String(attachment.name || 'attachment');
+                  entry.replaceChildren(label, link);
+                }
+              } catch (error) {
+                status.textContent =
+                  error.message || 'Could not load attachment.';
+              }
+            })();
+          });
+
+          card.appendChild(mediaWrap);
+        }
+
+        list.appendChild(card);
+      });
+    } catch (error) {
+      list.replaceChildren();
+
+      const message = document.createElement('p');
+      message.textContent = error.message || 'Could not load feedback.';
+
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.textContent = 'Try again';
+      retry.addEventListener('click', function () {
+        loadAdminFeedbackInbox(page);
+      });
+
+      list.append(message, retry);
+    }
   }
 
   function openSettingsSectionPage(settingsPage, section, restoredRoute) {
