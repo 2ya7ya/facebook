@@ -6760,17 +6760,22 @@ function installMarketplacePage(){
                 page._feedbackObjectUrls.push(objectUrl);
 
                 const mime = String(
-                  attachment.mimeType || blob.type || ''
+                  blob.type || attachment.mimeType || ''
                 ).toLowerCase();
+                const filename = String(attachment.name || '').toLowerCase();
+                const isImage = mime.startsWith('image/') ||
+                  /\.(avif|bmp|gif|heic|heif|jpe?g|png|svg|webp)$/.test(filename);
+                const isVideo = mime.startsWith('video/') ||
+                  /\.(3gp|m4v|mov|mp4|mpeg|mpg|webm)$/.test(filename);
 
-                if (mime.startsWith('image/')) {
+                if (isImage) {
                   const img = document.createElement('img');
                   img.className = 'fb-admin-feedback-preview';
                   img.alt = String(attachment.name || 'Report image');
                   img.loading = 'lazy';
                   img.src = objectUrl;
                   entry.replaceChildren(label, img);
-                } else if (mime.startsWith('video/')) {
+                } else if (isVideo) {
                   const video = document.createElement('video');
                   video.className = 'fb-admin-feedback-preview';
                   video.controls = true;
