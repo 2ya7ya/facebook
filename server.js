@@ -13067,6 +13067,159 @@ app.get('/api/account-settings', requireApiAuth, async (request, response) => {
   }
 });
 
+app.post('/api/feedback', requireApiAuth, async (request, response) => {
+  try {
+    await ensureDatabase();
+    await pool.query(`CREATE TABLE IF NOT EXISTS halo_user_feedback (
+      id BIGSERIAL PRIMARY KEY,
+      sender_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      recipient_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE DEFAULT 1,
+      rating SMALLINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+      feedback TEXT NOT NULL CHECK (char_length(feedback) BETWEEN 1 AND 5000),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    const rating = Number(request.body?.rating);
+    const feedback = String(request.body?.feedback || '').trim();
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) return response.status(400).json({ error: 'Choose a rating from 1 to 5.' });
+    if (!feedback || feedback.length > 5000) return response.status(400).json({ error: 'Feedback must contain 1 to 5,000 characters.' });
+    const saved = await pool.query(
+      `INSERT INTO halo_user_feedback (sender_user_id, recipient_user_id, rating, feedback)
+       VALUES ($1, 1, $2, $3) RETURNING id, created_at`,
+      [request.user.id, rating, feedback]
+    );
+    response.status(201).json({ ok: true, feedbackId: String(saved.rows[0].id), recipientUserId: 1, createdAt: saved.rows[0].created_at });
+  } catch (error) {
+    console.error('Feedback submission failed:', error.message);
+    response.status(500).json({ error: 'Could not submit feedback right now.' });
+  }
+});
+
+// Signed-out Halo problem reports for owner ID 1.
+app.post('/api/problem-reports', async (request, response) => {
+  try {
+    const description = String(request.body?.description || '').trim();
+    if (!description || description.length > 5000) return response.status(400).json({error:'Description must be 1–5000 characters.'});
+    await ensureDatabase();
+    await pool.query(`CREATE TABLE IF NOT EXISTS halo_problem_reports (
+      id BIGSERIAL PRIMARY KEY,
+      recipient_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE DEFAULT 1,
+      description TEXT NOT NULL,
+      device_info TEXT NOT NULL DEFAULT '',
+      android_version VARCHAR(80) NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    const attachments = Array.isArray(request.body?.attachments) ? request.body.attachments : [];
+    if (attachments.length > 8) return response.status(400).json({error:'Attach up to 8 files.'});
+    let totalBytes = 0;
+    const prepared = [];
+    for (const item of attachments) {
+      const name = String(item?.name || 'attachment').slice(0,180);
+      const mimeType = String(item?.mimeType || '').toLowerCase();
+      const encoded = String(item?.dataBase64 || '');
+      if (!/^image\/[a-z0-9.+-]+$|^video\/[a-z0-9.+-]+$/.test(mimeType) || !encoded || encoded.length > 5600000 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return response.status(400).json({error:'Invalid attachment.'});
+      const bytes = Buffer.from(encoded, 'base64');
+      if (!bytes.length || bytes.length > 4*1024*1024 || bytes.toString('base64') !== encoded) return response.status(400).json({error:'Each attachment must be 4 MB or smaller.'});
+      totalBytes += bytes.length;
+      if (totalBytes > 16*1024*1024) return response.status(400).json({error:'Combined attachments must be 16 MB or smaller.'});
+      prepared.push({name,mimeType,bytes});
+    }
+    await pool.query(`CREATE TABLE IF NOT EXISTS halo_problem_report_attachments (id BIGSERIAL PRIMARY KEY, report_id BIGINT NOT NULL REFERENCES halo_problem_reports(id) ON DELETE CASCADE, file_name VARCHAR(180) NOT NULL, mime_type VARCHAR(120) NOT NULL, file_data BYTEA NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+    const saved = await pool.query(`INSERT INTO halo_problem_reports (recipient_user_id,description,device_info,android_version) VALUES (1,$1,$2,$3) RETURNING id,created_at`, [description,String(request.body?.deviceInfo||'').slice(0,300),String(request.body?.androidVersion||'').slice(0,80)]);
+    for (const item of prepared) await pool.query(`INSERT INTO halo_problem_report_attachments (report_id,file_name,mime_type,file_data) VALUES ($1,$2,$3,$4)`,[saved.rows[0].id,item.name,item.mimeType,item.bytes]);
+    return response.status(201).json({ok:true,reportId:String(saved.rows[0].id),recipientUserId:1,attachmentCount:prepared.length,createdAt:saved.rows[0].created_at});
+  } catch (error) {
+    console.error('Halo problem report failed:',error.message);
+    return response.status(500).json({error:'Could not submit your report right now.'});
+  }
+});
+
+app.get('/api/admin/feedback', requireApiAuth, requireOwnerApi, async (_request, response) => {
+  try {
+    await ensureDatabase();
+    await pool.query(`CREATE TABLE IF NOT EXISTS halo_user_feedback (
+      id BIGSERIAL PRIMARY KEY,
+      sender_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      recipient_user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE DEFAULT 1,
+      rating SMALLINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+      feedback TEXT NOT NULL CHECK (char_length(feedback) BETWEEN 1 AND 5000),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    const result = await pool.query(
+      `SELECT f.id, f.rating, f.feedback, f.created_at,
+              COALESCE(NULLIF(BTRIM(u.full_name), ''), 'Halo user') AS display_name
+         FROM halo_user_feedback f
+         JOIN users u ON u.id = f.sender_user_id
+        WHERE f.recipient_user_id = 1
+        ORDER BY f.created_at DESC, f.id DESC
+        LIMIT 500`
+    );
+    const labels = { 1: 'Very dissatisfied', 2: 'Dissatisfied', 3: 'Neither', 4: 'Satisfied', 5: 'Very satisfied' };
+    const feedbackItems = result.rows.map(row => ({ id: String(row.id), rating: Number(row.rating), ratingLabel: labels[Number(row.rating)] || 'Rating', feedback: row.feedback, displayName: row.display_name, createdAt: row.created_at }));
+    const reports = await pool.query('SELECT id, description, device_info, android_version, created_at FROM halo_problem_reports WHERE recipient_user_id = 1 ORDER BY created_at DESC LIMIT 200');
+    const reportIds = reports.rows.map(row => String(row.id));
+    const attachmentResult = reportIds.length
+      ? await pool.query('SELECT a.id, a.report_id, a.file_name, a.mime_type FROM halo_problem_report_attachments a JOIN halo_problem_reports r ON r.id = a.report_id WHERE r.recipient_user_id = 1 AND a.report_id = ANY($1::bigint[]) ORDER BY a.id ASC', [reportIds])
+      : { rows: [] };
+    const attachmentsByReport = new Map();
+    for (const a of attachmentResult.rows) {
+      const key = String(a.report_id);
+      if (!attachmentsByReport.has(key)) attachmentsByReport.set(key, []);
+      attachmentsByReport.get(key).push({
+        id: String(a.id),
+        name: a.file_name,
+        mimeType: a.mime_type,
+        url: '/api/admin/problem-report-attachments/' + String(a.id)
+      });
+    }
+    for (const row of reports.rows) {
+      const attachments = attachmentsByReport.get(String(row.id)) || [];
+      feedbackItems.push({
+        id: 'report-' + String(row.id),
+        rating: 0,
+        ratingLabel: 'Problem report',
+        feedback: row.description + '\n\nDevice: ' + (row.device_info || 'Not provided') + '\nAndroid: ' + (row.android_version || 'Not provided'),
+        displayName: 'Signed-out user',
+        createdAt: row.created_at,
+        attachments
+      });
+    }
+    feedbackItems.sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    response.set('Cache-Control', 'private, no-store');
+    response.json({ feedback: feedbackItems });
+  } catch (error) {
+    console.error('Feedback inbox load failed:', error.message);
+    response.status(500).json({ error: 'Could not load feedback.' });
+  }
+});
+
+// Owner-only download endpoint for media attached to signed-out problem reports.
+app.get('/api/admin/problem-report-attachments/:attachmentId', requireApiAuth, requireOwnerApi, async (request, response) => {
+  try {
+    await ensureDatabase();
+    const attachmentId = String(request.params.attachmentId || '');
+    if (!/^\\d+$/.test(attachmentId)) return response.status(400).json({ error: 'Invalid attachment ID.' });
+    const result = await pool.query(
+      `SELECT a.file_name, a.mime_type, a.file_data
+         FROM halo_problem_report_attachments a
+         JOIN halo_problem_reports r ON r.id = a.report_id
+        WHERE a.id = $1 AND r.recipient_user_id = 1
+        LIMIT 1`,
+      [attachmentId]
+    );
+    if (!result.rows.length) return response.status(404).json({ error: 'Attachment not found.' });
+    const item = result.rows[0];
+    const safeName = String(item.file_name || 'attachment').replace(/[\\r\\n"\\\\]/g, '_').slice(0, 180) || 'attachment';
+    response.set('Content-Type', item.mime_type);
+    response.set('Content-Disposition', `attachment; filename="${safeName}"`);
+    response.set('X-Content-Type-Options', 'nosniff');
+    response.set('Cache-Control', 'private, no-store');
+    return response.status(200).send(item.file_data);
+  } catch (error) {
+    console.error('Problem report attachment download failed:', error.message);
+    return response.status(500).json({ error: 'Could not retrieve attachment.' });
+  }
+});
+
 app.get('/api/admin/users', requireApiAuth, requireOwnerApi, async (_request, response) => {
   try {
     await ensureDatabase();
