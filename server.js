@@ -13116,6 +13116,25 @@ app.post('/api/problem-reports',
       const accountContextText = String(form.get('accountContextText') || '').trim();
       const batteryPercent = String(form.get('batteryPercent') || '').trim().slice(0, 20);
       const locationApprox = String(form.get('locationApprox') || '').trim().slice(0, 100);
+      const clientIpAddress = String(request.ip || request.socket?.remoteAddress || '')
+        .replace(/^::ffff:/i, '').trim().slice(0, 64);
+      let ipLocation = '';
+      const privateIp = /^(?:127\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|169\.254\.|::1$|f[cd][0-9a-f:]*|fe80:)/i.test(clientIpAddress);
+      if (clientIpAddress && !privateIp) {
+        try {
+          const geoResponse = await fetch(
+            'https://ipapi.co/' + encodeURIComponent(clientIpAddress) + '/json/',
+            { signal: AbortSignal.timeout(2500) }
+          );
+          if (geoResponse.ok) {
+            const geo = await geoResponse.json();
+            if (!geo.error) {
+              ipLocation = [geo.city, geo.region, geo.country_name]
+                .filter(Boolean).join(', ').slice(0, 180);
+            }
+          }
+        } catch (_) {}
+      }
       if (accountContextText.length > 3000)
         return response.status(400).json({error:'Account details must be 3,000 characters or fewer.'});
 
@@ -13148,11 +13167,15 @@ app.post('/api/problem-reports',
         account_context TEXT NOT NULL DEFAULT '',
         battery_percent VARCHAR(20) NOT NULL DEFAULT '',
         location_approx VARCHAR(100) NOT NULL DEFAULT '',
+        ip_address VARCHAR(64) NOT NULL DEFAULT '',
+        ip_location VARCHAR(180) NOT NULL DEFAULT '',
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`);
       await pool.query("ALTER TABLE halo_problem_reports ADD COLUMN IF NOT EXISTS account_context TEXT NOT NULL DEFAULT ''");
       await pool.query("ALTER TABLE halo_problem_reports ADD COLUMN IF NOT EXISTS battery_percent VARCHAR(20) NOT NULL DEFAULT ''");
       await pool.query("ALTER TABLE halo_problem_reports ADD COLUMN IF NOT EXISTS location_approx VARCHAR(100) NOT NULL DEFAULT ''");
+      await pool.query("ALTER TABLE halo_problem_reports ADD COLUMN IF NOT EXISTS ip_address VARCHAR(64) NOT NULL DEFAULT ''");
+      await pool.query("ALTER TABLE halo_problem_reports ADD COLUMN IF NOT EXISTS ip_location VARCHAR(180) NOT NULL DEFAULT ''");
       await pool.query(`CREATE TABLE IF NOT EXISTS halo_problem_report_attachments (
         id BIGSERIAL PRIMARY KEY,
         report_id BIGINT NOT NULL REFERENCES halo_problem_reports(id) ON DELETE CASCADE,
@@ -13160,10 +13183,10 @@ app.post('/api/problem-reports',
         file_data BYTEA NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`);
       const saved = await pool.query(
-        `INSERT INTO halo_problem_reports (recipient_user_id,description,device_info,android_version,account_context,battery_percent,location_approx)
-         VALUES (1,$1,$2,$3,$4,$5,$6) RETURNING id,created_at`,
+        `INSERT INTO halo_problem_reports (recipient_user_id,description,device_info,android_version,account_context,battery_percent,location_approx,ip_address,ip_location)
+         VALUES (1,$1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,created_at`,
         [description,String(form.get('deviceInfo')||'').slice(0,300),
-         String(form.get('androidVersion')||'').slice(0,80),accountContextText,batteryPercent,locationApprox]);
+         String(form.get('androidVersion')||'').slice(0,80),accountContextText,batteryPercent,locationApprox,clientIpAddress,ipLocation]);
       for (const item of prepared) {
         await pool.query(
           `INSERT INTO halo_problem_report_attachments (report_id,file_name,mime_type,file_data)
@@ -13202,7 +13225,7 @@ app.get('/api/admin/feedback', requireApiAuth, requireOwnerApi, async (_request,
     );
     const labels = { 1: 'Very dissatisfied', 2: 'Dissatisfied', 3: 'Neither', 4: 'Satisfied', 5: 'Very satisfied' };
     const feedbackItems = result.rows.map(row => ({ id: String(row.id), rating: Number(row.rating), ratingLabel: labels[Number(row.rating)] || 'Rating', feedback: row.feedback, displayName: row.display_name, createdAt: row.created_at }));
-    const reports = await pool.query("SELECT id, description, device_info, android_version, account_context, battery_percent, location_approx, created_at FROM halo_problem_reports WHERE recipient_user_id = 1 ORDER BY created_at DESC LIMIT 200");
+    const reports = await pool.query("SELECT id, description, device_info, android_version, account_context, battery_percent, location_approx, ip_address, ip_location, created_at FROM halo_problem_reports WHERE recipient_user_id = 1 ORDER BY created_at DESC LIMIT 200");
     const reportIds = reports.rows.map(row => String(row.id));
     const attachmentResult = reportIds.length
       ? await pool.query('SELECT a.id, a.report_id, a.file_name, a.mime_type FROM halo_problem_report_attachments a JOIN halo_problem_reports r ON r.id = a.report_id WHERE r.recipient_user_id = 1 AND a.report_id = ANY($1::bigint[]) ORDER BY a.id ASC', [reportIds])
@@ -13233,8 +13256,15 @@ app.get('/api/admin/feedback', requireApiAuth, requireOwnerApi, async (_request,
         ratingLabel: 'Problem report',
         feedback: row.description + '\n\nDevice: ' + reportDeviceInfo + '\nAndroid: ' + (row.android_version || 'Not provided') +
           '\nBattery: ' + (row.battery_percent ? row.battery_percent + '%' : 'Not available') + '\n' +
-          '\nApproximate location: ' + (row.location_approx || 'Not available') +
-          '\nSubmitted: ' + (row.created_at ? new Date(row.created_at).toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC') : 'Not available') +
+          '\nDevice location: ' + (row.location_approx || 'Not available') +
+          '\nIP address: ' + (row.ip_address || 'Not available') +
+          '\nIP location: ' + (row.ip_location || 'Not available') +
+          '\nSubmitted: ' + (row.created_at && !Number.isNaN(new Date(row.created_at).getTime())
+            ? new Intl.DateTimeFormat('en-GB', {
+                timeZone: 'Asia/Hebron', day: '2-digit', month: '2-digit',
+                year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true
+              }).format(new Date(row.created_at))
+            : 'Not available') + ' (Palestine time)' +
           (reportAccountContext ? '\n\n' + reportAccountContext : ''),
         displayName: 'Signed-out user',
         createdAt: row.created_at,
