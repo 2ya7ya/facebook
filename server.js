@@ -13213,12 +13213,19 @@ app.get('/api/admin/feedback', requireApiAuth, requireOwnerApi, async (_request,
     }
     for (const row of reports.rows) {
       const attachments = attachmentsByReport.get(String(row.id)) || [];
+      const reportDeviceInfo = String(row.device_info || 'Not provided')
+        .replace(/\s*;\s*Android\s+[^;]+/i, '').trim() || 'Not provided';
+      const reportAccountContext = String(row.account_context || '')
+        .replace(/Saved accounts on this device \(names and identifiers only\):\s*/gi, '')
+        .replace(/Reporter-provided account details:\s*/gi, '')
+        .trim();
+
       feedbackItems.push({
         id: 'report-' + String(row.id),
         rating: 0,
         ratingLabel: 'Problem report',
-        feedback: row.description + '\n\nDevice: ' + (row.device_info || 'Not provided') + '\nAndroid: ' + (row.android_version || 'Not provided') +
-          (String(row.account_context || '').trim() ? '\n\nAccount details (provided by reporter; not verified):\n' + String(row.account_context).trim() : ''),
+        feedback: row.description + '\n\nDevice: ' + reportDeviceInfo + '\nAndroid: ' + (row.android_version || 'Not provided') +
+          (reportAccountContext ? '\n\n' + reportAccountContext : ''),
         displayName: 'Signed-out user',
         createdAt: row.created_at,
         attachments
