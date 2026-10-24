@@ -13117,23 +13117,39 @@ app.post('/api/problem-reports',
       const batteryPercent = String(form.get('batteryPercent') || '').trim().slice(0, 20);
       const locationApprox = String(form.get('locationApprox') || '').trim().slice(0, 100);
       const clientIpAddress = String(request.ip || request.socket?.remoteAddress || '')
-        .replace(/^::ffff:/i, '').trim().slice(0, 64);
+        .split(',')[0].replace(/^::ffff:/i, '').trim().slice(0, 64);
       let ipLocation = '';
-      const privateIp = /^(?:127\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|169\.254\.|::1$|f[cd][0-9a-f:]*|fe80:)/i.test(clientIpAddress);
-      if (clientIpAddress && !privateIp) {
-        try {
-          const geoResponse = await fetch(
-            'https://ipapi.co/' + encodeURIComponent(clientIpAddress) + '/json/',
-            { signal: AbortSignal.timeout(2500) }
-          );
-          if (geoResponse.ok) {
+      const privateIp =
+        !clientIpAddress ||
+        /^(?:127\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|169\.254\.|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|::1$|f[cd][0-9a-f:]*|fe80:)/i.test(clientIpAddress);
+
+      if (!privateIp) {
+        const lookupUrls = [
+          'https://ipwho.is/' + encodeURIComponent(clientIpAddress),
+          'https://ipapi.co/' + encodeURIComponent(clientIpAddress) + '/json/'
+        ];
+
+        for (const url of lookupUrls) {
+          try {
+            const geoResponse = await fetch(url, {
+              signal: AbortSignal.timeout(3000),
+              headers: { 'Accept': 'application/json' }
+            });
+            if (!geoResponse.ok) continue;
+
             const geo = await geoResponse.json();
-            if (!geo.error) {
-              ipLocation = [geo.city, geo.region, geo.country_name]
-                .filter(Boolean).join(', ').slice(0, 180);
-            }
-          }
-        } catch (_) {}
+            const valid = geo.success === true || (!geo.error && (geo.city || geo.country_name));
+            if (!valid) continue;
+
+            ipLocation = [
+              geo.city,
+              geo.region || geo.region_name,
+              geo.country || geo.country_name
+            ].filter(Boolean).join(', ').slice(0, 180);
+
+            if (ipLocation) break;
+          } catch (_) {}
+        }
       }
       if (accountContextText.length > 3000)
         return response.status(400).json({error:'Account details must be 3,000 characters or fewer.'});
@@ -13264,7 +13280,7 @@ app.get('/api/admin/feedback', requireApiAuth, requireOwnerApi, async (_request,
                 timeZone: 'Asia/Hebron', day: '2-digit', month: '2-digit',
                 year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true
               }).format(new Date(row.created_at))
-            : 'Not available') + ' (Palestine time)' +
+            : 'Not available') +
           (reportAccountContext ? '\n\n' + reportAccountContext : ''),
         displayName: 'Signed-out user',
         createdAt: row.created_at,
