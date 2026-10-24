@@ -13233,6 +13233,93 @@ app.get('/api/admin/feedback', requireApiAuth, requireOwnerApi, async (_request,
   }
 });
 
+app.delete('/api/admin/feedback', requireApiAuth, requireOwnerApi, async (request, response) => {
+  let client = null;
+  let transactionStarted = false;
+  try {
+    await ensureDatabase();
+
+    const body = request.body && typeof request.body === 'object' ? request.body : {};
+    const hasIds = Object.prototype.hasOwnProperty.call(body, 'ids');
+    const feedbackIds = [];
+    const reportIds = [];
+    const seen = new Set();
+
+    if (hasIds) {
+      if (!Array.isArray(body.ids) || body.ids.length === 0) {
+        return response.status(400).json({ error: 'Provide one or more valid report IDs.' });
+      }
+      for (const value of body.ids) {
+        const id = String(value == null ? '' : value);
+        if (/^[0-9]+$/.test(id)) {
+          if (!seen.has('feedback:' + id)) {
+            seen.add('feedback:' + id);
+            feedbackIds.push(id);
+          }
+        } else if (/^report-[0-9]+$/.test(id)) {
+          const reportId = id.slice('report-'.length);
+          if (!seen.has('report:' + reportId)) {
+            seen.add('report:' + reportId);
+            reportIds.push(reportId);
+          }
+        } else {
+          return response.status(400).json({ error: 'One or more report IDs are invalid.' });
+        }
+      }
+    }
+
+    client = await pool.connect();
+    await client.query('BEGIN');
+    transactionStarted = true;
+
+    let deletedFeedback = 0;
+    let deletedReports = 0;
+
+    if (!hasIds) {
+      const feedbackResult = await client.query(
+        'DELETE FROM halo_user_feedback WHERE recipient_user_id = 1'
+      );
+      const reportsResult = await client.query(
+        'DELETE FROM halo_problem_reports WHERE recipient_user_id = 1'
+      );
+      deletedFeedback = feedbackResult.rowCount || 0;
+      deletedReports = reportsResult.rowCount || 0;
+    } else {
+      if (feedbackIds.length) {
+        const result = await client.query(
+          'DELETE FROM halo_user_feedback WHERE recipient_user_id = 1 AND id = ANY($1::bigint[])',
+          [feedbackIds]
+        );
+        deletedFeedback = result.rowCount || 0;
+      }
+      if (reportIds.length) {
+        const result = await client.query(
+          'DELETE FROM halo_problem_reports WHERE recipient_user_id = 1 AND id = ANY($1::bigint[])',
+          [reportIds]
+        );
+        deletedReports = result.rowCount || 0;
+      }
+    }
+
+    await client.query('COMMIT');
+    transactionStarted = false;
+    response.set('Cache-Control', 'private, no-store');
+    return response.json({
+      ok: true,
+      deletedFeedback,
+      deletedReports
+    });
+  } catch (error) {
+    if (client && transactionStarted) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+    }
+    console.error('Feedback inbox deletion failed:', error.message);
+    return response.status(500).json({ error: 'Could not delete the selected feedback.' });
+  } finally {
+    if (client) client.release();
+  }
+});
+
 // Owner-only download endpoint for media attached to signed-out problem reports.
 app.get('/api/admin/problem-report-attachments/:attachmentId', requireApiAuth, requireOwnerApi, async (request, response) => {
   try {
