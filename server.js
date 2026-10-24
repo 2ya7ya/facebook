@@ -10069,6 +10069,64 @@ function getFirebaseMessaging() {
   }
 }
 
+
+async function sendOwnerFeedbackPush({ title, body, notificationId, type }) {
+  try {
+    const messaging = getFirebaseMessaging();
+    if (!messaging) {
+      console.warn('Feedback push skipped: Firebase Admin is not configured.');
+      return;
+    }
+
+    const result = await pool.query(
+      'SELECT token FROM fcm_device_tokens WHERE user_id = $1',
+      [1]
+    );
+    const tokens = result.rows
+      .map(row => String(row.token || '').trim())
+      .filter(token => token.length >= 20);
+
+    if (!tokens.length) return;
+
+    const sent = await messaging.sendEachForMulticast({
+      tokens,
+      notification: { title, body },
+      data: {
+        type: String(type || 'feedback_report'),
+        notificationId: String(notificationId || ''),
+        title: String(title || 'Halo'),
+        body: String(body || '')
+      },
+      android: {
+        priority: 'high',
+        notification: {
+          channelId: 'facetok_notifications',
+          sound: 'default'
+        }
+      }
+    });
+
+    const invalidTokens = [];
+    sent.responses.forEach((item, index) => {
+      if (!item.success && item.error &&
+          ['messaging/registration-token-not-registered',
+           'messaging/invalid-registration-token']
+            .includes(item.error.code)) {
+        invalidTokens.push(tokens[index]);
+      }
+    });
+
+    if (invalidTokens.length) {
+      await pool.query(
+        'DELETE FROM fcm_device_tokens WHERE token = ANY($1::text[])',
+        [invalidTokens]
+      );
+    }
+  } catch (error) {
+    console.error('Owner feedback push failed:', error.message);
+  }
+}
+
 function notificationPushText(type, actorName) {
   const actor = actorName || 'Someone';
 
@@ -13087,6 +13145,12 @@ app.post('/api/feedback', requireApiAuth, async (request, response) => {
        VALUES ($1, 1, $2, $3) RETURNING id, created_at`,
       [request.user.id, rating, feedback]
     );
+    void sendOwnerFeedbackPush({
+      title: 'New Halo feedback',
+      body: `A user left a ${rating}-star rating.`,
+      notificationId: 'feedback-' + saved.rows[0].id,
+      type: 'feedback_report'
+    });
     response.status(201).json({ ok: true, feedbackId: String(saved.rows[0].id), recipientUserId: 1, createdAt: saved.rows[0].created_at });
   } catch (error) {
     console.error('Feedback submission failed:', error.message);
@@ -13209,6 +13273,12 @@ app.post('/api/problem-reports',
            VALUES ($1,$2,$3,$4)`,
           [saved.rows[0].id,item.name,item.mimeType,item.bytes]);
       }
+      void sendOwnerFeedbackPush({
+        title: 'New Halo problem report',
+        body: description.slice(0, 160),
+        notificationId: 'report-' + saved.rows[0].id,
+        type: 'feedback_report'
+      });
       return response.status(201).json({ok:true,reportId:String(saved.rows[0].id),
         recipientUserId:1,attachmentCount:prepared.length,createdAt:saved.rows[0].created_at});
     } catch (error) {
