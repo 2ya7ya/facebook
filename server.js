@@ -12717,6 +12717,54 @@ app.post('/register', async (request, response) => {
 });
 
 
+
+app.post('/api/password-reset/request', async (request, response) => {
+  response.set('Cache-Control', 'no-store');
+  const email = normalizeFluxEmail(request.body?.email);
+
+  if (!isValidFluxEmail(email)) {
+    return response.status(400).json({ error: 'Enter a valid email address.' });
+  }
+
+  try {
+    await ensureAuthDatabase();
+    const result = await pool.query(
+      `SELECT id, full_name, email, identifier
+       FROM users
+       WHERE LOWER(BTRIM(COALESCE(email, ''))) = $1
+          OR (LOWER(BTRIM(COALESCE(email, ''))) = ''
+              AND LOWER(BTRIM(COALESCE(identifier, ''))) = $1)
+       LIMIT 1`,
+      [email]
+    );
+
+    const user = result.rows[0];
+    if (user) {
+      const registeredEmail = normalizeFluxEmail(
+        user.email || (String(user.identifier || '').includes('@') ? user.identifier : '')
+      );
+      if (registeredEmail === email && isValidFluxEmail(registeredEmail)) {
+        const token = await createFluxPasswordResetToken(user.id, registeredEmail);
+        await sendFluxPasswordResetEmail({
+          email: registeredEmail,
+          token,
+          displayName: user.full_name || ''
+        });
+      }
+    }
+
+    return response.json({
+      ok: true,
+      message: 'If an account matches that email, a password-reset link will be sent.'
+    });
+  } catch (error) {
+    console.error('Password-reset request failed:', error.message);
+    return response.status(503).json({
+      error: 'Password recovery is temporarily unavailable. Please try again later.'
+    });
+  }
+});
+
 app.get('/reset-password', async (request, response) => {
   const token =
     String(request.query?.token || '').trim();
