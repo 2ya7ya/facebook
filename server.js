@@ -10090,7 +10090,6 @@ async function sendOwnerFeedbackPush({ title, body, notificationId, type }) {
 
     const sent = await messaging.sendEachForMulticast({
       tokens,
-      notification: { title, body },
       data: {
         type: String(type || 'feedback_report'),
         notificationId: String(notificationId || ''),
