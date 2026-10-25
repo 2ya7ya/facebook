@@ -13146,7 +13146,7 @@ app.post('/api/feedback', requireApiAuth, async (request, response) => {
     );
     void sendOwnerFeedbackPush({
       title: 'New Halo feedback',
-      body: `A user left a ${rating}-star rating.`,
+      body: `${rating}-star feedback: ${feedback.replace(/\s+/g, ' ').slice(0, 160)}`,
       notificationId: 'feedback-' + saved.rows[0].id,
       type: 'feedback_report'
     });
@@ -13274,7 +13274,7 @@ app.post('/api/problem-reports',
       }
       void sendOwnerFeedbackPush({
         title: 'New Halo problem report',
-        body: description.slice(0, 160),
+        body: description.replace(/\s+/g, ' ').slice(0, 180),
         notificationId: 'report-' + saved.rows[0].id,
         type: 'feedback_report'
       });
