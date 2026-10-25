@@ -12765,6 +12765,187 @@ app.post('/api/password-reset/request', async (request, response) => {
   }
 });
 
+
+// Native Android password recovery: six-digit email code, one-time reset token.
+async function ensureNativePasswordResetCodeSchema() {
+  await ensureDatabase();
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS flux_password_reset_codes (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      email VARCHAR(255) NOT NULL,
+      code_hash VARCHAR(64) NOT NULL,
+      reset_token_hash VARCHAR(64),
+      attempts INTEGER NOT NULL DEFAULT 0,
+      expires_at TIMESTAMPTZ NOT NULL,
+      verified_at TIMESTAMPTZ,
+      used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS flux_password_reset_codes_user_idx
+    ON flux_password_reset_codes(user_id, created_at DESC)
+  `);
+}
+
+function fluxPasswordResetCodeHash(code) {
+  return crypto.createHash('sha256')
+    .update(`halo-password-reset-code:${String(code || '')}`)
+    .digest('hex');
+}
+
+function fluxMaskRecoveryEmail(email) {
+  const value = String(email || '').trim();
+  const at = value.indexOf('@');
+  if (at < 1) return value;
+  const local = value.slice(0, at);
+  const domain = value.slice(at + 1);
+  const visible = local.length < 3 ? local.slice(0, 1) : local.slice(0, 2);
+  return `${visible}${'*'.repeat(Math.max(2, Math.min(8, local.length - visible.length)))}@${domain}`;
+}
+
+app.post('/api/password-reset/code/request', async (request, response) => {
+  response.set('Cache-Control', 'no-store');
+  const identifier = String(request.body?.identifier || '').trim().toLowerCase();
+  if (!identifier || identifier.length > 255) {
+    return response.status(400).json({ error: 'Enter your email or username.' });
+  }
+  try {
+    await ensureNativePasswordResetCodeSchema();
+    const found = await pool.query(
+      `SELECT id, full_name, email, identifier
+       FROM users
+       WHERE LOWER(BTRIM(COALESCE(identifier, ''))) = $1
+          OR LOWER(BTRIM(COALESCE(email, ''))) = $1
+       LIMIT 1`,
+      [identifier]
+    );
+    const user = found.rows[0];
+    const email = normalizeFluxEmail(user?.email ||
+      (String(user?.identifier || '').includes('@') ? user.identifier : ''));
+    if (!user || !isValidFluxEmail(email)) {
+      return response.status(404).json({ error: "We couldn't find an account with those details." });
+    }
+
+    const recent = await pool.query(
+      `SELECT id FROM flux_password_reset_codes
+       WHERE user_id = $1 AND created_at > NOW() - INTERVAL '60 seconds'
+       AND used_at IS NULL ORDER BY created_at DESC LIMIT 1`,
+      [user.id]
+    );
+    if (recent.rowCount) {
+      return response.status(429).json({ error: 'Please wait a minute before requesting another code.' });
+    }
+
+    const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+    await pool.query(
+      `UPDATE flux_password_reset_codes SET used_at = NOW()
+       WHERE user_id = $1 AND used_at IS NULL`,
+      [user.id]
+    );
+    await pool.query(
+      `INSERT INTO flux_password_reset_codes
+       (user_id, email, code_hash, expires_at)
+       VALUES ($1, $2, $3, NOW() + INTERVAL '10 minutes')`,
+      [user.id, email, fluxPasswordResetCodeHash(code)]
+    );
+
+    const transport = getFluxMailTransport();
+    if (!transport) throw new Error('Halo email delivery is not configured.');
+    await transport.sendMail({
+      from: String(process.env.SMTP_FROM || process.env.SMTP_USER || '').trim(),
+      to: email,
+      subject: `${code} is your Halo password reset code`,
+      text: `Hello${user.full_name ? ' ' + user.full_name : ''},\n\nYour Halo password reset code is: ${code}\n\nIt expires in 10 minutes. If you did not request this code, ignore this email.\n\nHalo Support`,
+      html: `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#1c1e21"><h2>Reset your Halo password</h2><p>Your verification code is:</p><p style="font-size:32px;font-weight:bold;letter-spacing:6px">${code}</p><p>This code expires in 10 minutes.</p><p>If you did not request this code, ignore this email.</p><p>Halo Support</p></body></html>`
+    });
+    return response.json({ ok: true, maskedEmail: fluxMaskRecoveryEmail(email) });
+  } catch (error) {
+    console.error('Native password-reset code request failed:', error.message);
+    return response.status(503).json({ error: 'Password recovery is temporarily unavailable. Please try again later.' });
+  }
+});
+
+app.post('/api/password-reset/code/verify', async (request, response) => {
+  response.set('Cache-Control', 'no-store');
+  const identifier = String(request.body?.identifier || '').trim().toLowerCase();
+  const code = String(request.body?.code || '').trim();
+  if (!identifier || !/^\d{6}$/.test(code)) {
+    return response.status(400).json({ error: 'Enter the six-digit code from your email.' });
+  }
+  try {
+    await ensureNativePasswordResetCodeSchema();
+    const found = await pool.query(
+      `SELECT c.id, c.user_id, c.code_hash, c.attempts
+       FROM flux_password_reset_codes c
+       JOIN users u ON u.id = c.user_id
+       WHERE (LOWER(BTRIM(COALESCE(u.identifier, ''))) = $1
+          OR LOWER(BTRIM(COALESCE(u.email, ''))) = $1)
+         AND c.used_at IS NULL AND c.verified_at IS NULL
+         AND c.expires_at > NOW()
+       ORDER BY c.created_at DESC LIMIT 1`,
+      [identifier]
+    );
+    const row = found.rows[0];
+    if (!row || Number(row.attempts) >= 5) {
+      return response.status(400).json({ error: 'That code is incorrect or has expired. Request a new code and try again.' });
+    }
+    if (row.code_hash !== fluxPasswordResetCodeHash(code)) {
+      await pool.query('UPDATE flux_password_reset_codes SET attempts = attempts + 1 WHERE id = $1', [row.id]);
+      return response.status(400).json({ error: 'That code is incorrect or has expired. Request a new code and try again.' });
+    }
+    const token = crypto.randomBytes(32).toString('base64url');
+    await pool.query(
+      `UPDATE flux_password_reset_codes SET verified_at = NOW(), reset_token_hash = $2
+       WHERE id = $1`,
+      [row.id, fluxPasswordResetTokenHash(token)]
+    );
+    return response.json({ ok: true, token });
+  } catch (error) {
+    console.error('Native password-reset code verification failed:', error.message);
+    return response.status(503).json({ error: 'Password recovery is temporarily unavailable. Please try again later.' });
+  }
+});
+
+app.post('/api/password-reset/complete-native', async (request, response) => {
+  response.set('Cache-Control', 'no-store');
+  const token = String(request.body?.token || '').trim();
+  const newPassword = String(request.body?.newPassword || '');
+  const confirmPassword = String(request.body?.confirmPassword || '');
+  if (!token) return response.status(400).json({ error: 'Your reset session is invalid. Start again.' });
+  if (newPassword !== confirmPassword) return response.status(400).json({ error: 'The passwords do not match.' });
+  if (newPassword.length < 8 || newPassword.length > 200 ||
+      !/[A-Za-z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
+    return response.status(400).json({ error: 'Use at least 8 characters with at least one letter and one number.' });
+  }
+  try {
+    await ensureNativePasswordResetCodeSchema();
+    const tokenHash = fluxPasswordResetTokenHash(token);
+    const result = await pool.query(
+      `SELECT id, user_id FROM flux_password_reset_codes
+       WHERE reset_token_hash = $1 AND verified_at IS NOT NULL
+         AND used_at IS NULL AND expires_at > NOW()
+       ORDER BY created_at DESC LIMIT 1`,
+      [tokenHash]
+    );
+    const row = result.rows[0];
+    if (!row) return response.status(400).json({ error: 'Your reset session expired. Request a new code.' });
+    const storedPassword = await hashPassword(newPassword);
+    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [storedPassword, row.user_id]);
+    await pool.query('UPDATE flux_password_reset_codes SET used_at = NOW() WHERE id = $1', [row.id]);
+    await pool.query(
+      `UPDATE flux_password_reset_tokens SET used_at = NOW()
+       WHERE user_id = $1 AND used_at IS NULL`,
+      [row.user_id]
+    );
+    return response.json({ ok: true, message: 'Your password has been reset. You can now log in.' });
+  } catch (error) {
+    console.error('Native password-reset completion failed:', error.message);
+    return response.status(503).json({ error: 'Could not reset your password. Please try again.' });
+  }
+});
+
 app.get('/reset-password', async (request, response) => {
   const token =
     String(request.query?.token || '').trim();
