@@ -2817,101 +2817,116 @@ Connect. Share. Belong.`;
   <meta name="color-scheme" content="light">
   <title>Your Halo verification code</title>
 </head>
-<body style="margin:0;padding:0;background:#f3f7fd;font-family:Arial,Helvetica,sans-serif;color:#172b4d;">
-  <div style="display:none!important;font-size:1px;color:#f3f7fd;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">
+<body style="margin:0;padding:0;background:#f5f3f7;font-family:Arial,Helvetica,sans-serif;color:#292431;">
+  <div style="display:none!important;font-size:1px;color:#f5f3f7;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">
     Your Halo verification code is ${safeCode}. It expires in 10 minutes.
   </div>
 
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f3f7fd;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f5f3f7;">
     <tr>
-      <td align="center" style="padding:28px 12px;">
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;">
+      <td align="center" style="padding:36px 14px;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:520px;">
 
           <tr>
-            <td align="center" style="padding:8px 0 24px;">
-              <div style="font-size:32px;line-height:40px;font-weight:800;letter-spacing:-1px;color:#172b4d;">
-                <span style="color:#2475f5;">H</span> Halo
-              </div>
-              <div style="font-size:12px;letter-spacing:1.5px;color:#7185a6;padding-top:4px;">
-                CONNECT &bull; SHARE &bull; BELONG
-              </div>
+            <td style="padding:0 0 24px;">
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td valign="middle" style="width:38px;height:38px;background:#33283f;border-radius:11px;text-align:center;font-size:22px;font-weight:bold;color:#ffffff;">
+                    H
+                  </td>
+                  <td valign="middle" style="padding-left:11px;font-size:25px;line-height:32px;font-weight:800;letter-spacing:-0.8px;color:#292431;">
+                    Halo
+                  </td>
+                </tr>
+              </table>
             </td>
           </tr>
 
           <tr>
-            <td style="background:#ffffff;border:1px solid #e4ebf5;border-radius:16px;padding:30px 26px;">
-
-              <div style="display:inline-block;background:#eaf2ff;color:#2475f5;font-size:25px;font-weight:bold;line-height:52px;text-align:center;width:52px;height:52px;border-radius:14px;margin-bottom:20px;">
-                H
-              </div>
-
-              <h1 style="font-size:25px;line-height:1.3;letter-spacing:-0.5px;color:#172b4d;margin:0 0 18px;">
-                Verify your Halo account
-              </h1>
-
-              <p style="font-size:15px;line-height:1.7;color:#344968;margin:0 0 12px;">
-                ${greeting}
-              </p>
-
-              <p style="font-size:15px;line-height:1.8;color:#536782;margin:0 0 24px;">
-                Welcome to Halo! Enter the verification code below to verify your email address and finish creating your account.
-              </p>
-
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f0f6ff;border:1px solid #dfebff;border-radius:12px;">
+            <td style="background:#ffffff;border:1px solid #e8e3ec;border-radius:18px;overflow:hidden;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                 <tr>
-                  <td align="center" style="padding:25px 14px 23px;">
-                    <p style="font-size:11px;line-height:1.5;letter-spacing:1.6px;font-weight:bold;color:#6480a8;margin:0 0 12px;">
-                      YOUR VERIFICATION CODE
+                  <td style="height:4px;background:#7955a6;font-size:1px;line-height:4px;">&nbsp;</td>
+                </tr>
+                <tr>
+                  <td style="padding:34px 28px 30px;">
+
+                    <p style="font-size:11px;line-height:17px;font-weight:bold;letter-spacing:1.8px;color:#7955a6;margin:0 0 15px;">
+                      EMAIL VERIFICATION
                     </p>
 
-                    <div style="font-family:Arial,Helvetica,sans-serif;font-size:34px;line-height:1.4;font-weight:800;letter-spacing:7px;color:#1764e8;overflow-wrap:anywhere;">
-                      ${safeCode}
-                    </div>
+                    <h1 style="font-size:28px;line-height:1.25;letter-spacing:-0.8px;color:#292431;margin:0 0 20px;font-weight:750;">
+                      You're almost in.
+                    </h1>
 
-                    <p style="font-size:13px;line-height:1.7;color:#617696;margin:8px 0 18px;">
-                      Enter this code in Halo to continue.
+                    <p style="font-size:15px;line-height:1.8;color:#494252;margin:0 0 12px;">
+                      ${greeting}
                     </p>
 
-                    <!-- Visual-only button: clipboard actions are not reliable in email clients. -->
-                    <table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center">
+                    <p style="font-size:15px;line-height:1.8;color:#6c6474;margin:0 0 27px;">
+                      Welcome to Halo. Enter this verification code to confirm your email address and finish creating your account.
+                    </p>
+
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#faf8fc;border:1px solid #e8e0ef;border-radius:14px;">
                       <tr>
-                        <td align="center" bgcolor="#1769f6" style="border-radius:24px;">
-                          <span style="display:inline-block;padding:12px 32px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;font-weight:bold;color:#ffffff;border-radius:24px;">
-                            &#9633;&nbsp; Copy code
-                          </span>
+                        <td align="center" style="padding:25px 16px 23px;">
+                          <p style="font-size:10px;line-height:16px;letter-spacing:1.8px;font-weight:bold;color:#82748f;margin:0 0 13px;">
+                            YOUR VERIFICATION CODE
+                          </p>
+
+                          <div style="font-family:Arial,Helvetica,sans-serif;font-size:34px;line-height:1.45;font-weight:800;letter-spacing:7px;color:#50356f;overflow-wrap:anywhere;">
+                            ${safeCode}
+                          </div>
+
+                          <p style="font-size:13px;line-height:1.7;color:#81768d;margin:10px 0 18px;">
+                            Enter this code in Halo to continue.
+                          </p>
+
+                          <!-- Decorative only: email clients do not reliably support clipboard actions. -->
+                          <table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center">
+                            <tr>
+                              <td align="center" bgcolor="#65458b" style="border-radius:8px;">
+                                <span style="display:inline-block;padding:11px 25px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:20px;font-weight:bold;color:#ffffff;border-radius:8px;">
+                                  &#9633;&nbsp; Copy code
+                                </span>
+                              </td>
+                            </tr>
+                          </table>
                         </td>
                       </tr>
                     </table>
-                  </td>
-                </tr>
-              </table>
 
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:18px;">
-                <tr>
-                  <td style="background:#f7f9fc;border-radius:10px;padding:15px 16px;">
-                    <p style="font-size:13px;line-height:1.8;color:#61738d;margin:0;">
-                      <strong style="color:#344968;">This code expires in 10 minutes.</strong><br>
-                      If you didn't request this code, you can safely ignore this email. Never share your verification code with anyone.
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:22px;">
+                      <tr>
+                        <td style="padding:0 0 0 13px;border-left:3px solid #d9c8e8;">
+                          <p style="font-size:13px;line-height:1.8;color:#716878;margin:0;">
+                            <strong style="color:#393140;">Expires in 10 minutes.</strong><br>
+                            If you didn't request this code, you can safely ignore this email. Never share your verification code with anyone.
+                          </p>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <p style="font-size:14px;line-height:1.7;color:#6c6474;margin:28px 0 5px;">
+                      Thanks for joining us.
                     </p>
+                    <p style="font-size:15px;font-weight:bold;color:#292431;margin:0;">
+                      The Halo Team
+                    </p>
+
                   </td>
                 </tr>
               </table>
-
-              <p style="font-size:14px;line-height:1.7;color:#536782;margin:25px 0 5px;">
-                Thanks for joining us.
-              </p>
-              <p style="font-size:15px;font-weight:bold;color:#172b4d;margin:0;">
-                The Halo Team
-              </p>
             </td>
           </tr>
 
           <tr>
-            <td align="center" style="padding:22px 10px 4px;">
-              <p style="font-size:13px;font-weight:bold;color:#7185a6;margin:0 0 6px;">Halo</p>
-              <p style="font-size:12px;line-height:1.8;color:#8595ad;margin:0;">
-                A place to connect, share, and belong.<br>
-                This is an automated security email. Please don't reply.
+            <td align="center" style="padding:23px 12px 0;">
+              <p style="font-size:12px;line-height:1.8;color:#8a8291;margin:0 0 5px;">
+                A place to connect, share, and belong.
+              </p>
+              <p style="font-size:11px;line-height:1.8;color:#a098a7;margin:0;">
+                Automated security email · Please don't reply
               </p>
             </td>
           </tr>
