@@ -12856,9 +12856,9 @@ app.post('/api/password-reset/code/request', async (request, response) => {
     await transport.sendMail({
       from: String(process.env.SMTP_FROM || process.env.SMTP_USER || '').trim(),
       to: email,
-      subject: `${code} is your Halo password reset code`,
+      subject: 'Your Halo password reset code',
       text: `Hello${user.full_name ? ' ' + user.full_name : ''},\n\nYour Halo password reset code is: ${code}\n\nIt expires in 10 minutes. If you did not request this code, ignore this email.\n\nHalo Support`,
-      html: `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#1c1e21"><h2>Reset your Halo password</h2><p>Your verification code is:</p><p style="font-size:32px;font-weight:bold;letter-spacing:6px">${code}</p><p>This code expires in 10 minutes.</p><p>If you did not request this code, ignore this email.</p><p>Halo Support</p></body></html>`
+      html: `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#1c1e21"><h2>Your Halo password reset code</h2><p>Enter this code to reset your Halo password:</p><p style="font-size:32px;font-weight:bold;letter-spacing:6px">${code}</p><p>This code expires in 10 minutes.</p><p>If you did not request this code, ignore this email.</p><p>Halo Support</p></body></html>`
     });
     return response.json({ ok: true, maskedEmail: fluxMaskRecoveryEmail(email) });
   } catch (error) {
