@@ -2768,91 +2768,158 @@ async function sendFluxVerificationEmail({
   code,
   displayName = ''
 }) {
-  const transport =
-    getFluxMailTransport();
+  const transport = getFluxMailTransport();
 
   if (!transport) {
-    throw new Error(
-      'Halo email delivery is not configured.'
-    );
+    throw new Error('Halo email delivery is not configured.');
   }
 
-  const to =
-    String(email || '').trim();
+  const to = String(email || '').trim();
 
-  if (
-    !to ||
-    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)
-  ) {
+  if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
     throw new Error(
       'The Halo account does not have a valid registered email address.'
     );
   }
 
-  const from =
-    String(
-      process.env.SMTP_FROM ||
-      process.env.SMTP_USER ||
-      ''
-    ).trim();
+  const from = String(
+    process.env.SMTP_FROM || process.env.SMTP_USER || ''
+  ).trim();
 
-  const name =
-    String(displayName || '').trim();
+  const name = String(displayName || '').trim();
+  const safeName = escapeFluxEmailHtml(name);
+  const safeCode = escapeFluxEmailHtml(String(code || ''));
+  const greeting = name ? `Hi ${safeName},` : 'Hello,';
 
-  const greeting =
-    name
-      ? `Hi ${name},`
-      : 'Hello,';
+  const subject = 'Your Halo verification code';
+
+  const text = `${name ? `Hi ${name},` : 'Hello,'}
+
+Welcome to Halo.
+
+Use this verification code to continue:
+
+${String(code || '')}
+
+This code expires in 10 minutes.
+
+If you did not request this code, you can safely ignore this email.
+Never share your verification code with anyone.
+
+The Halo Team
+Connect. Share. Belong.`;
+
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Your Halo verification code</title>
+</head>
+<body style="margin:0;padding:0;background:#f2f6fc;font-family:Arial,Helvetica,sans-serif;color:#172554;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">
+    Your Halo verification code is ${safeCode}. It expires in 10 minutes.
+  </div>
+
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f2f6fc;">
+    <tr>
+      <td align="center" style="padding:32px 12px;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;">
+
+          <tr>
+            <td align="center" style="padding:8px 0 26px;">
+              <div style="font-size:36px;line-height:42px;font-weight:800;letter-spacing:-1.5px;color:#142653;">
+                <span style="color:#2475f5;">H</span> Halo
+              </div>
+              <div style="padding-top:7px;font-size:13px;letter-spacing:2px;color:#7185ad;">
+                CONNECT&nbsp;&nbsp;·&nbsp;&nbsp;SHARE&nbsp;&nbsp;·&nbsp;&nbsp;BELONG
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="background:#ffffff;border:1px solid #e6edf8;border-radius:20px;padding:32px 28px;box-shadow:0 8px 30px rgba(34,78,140,0.06);">
+
+              <div style="width:64px;height:64px;line-height:64px;text-align:center;border-radius:18px;background:#eaf2ff;color:#2475f5;font-size:31px;font-weight:bold;margin-bottom:22px;">
+                H
+              </div>
+
+              <h1 style="font-size:27px;line-height:1.25;letter-spacing:-0.6px;margin:0 0 14px;color:#142653;">
+                Verify your Halo account
+              </h1>
+
+              <p style="font-size:16px;line-height:1.7;margin:0 0 10px;color:#243b65;">
+                ${greeting}
+              </p>
+
+              <p style="font-size:15px;line-height:1.8;margin:0 0 26px;color:#536582;">
+                Welcome to Halo! Use the verification code below to continue securely.
+              </p>
+
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f1f6ff;border:1px solid #e0ebff;border-radius:16px;">
+                <tr>
+                  <td align="center" style="padding:27px 16px 25px;">
+                    <p style="margin:0 0 14px;font-size:12px;letter-spacing:1.8px;font-weight:bold;color:#607da9;">
+                      YOUR VERIFICATION CODE
+                    </p>
+
+                    <div style="font-family:Arial,Helvetica,sans-serif;font-size:36px;line-height:1.35;font-weight:800;letter-spacing:8px;color:#2169e8;overflow-wrap:anywhere;">
+                      ${safeCode}
+                    </div>
+
+                    <p style="margin:13px 0 0;font-size:14px;line-height:1.7;color:#607394;">
+                      Enter this code in Halo to continue.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:20px;">
+                <tr>
+                  <td style="background:#f7f9fd;border-radius:12px;padding:16px;">
+                    <p style="margin:0;font-size:13px;line-height:1.8;color:#607394;">
+                      <strong style="color:#29466f;">This code expires in 10 minutes.</strong><br>
+                      If you didn't request this code, you can safely ignore this email. Never share your verification code with anyone.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="font-size:15px;line-height:1.8;margin:27px 0 5px;color:#536582;">
+                Thanks for being part of Halo.
+              </p>
+              <p style="font-size:16px;font-weight:bold;margin:0;color:#172d57;">
+                The Halo Team
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center" style="padding:24px 12px 8px;">
+              <p style="margin:0 0 7px;font-size:14px;font-weight:bold;color:#7890b8;">Halo</p>
+              <p style="margin:0;font-size:12px;line-height:1.8;color:#8494af;">
+                A place to connect, share, and belong.<br>
+                This is an automated security email. Please don't reply.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
 
   await transport.sendMail({
     from,
     to,
-    subject:
-      `${code} is your Halo verification code`,
-    text:
-`${greeting}
-
-Your Halo verification code is:
-
-${code}
-
-This code expires in 10 minutes.
-
-If this email was difficult to find, check your Spam, Junk, or Promotions folder and mark Halo Support as not spam.
-
-If you did not request this code, you can ignore this email.
-
-Never share your password or verification code with anyone outside the official Halo verification flow.
-
-Halo Support`,
-    html:
-`<!doctype html>
-<html>
-  <body style="font-family:Arial,sans-serif;background:#f5f6f7;padding:24px;color:#111;">
-    <div style="max-width:520px;margin:auto;background:#fff;border-radius:14px;padding:28px;">
-      <h2 style="margin-top:0;">Halo verification</h2>
-      <p>${escapeFluxEmailHtml(greeting)}</p>
-      <p>Use this verification code to continue with Halo Support:</p>
-      <div style="font-size:32px;font-weight:700;letter-spacing:8px;margin:24px 0;">
-        ${escapeFluxEmailHtml(code)}
-      </div>
-      <p>This code expires in <strong>10 minutes</strong>.</p>
-      <p style="font-size:13px;color:#65676b;">
-        If this email appeared in Spam, Junk, or Promotions,
-        mark Halo Support as not spam so future security emails arrive normally.
-      </p>
-      <p style="color:#65676b;font-size:13px;">
-        If you did not request this code, you can ignore this email.
-        Never share your password or verification code outside the official Halo verification flow.
-      </p>
-      <p>Halo Support</p>
-    </div>
-  </body>
-</html>`
+    subject,
+    text,
+    html
   });
 }
-
-
 async function ensureFluxEmailChangeSchema() {
   await ensureDatabase();
 
