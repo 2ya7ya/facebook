@@ -17,6 +17,7 @@ const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
 const { Readable } = require('stream');
+const { pipeline } = require('stream/promises');
 const { WebSocketServer, WebSocket } = require('ws');
 const { initializeApp, cert, getApps } = require('firebase-admin/app');
 const { getMessaging } = require('firebase-admin/messaging');
@@ -11333,17 +11334,22 @@ function validNumericId(value) {
   return /^\d+$/.test(String(value || ''));
 }
 
+// Keep CPU-heavy media subprocesses from running concurrently on the 256 MiB tier.
+let haloChildProcessQueue = Promise.resolve();
 function runProcess(command, args) {
-  return new Promise((resolve, reject) => {
+  const execute = () => new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     let stderr = '';
-    child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+    child.stderr.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-65536); });
     child.once('error', reject);
     child.once('close', code => {
       if (code === 0) resolve();
       else reject(new Error(stderr || `Process exited with code ${code}`));
     });
   });
+  const queued = haloChildProcessQueue.then(execute, execute);
+  haloChildProcessQueue = queued.catch(() => {});
+  return queued;
 }
 
 function ffmpegBinary() {
@@ -11370,6 +11376,9 @@ function reelHlsUrl(reelId) {
 }
 const reelHlsRoot = process.env.REEL_HLS_ROOT || path.join(process.env.HOME || os.homedir(), 'facebook-media', 'reels-hls');
 const reelHlsJobs = new Map();
+const reelHlsUnavailable = new Set();
+let reelHlsQueue = Promise.resolve();
+let reelHlsQueueWaiting = 0;
 function reelHlsDirectory(reelId) { return path.join(reelHlsRoot, String(reelId)); }
 function reelHlsReady(reelId) {
   try { return fs.statSync(path.join(reelHlsDirectory(reelId), 'master.m3u8')).isFile(); }
@@ -11379,18 +11388,61 @@ function safeHlsLeaf(value) {
   const text=String(value||'');
   return /^[a-zA-Z0-9._-]+$/.test(text) ? text : '';
 }
+function haloMemorySnapshot() {
+  const memory=process.memoryUsage();
+  const mib=value=>(Number(value||0)/1048576).toFixed(1);
+  return `rss=${mib(memory.rss)}MiB heap=${mib(memory.heapUsed)}MiB external=${mib(memory.external)}MiB arrayBuffers=${mib(memory.arrayBuffers)}MiB`;
+}
+
+// Stream stored source video to a temporary file in 1 MiB database chunks.
+// This avoids holding a complete 60 MiB Reel Buffer while FFmpeg is running.
+async function writeReelHlsSourceFile(reelId, tempDir) {
+  const metaResult=await pool.query(
+    `SELECT mime_type,octet_length(video_data) AS byte_length
+       FROM reel_video_variants
+      WHERE reel_id=$1 AND variant='source' LIMIT 1`,[reelId]
+  );
+  const meta=metaResult.rows[0];
+  // Legacy Reels without a source variant continue to use the existing MP4
+  // playback fallback; do not load their entire legacy payload for HLS work.
+  if(!meta)return null;
+  const total=Number(meta.byte_length||0);
+  if(!Number.isSafeInteger(total)||total<=0)throw new Error('Stored Reel source has an invalid byte length.');
+  const mimeType=String(meta.mime_type||'video/mp4');
+  const ext=mimeType.includes('webm')?'.webm':'.mp4';
+  const inputPath=path.join(tempDir,'source'+ext);
+  const chunkSize=1024*1024;
+  let written=0;
+  async function* readSourceChunks() {
+    for(let offset=0;offset<total;offset+=chunkSize) {
+      const length=Math.min(chunkSize,total-offset);
+      const part=await pool.query(
+        `SELECT substring(video_data from $3 for $4) AS data
+           FROM reel_video_variants
+          WHERE reel_id=$1 AND variant=$2 LIMIT 1`,
+        [reelId,'source',offset+1,length]
+      );
+      const chunk=part.rows[0]&&part.rows[0].data;
+      if(!Buffer.isBuffer(chunk)||chunk.length!==length)throw new Error(`Could not read Reel source chunk at byte ${offset}.`);
+      written+=chunk.length;
+      yield chunk;
+    }
+  }
+  await pipeline(Readable.from(readSourceChunks()),fs.createWriteStream(inputPath,{flags:'wx'}));
+  if(written!==total)throw new Error(`Reel source length mismatch: expected ${total}, wrote ${written}.`);
+  return {inputPath,mimeType,byteLength:total};
+}
+
 async function buildReelHls(reelId) {
-  const source = await reelLegacySource(reelId);
-  if (!source || !source.bytes || !source.bytes.length) return false;
   const finalDir = reelHlsDirectory(reelId);
   if (reelHlsReady(reelId)) return true;
   const parent = path.dirname(finalDir);
   await fs.promises.mkdir(parent,{recursive:true});
   const tempDir = await fs.promises.mkdtemp(path.join(parent,`.${String(reelId)}-hls-`));
-  const ext = source.mimeType && source.mimeType.includes('webm') ? '.webm' : '.mp4';
-  const input = path.join(tempDir,'source'+ext);
   try {
-    await fs.promises.writeFile(input,source.bytes);
+    const source=await writeReelHlsSourceFile(reelId,tempDir);
+    if(!source){console.warn(`[HaloReelHLS] skipped reel=${reelId}: no stored source variant; MP4 fallback remains available`);return false;}
+    console.log(`[HaloReelHLS] source-ready reel=${reelId} bytes=${source.byteLength} ${haloMemorySnapshot()}`);
     const renditions=[
       {name:'360',height:360,v:'450k',max:'600k',buf:'1200k',a:'64k',bandwidth:600000},
       {name:'720',height:720,v:'1200k',max:'1600k',buf:'3200k',a:'96k',bandwidth:1600000},
@@ -11398,10 +11450,11 @@ async function buildReelHls(reelId) {
     ];
     for (const rendition of renditions) {
       const dir=path.join(tempDir,rendition.name);await fs.promises.mkdir(dir,{recursive:true});
+      console.log(`[HaloReelHLS] rendition-start reel=${reelId} quality=${rendition.name} ${haloMemorySnapshot()}`);
       await runProcess(ffmpegBinary(),[
-        '-hide_banner','-loglevel','error','-y','-i',input,
+        '-hide_banner','-loglevel','error','-y','-threads','1','-filter_threads','1','-filter_complex_threads','1','-i',source.inputPath,
         '-map','0:v:0','-map','0:a:0?','-vf',`scale=-2:${rendition.height}:force_original_aspect_ratio=decrease`,
-        '-c:v','libx264','-preset','veryfast','-profile:v','main','-pix_fmt','yuv420p',
+        '-c:v','libx264','-threads','1','-preset','veryfast','-profile:v','main','-pix_fmt','yuv420p',
         '-b:v',rendition.v,'-maxrate',rendition.max,'-bufsize',rendition.buf,
         '-force_key_frames','expr:gte(t,n_forced*2)','-sc_threshold','0',
         '-c:a','aac','-b:a',rendition.a,'-ac','2','-ar','48000',
@@ -11409,6 +11462,7 @@ async function buildReelHls(reelId) {
         '-hls_segment_type','fmp4','-hls_fmp4_init_filename','init.mp4',
         '-hls_segment_filename',path.join(dir,'seg_%05d.m4s'),path.join(dir,'index.m3u8')
       ]);
+      console.log(`[HaloReelHLS] rendition-done reel=${reelId} quality=${rendition.name} ${haloMemorySnapshot()}`);
     }
     const master=['#EXTM3U','#EXT-X-VERSION:7'];
     for(const rendition of renditions){master.push(`#EXT-X-STREAM-INF:BANDWIDTH=${rendition.bandwidth}`);master.push(`${rendition.name}/index.m3u8`);}
@@ -11423,9 +11477,26 @@ async function buildReelHls(reelId) {
 function ensureReelHls(reelId) {
   const key=String(reelId);
   if(reelHlsReady(key))return Promise.resolve(true);
+  if(reelHlsUnavailable.has(key))return Promise.resolve(false);
   if(reelHlsJobs.has(key))return reelHlsJobs.get(key);
-  const job=buildReelHls(key).catch(error=>{console.error('Reel HLS build failed:',key,error.message);return false;}).finally(()=>reelHlsJobs.delete(key));
-  reelHlsJobs.set(key,job);return job;
+  const queuedAt=Date.now();
+  reelHlsQueueWaiting+=1;
+  const job=reelHlsQueue.then(async()=>{
+    reelHlsQueueWaiting=Math.max(0,reelHlsQueueWaiting-1);
+    console.log(`[HaloReelHLS] job-start reel=${key} queueWaitMs=${Date.now()-queuedAt} waiting=${reelHlsQueueWaiting} ${haloMemorySnapshot()}`);
+    try {
+      const ready=await buildReelHls(key);
+      if(!ready)reelHlsUnavailable.add(key);
+      console.log(`[HaloReelHLS] job-finish reel=${key} ready=${ready} ${haloMemorySnapshot()}`);
+      return ready;
+    } catch(error) {
+      console.error(`[HaloReelHLS] job-error reel=${key}: ${error.message} ${haloMemorySnapshot()}`);
+      return false;
+    }
+  }).finally(()=>reelHlsJobs.delete(key));
+  reelHlsQueue=job.catch(()=>false);
+  reelHlsJobs.set(key,job);
+  return job;
 }
 function stripHeavyReelEditData(value) {
   const clean = normalizeReelEdits(value || {});
@@ -20927,8 +20998,17 @@ app.get('/whatsapp-coexistence-setup', (request, response) => {
 
 app.get('*splat', (request, response) => response.redirect(readSession(request) ? '/app' : '/'));
 
+const haloMemoryDiagnosticsTimer = setInterval(() => {
+  const memory=process.memoryUsage();
+  const mib=value=>(Number(value||0)/1048576).toFixed(1);
+  const db=pool?`dbPool(total=${pool.totalCount},idle=${pool.idleCount},waiting=${pool.waitingCount})`:'dbPool(unavailable)';
+  console.log(`[HaloMemory] rss=${mib(memory.rss)}MiB heap=${mib(memory.heapUsed)}MiB external=${mib(memory.external)}MiB arrayBuffers=${mib(memory.arrayBuffers)}MiB ${db} hlsJobs=${reelHlsJobs.size} hlsQueued=${reelHlsQueueWaiting}`);
+},60000);
+if(haloMemoryDiagnosticsTimer.unref)haloMemoryDiagnosticsTimer.unref();
+
 const server = app.listen(port, '0.0.0.0', async () => {
   console.log(`Website listening on port ${port}`);
+  console.log(`[HaloMemory] diagnostics enabled interval=60s ${haloMemorySnapshot()}`);
   if (!server.__messengerSocketReady) { server.__messengerSocketReady = true; setupMessengerWebSocket(server).catch(error => console.error('Messenger WebSocket setup failed:', error.message)); }
   if (!pool) {
     console.error('DATABASE_URL is not configured; login cannot work.');
