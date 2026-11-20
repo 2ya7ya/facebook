@@ -11334,20 +11334,173 @@ function validNumericId(value) {
   return /^\d+$/.test(String(value || ''));
 }
 
-// Keep CPU-heavy media subprocesses from running concurrently on the 256 MiB tier.
+// HALO_BACKEND_MEDIA_GUARD_V1
+// Discover a real container memory limit when the runtime exposes one. Never
+// mistake the host's total RAM for this service's container limit.
+function haloBoundedInteger(name, fallback, minimum, maximum) {
+  const parsed = Number(process.env[name]);
+  const value = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+  return Math.max(minimum, Math.min(maximum, value));
+}
+
+function haloReadMemoryControlValue(file) {
+  try {
+    const text = fs.readFileSync(file, 'utf8').trim();
+    if (!text || text === 'max') return null;
+    const value = Number(text);
+    if (!Number.isFinite(value) || value <= 0 || value >= 1e18) return null;
+    return value;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function haloMemoryLimitSnapshot() {
+  let limitBytes = null;
+  let usageBytes = null;
+  let limitSource = 'unavailable';
+  let usageSource = 'rss';
+
+  try {
+    if (typeof process.constrainedMemory === 'function') {
+      const constrained = Number(process.constrainedMemory());
+      if (Number.isFinite(constrained) && constrained > 0 && constrained < 1e18) {
+        limitBytes = constrained;
+        limitSource = 'process.constrainedMemory';
+      }
+    }
+  } catch (_error) {}
+
+  const cgroupV2Limit = haloReadMemoryControlValue('/sys/fs/cgroup/memory.max');
+  const cgroupV1Limit = haloReadMemoryControlValue('/sys/fs/cgroup/memory/memory.limit_in_bytes');
+  const cgroupV2Usage = haloReadMemoryControlValue('/sys/fs/cgroup/memory.current');
+  const cgroupV1Usage = haloReadMemoryControlValue('/sys/fs/cgroup/memory/memory.usage_in_bytes');
+
+  if (cgroupV2Limit || cgroupV1Limit) {
+    limitBytes = cgroupV2Limit || cgroupV1Limit;
+    limitSource = cgroupV2Limit ? 'cgroup-v2' : 'cgroup-v1';
+  }
+  if (cgroupV2Usage || cgroupV1Usage) {
+    usageBytes = cgroupV2Usage || cgroupV1Usage;
+    usageSource = cgroupV2Usage ? 'cgroup-v2' : 'cgroup-v1';
+  }
+  if (!usageBytes) usageBytes = process.memoryUsage().rss;
+
+  const ratio = limitBytes && usageBytes ? usageBytes / limitBytes : null;
+  return { limitBytes, usageBytes, ratio, limitSource, usageSource };
+}
+
+const HALO_MEDIA_MEMORY_PRESSURE_RATIO = (() => {
+  const value = Number(process.env.HALO_MEDIA_MEMORY_PRESSURE_RATIO);
+  return Number.isFinite(value) ? Math.max(0.50, Math.min(0.97, value)) : 0.84;
+})();
+const HALO_MEDIA_PROCESS_TIMEOUT_MS = haloBoundedInteger('HALO_MEDIA_PROCESS_TIMEOUT_MS', 10 * 60 * 1000, 30 * 1000, 30 * 60 * 1000);
+const HALO_MEDIA_PROCESS_KILL_GRACE_MS = haloBoundedInteger('HALO_MEDIA_PROCESS_KILL_GRACE_MS', 5000, 1000, 30 * 1000);
+const HALO_MEDIA_PROCESS_QUEUE_LIMIT = haloBoundedInteger('HALO_MEDIA_PROCESS_QUEUE_LIMIT', 12, 1, 64);
+
+function haloMediaGuardError(message, code = 'MEDIA_QUEUE_FULL', statusCode = 503) {
+  const error = new Error(message);
+  error.code = code;
+  error.statusCode = statusCode;
+  return error;
+}
+
+function assertHaloMediaMemoryAvailable(workLabel) {
+  const snapshot = haloMemoryLimitSnapshot();
+  if (snapshot.ratio !== null && snapshot.ratio >= HALO_MEDIA_MEMORY_PRESSURE_RATIO) {
+    const percent = (snapshot.ratio * 100).toFixed(1);
+    console.warn(`[HaloMemory] deferring ${workLabel}: memory pressure ${percent}% (${snapshot.usageSource}/${snapshot.limitSource})`);
+    throw haloMediaGuardError(`Media processing is temporarily busy because server memory is under pressure. Please try again shortly.`, 'MEDIA_MEMORY_PRESSURE', 503);
+  }
+  return snapshot;
+}
+
+// All media subprocesses pass through one bounded queue. FFmpeg receives
+// -nostdin, has a hard timeout, and is terminated before the queue advances.
 let haloChildProcessQueue = Promise.resolve();
-function runProcess(command, args) {
+let haloChildProcessQueueWaiting = 0;
+function runProcess(command, args, options = {}) {
+  if (haloChildProcessQueueWaiting >= HALO_MEDIA_PROCESS_QUEUE_LIMIT) {
+    return Promise.reject(haloMediaGuardError('Media processing is busy. Please try again shortly.'));
+  }
+
+  const requestedTimeout = Number(options && options.timeoutMs);
+  const requestedKillGrace = Number(options && options.killGraceMs);
+  const timeoutMs = Number.isFinite(requestedTimeout) && requestedTimeout > 0
+    ? Math.max(10, Math.min(30 * 60 * 1000, Math.floor(requestedTimeout)))
+    : HALO_MEDIA_PROCESS_TIMEOUT_MS;
+  const killGraceMs = Number.isFinite(requestedKillGrace) && requestedKillGrace > 0
+    ? Math.max(10, Math.min(30 * 1000, Math.floor(requestedKillGrace)))
+    : HALO_MEDIA_PROCESS_KILL_GRACE_MS;
+  const queuedAt = Date.now();
   const execute = () => new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    haloChildProcessQueueWaiting = Math.max(0, haloChildProcessQueueWaiting - 1);
+    try {
+      assertHaloMediaMemoryAvailable('FFmpeg');
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    const processArgs = Array.isArray(args) ? args.slice() : [];
+    if (!processArgs.includes('-nostdin')) processArgs.unshift('-nostdin');
+    let child;
     let stderr = '';
-    child.stderr.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-65536); });
-    child.once('error', reject);
-    child.once('close', code => {
-      if (code === 0) resolve();
-      else reject(new Error(stderr || `Process exited with code ${code}`));
+    let settled = false;
+    let timedOut = false;
+    let closed = false;
+    let timeoutTimer = null;
+    let killTimer = null;
+
+    const finish = error => {
+      if (settled) return;
+      settled = true;
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (killTimer) clearTimeout(killTimer);
+      if (error) reject(error);
+      else resolve();
+    };
+
+    try {
+      child = spawn(command, processArgs, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
+    } catch (error) {
+      finish(error);
+      return;
+    }
+
+    if (child.stderr) {
+      child.stderr.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-65536); });
+    }
+    child.once('error', error => finish(error));
+    child.once('close', (code, signal) => {
+      closed = true;
+      if (timedOut) {
+        finish(haloMediaGuardError(`FFmpeg exceeded its ${Math.round(timeoutMs / 1000)} second time limit and was stopped. ${stderr}`.trim(), 'MEDIA_PROCESS_TIMEOUT', 504));
+      } else if (code === 0) {
+        finish();
+      } else {
+        finish(new Error(stderr || `Process exited with code ${code}${signal ? ` (${signal})` : ''}`));
+      }
     });
+
+    timeoutTimer = setTimeout(() => {
+      if (settled || closed) return;
+      timedOut = true;
+      console.error(`[HaloMediaProcess] timeout command=${String(command)} elapsedMs=${Date.now() - queuedAt}; sending SIGTERM`);
+      try { child.kill('SIGTERM'); } catch (_error) {}
+      killTimer = setTimeout(() => {
+        if (closed || settled) return;
+        console.error(`[HaloMediaProcess] force-kill command=${String(command)} after ${killGraceMs}ms grace`);
+        try { child.kill('SIGKILL'); } catch (_error) {}
+      }, killGraceMs);
+      if (killTimer.unref) killTimer.unref();
+    }, timeoutMs);
+    if (timeoutTimer.unref) timeoutTimer.unref();
   });
-  const queued = haloChildProcessQueue.then(execute, execute);
+
+  haloChildProcessQueueWaiting += 1;
+  const start = () => execute();
+  const queued = haloChildProcessQueue.then(start, start);
   haloChildProcessQueue = queued.catch(() => {});
   return queued;
 }
@@ -11379,6 +11532,7 @@ const reelHlsJobs = new Map();
 const reelHlsUnavailable = new Set();
 let reelHlsQueue = Promise.resolve();
 let reelHlsQueueWaiting = 0;
+const HALO_REEL_HLS_QUEUE_LIMIT = haloBoundedInteger('HALO_REEL_HLS_QUEUE_LIMIT', 8, 1, 64);
 function reelHlsDirectory(reelId) { return path.join(reelHlsRoot, String(reelId)); }
 function reelHlsReady(reelId) {
   try { return fs.statSync(path.join(reelHlsDirectory(reelId), 'master.m3u8')).isFile(); }
@@ -11390,8 +11544,12 @@ function safeHlsLeaf(value) {
 }
 function haloMemorySnapshot() {
   const memory=process.memoryUsage();
+  const control=haloMemoryLimitSnapshot();
   const mib=value=>(Number(value||0)/1048576).toFixed(1);
-  return `rss=${mib(memory.rss)}MiB heap=${mib(memory.heapUsed)}MiB external=${mib(memory.external)}MiB arrayBuffers=${mib(memory.arrayBuffers)}MiB`;
+  const limit=control.limitBytes?` limit=${mib(control.limitBytes)}MiB`:' limit=unknown';
+  const usage=control.usageBytes?` usage=${mib(control.usageBytes)}MiB(${control.usageSource})`:'';
+  const pressure=control.ratio===null?' pressure=unknown':` pressure=${(control.ratio*100).toFixed(1)}%`;
+  return `rss=${mib(memory.rss)}MiB heap=${mib(memory.heapUsed)}MiB external=${mib(memory.external)}MiB arrayBuffers=${mib(memory.arrayBuffers)}MiB${limit}${usage}${pressure}`;
 }
 
 // Stream stored source video to a temporary file in 1 MiB database chunks.
@@ -11436,6 +11594,7 @@ async function writeReelHlsSourceFile(reelId, tempDir) {
 async function buildReelHls(reelId) {
   const finalDir = reelHlsDirectory(reelId);
   if (reelHlsReady(reelId)) return true;
+  assertHaloMediaMemoryAvailable('Reel HLS generation');
   const parent = path.dirname(finalDir);
   await fs.promises.mkdir(parent,{recursive:true});
   const tempDir = await fs.promises.mkdtemp(path.join(parent,`.${String(reelId)}-hls-`));
@@ -11479,6 +11638,10 @@ function ensureReelHls(reelId) {
   if(reelHlsReady(key))return Promise.resolve(true);
   if(reelHlsUnavailable.has(key))return Promise.resolve(false);
   if(reelHlsJobs.has(key))return reelHlsJobs.get(key);
+  if(reelHlsQueueWaiting>=HALO_REEL_HLS_QUEUE_LIMIT){
+    console.warn(`[HaloReelHLS] queue-rejected reel=${key} waiting=${reelHlsQueueWaiting} limit=${HALO_REEL_HLS_QUEUE_LIMIT}; MP4 fallback remains available`);
+    return Promise.resolve(false);
+  }
   const queuedAt=Date.now();
   reelHlsQueueWaiting+=1;
   const job=reelHlsQueue.then(async()=>{
@@ -11800,6 +11963,10 @@ function receiveRequestToFile(request, destination, maximumBytes) {
 
 let reverseJobQueue = Promise.resolve();
 let captionJobQueue = Promise.resolve();
+let reverseJobWaiting = 0;
+let captionJobWaiting = 0;
+const HALO_REVERSE_QUEUE_LIMIT = haloBoundedInteger('HALO_REVERSE_QUEUE_LIMIT', 2, 1, 16);
+const HALO_CAPTION_QUEUE_LIMIT = haloBoundedInteger('HALO_CAPTION_QUEUE_LIMIT', 2, 1, 16);
 let captionTranscriberPromise = null;
 const captionSpeechCache = new Map();
 const captionSpeechVoices = new Map([
@@ -11850,18 +12017,37 @@ async function generatePublicCaptionSpeech(text, voice) {
 }
 
 function runReverseJobExclusively(task) {
-  const queued = reverseJobQueue.then(task, task);
+  if (reverseJobWaiting >= HALO_REVERSE_QUEUE_LIMIT) {
+    return Promise.reject(haloMediaGuardError('Video processing is busy. Please try again shortly.'));
+  }
+  reverseJobWaiting += 1;
+  const execute = () => {
+    reverseJobWaiting = Math.max(0, reverseJobWaiting - 1);
+    assertHaloMediaMemoryAvailable('video reverse');
+    return task();
+  };
+  const queued = reverseJobQueue.then(execute, execute);
   reverseJobQueue = queued.catch(() => {});
   return queued;
 }
 
 function runCaptionJobExclusively(task) {
-  const queued = captionJobQueue.then(task, task);
+  if (captionJobWaiting >= HALO_CAPTION_QUEUE_LIMIT) {
+    return Promise.reject(haloMediaGuardError('Caption generation is busy. Please try again shortly.'));
+  }
+  captionJobWaiting += 1;
+  const execute = () => {
+    captionJobWaiting = Math.max(0, captionJobWaiting - 1);
+    assertHaloMediaMemoryAvailable('caption generation');
+    return task();
+  };
+  const queued = captionJobQueue.then(execute, execute);
   captionJobQueue = queued.catch(() => {});
   return queued;
 }
 
 async function captionTranscriber() {
+  assertHaloMediaMemoryAvailable('caption transcription model');
   if (!captionTranscriberPromise) {
     captionTranscriberPromise = import('@xenova/transformers').then(({ pipeline, env }) => {
       env.allowLocalModels = false;
@@ -21000,9 +21186,11 @@ app.get('*splat', (request, response) => response.redirect(readSession(request) 
 
 const haloMemoryDiagnosticsTimer = setInterval(() => {
   const memory=process.memoryUsage();
+  const control=haloMemoryLimitSnapshot();
   const mib=value=>(Number(value||0)/1048576).toFixed(1);
   const db=pool?`dbPool(total=${pool.totalCount},idle=${pool.idleCount},waiting=${pool.waitingCount})`:'dbPool(unavailable)';
-  console.log(`[HaloMemory] rss=${mib(memory.rss)}MiB heap=${mib(memory.heapUsed)}MiB external=${mib(memory.external)}MiB arrayBuffers=${mib(memory.arrayBuffers)}MiB ${db} hlsJobs=${reelHlsJobs.size} hlsQueued=${reelHlsQueueWaiting}`);
+  const cgroup=control.limitBytes?`containerMemory=${mib(control.usageBytes)}MiB/${mib(control.limitBytes)}MiB pressure=${control.ratio===null?'unknown':(control.ratio*100).toFixed(1)+'%'} source=${control.limitSource}/${control.usageSource}`:'containerMemoryLimit=unknown';
+  console.log(`[HaloMemory] rss=${mib(memory.rss)}MiB heap=${mib(memory.heapUsed)}MiB external=${mib(memory.external)}MiB arrayBuffers=${mib(memory.arrayBuffers)}MiB ${cgroup} ${db} hlsJobs=${reelHlsJobs.size} hlsQueued=${reelHlsQueueWaiting} ffmpegQueued=${haloChildProcessQueueWaiting} reverseQueued=${reverseJobWaiting} captionsQueued=${captionJobWaiting}`);
 },60000);
 if(haloMemoryDiagnosticsTimer.unref)haloMemoryDiagnosticsTimer.unref();
 
