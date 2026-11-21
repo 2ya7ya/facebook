@@ -11602,7 +11602,6 @@ async function buildReelHls(reelId) {
     const renditions=[
       {name:'360',height:360,v:'450k',max:'600k',buf:'1200k',a:'64k',bandwidth:664000},
       {name:'720',height:720,v:'1200k',max:'1600k',buf:'3200k',a:'96k',bandwidth:1696000},
-      {name:'1080',height:1080,v:'2500k',max:'3200k',buf:'6400k',a:'128k',bandwidth:3328000}
     ];
     for (const rendition of renditions) {
       const dir=path.join(tempDir,rendition.name);await fs.promises.mkdir(dir,{recursive:true});
