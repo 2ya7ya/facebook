@@ -12,7 +12,7 @@ const compression = require('compression');
 const { Pool } = require('pg');
 // HALO_MULTI_MEDIA_CAPTIONS_V264P
 // HALO_R2_POST_MEDIA_V264B
-const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, HeadObjectCommand } = require('@aws-sdk/client-s3');
 const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
@@ -9743,6 +9743,9 @@ async function ensureDatabase() {
       PRIMARY KEY (reel_id, variant)
     )
   `);
+  // HALO_REELS_R2_STREAMING_V1
+  await pool.query('ALTER TABLE reel_video_variants ADD COLUMN IF NOT EXISTS storage_key VARCHAR(48)');
+  await pool.query('ALTER TABLE reel_video_variants ALTER COLUMN video_data DROP NOT NULL');
   await pool.query(`
     CREATE TABLE IF NOT EXISTS reel_thumbnails (
       reel_id BIGINT PRIMARY KEY REFERENCES reels(id) ON DELETE CASCADE,
@@ -10945,6 +10948,7 @@ function normalizeStoredPostMedia(value, legacyImage = '') {
       const type = String(item.type || postMediaTypeFromMime(mimeType));
       if (!['image','video'].includes(type)) return null;
       const normalized = { type, mimeType, storageKey, binary:true, name:String(item.name || '').slice(0,255) };
+      const storedSize=Number(item.size||0); if(Number.isSafeInteger(storedSize)&&storedSize>0) normalized.size=storedSize;
       const mediaCaption=String(item.caption || '').trim().slice(0,500); if(mediaCaption) normalized.caption=mediaCaption;
       if (type === 'image' && item.editData && typeof item.editData === 'object') { const editData=normalizePostImageEditData(item.editData); if(editData) normalized.editData=editData; }
       if (type === 'image' && item.variants && typeof item.variants === 'object') {
@@ -11076,16 +11080,16 @@ async function materializePostMedia(userId, media, currentMedia = []) {
       stored.push(normalized);
       continue;
     }
-    let storageKey='', mimeType=item.mimeType || '', name=item.name || '';
+    let storageKey='', mimeType=item.mimeType || '', name=item.name || '', size=0;
     if (item.uploadToken) {
       const asset=await consumePostUpload(item.uploadToken,userId,item.type);
-      storageKey=asset.storageKey; mimeType=asset.mimeType; name=asset.name || name;
+      storageKey=asset.storageKey; mimeType=asset.mimeType; name=asset.name || name; size=Number(asset.size||0);
     } else if (item.data) {
       const decoded=dataUrlBuffer(item.data,item.type || '');
       if (!decoded || !decoded.bytes || !decoded.bytes.length) throw new Error('Could not decode post media.');
-      storageKey=await writePostAsset(decoded.bytes,decoded.mimeType || mimeType); mimeType=decoded.mimeType || mimeType;
+      storageKey=await writePostAsset(decoded.bytes,decoded.mimeType || mimeType); mimeType=decoded.mimeType || mimeType; size=decoded.bytes.length;
     } else continue;
-    const normalized={type:item.type,mimeType,name,storageKey,binary:true};
+    const normalized={type:item.type,mimeType,name,storageKey,binary:true,size};
     const mediaCaption=String(item.caption||'').trim().slice(0,500);if(mediaCaption)normalized.caption=mediaCaption;
     if(item.type==='image'&&item.editData&&typeof item.editData==='object'){const editData=normalizePostImageEditData(item.editData);if(editData)normalized.editData=editData;}
     if(item.type==='image'&&item.variantUploadTokens&&typeof item.variantUploadTokens==='object'){
@@ -11122,19 +11126,25 @@ async function postMediaBytes(item) {
 }
 
 async function syncPostVideoReels(queryable, { postId, userId, caption, visibility, createdAt, media }) {
-  const videos = (Array.isArray(media) ? media : [])
+  const allVideos = (Array.isArray(media) ? media : [])
     .map((item, index) => ({ item, index }))
-    .filter(({ item }) => item && item.type === 'video' && (safePostStorageKey(item.storageKey) || validVideoData(item.data)));
-  const keep = videos.map(({ index }) => index);
-  if (keep.length) await queryable.query('DELETE FROM reels WHERE source_post_id = $1 AND NOT (source_media_index = ANY($2::int[]))',[postId, keep]);
-  else await queryable.query('DELETE FROM reels WHERE source_post_id = $1',[postId]);
+    .filter(({ item }) => item && item.type === 'video');
+  const videos = allVideos.filter(({ item }) => safePostStorageKey(item.storageKey));
+  const keep = allVideos.map(({ index }) => index);
+  if (keep.length) {
+    await queryable.query('DELETE FROM reels WHERE source_post_id = $1 AND NOT (source_media_index = ANY($2::int[]))', [postId, keep]);
+  } else {
+    await queryable.query('DELETE FROM reels WHERE source_post_id = $1', [postId]);
+  }
+
   const linked = [];
   for (const { item, index } of videos) {
     const editData = normalizeReelEdits(item.editData || {});
-    editData.sourcePostId = String(postId); editData.sourceMediaIndex = index;
+    editData.sourcePostId = String(postId);
+    editData.sourceMediaIndex = index;
     const result = await queryable.query(
       `INSERT INTO reels (user_id, caption, video_data, mime_type, visibility, allow_comments, edit_data, created_at, source_post_id, source_media_index)
-       VALUES ($1, $2, NULL, $3, $4, TRUE, $5::jsonb, COALESCE($6::timestamptz, NOW()), $7, $8)
+       VALUES ($1, $2, NULL, $3, $4, TRUE, $5::jsonb, COALESCE($6::timestamp, NOW()), $7, $8)
        ON CONFLICT (source_post_id, source_media_index) WHERE source_post_id IS NOT NULL
        DO UPDATE SET user_id = EXCLUDED.user_id, caption = EXCLUDED.caption, video_data = NULL,
                      mime_type = EXCLUDED.mime_type, visibility = EXCLUDED.visibility, edit_data = EXCLUDED.edit_data
@@ -11142,9 +11152,10 @@ async function syncPostVideoReels(queryable, { postId, userId, caption, visibili
       [userId, String(caption || '').slice(0, 500), item.mimeType || postMediaMimeType(item.data) || 'video/mp4', visibility, JSON.stringify(editData), createdAt || null, postId, index]
     );
     if (result.rows[0]) {
-      const reelId=String(result.rows[0].id), source=await postMediaBytes(item);
-      if(source && source.bytes && source.bytes.length) await storeReelVariant(queryable,reelId,'source',source.mimeType || item.mimeType || 'video/mp4',source.bytes);
-      linked.push({ id:reelId, mediaIndex:Number(result.rows[0].source_media_index) });
+      const reelId = String(result.rows[0].id);
+      const storageKey = safePostStorageKey(item.storageKey);
+      await storeReelVariantReference(queryable, reelId, 'source', item.mimeType || 'video/mp4', Number(item.size || 0), storageKey);
+      linked.push({ id: reelId, mediaIndex: Number(result.rows[0].source_media_index) });
     }
   }
   return linked;
@@ -11530,9 +11541,11 @@ function reelHlsUrl(reelId) {
 const reelHlsRoot = process.env.REEL_HLS_ROOT || path.join(process.env.HOME || os.homedir(), 'facebook-media', 'reels-hls');
 const reelHlsJobs = new Map();
 const reelHlsUnavailable = new Set();
+const reelHlsRetryAfter = new Map();
 let reelHlsQueue = Promise.resolve();
 let reelHlsQueueWaiting = 0;
 const HALO_REEL_HLS_QUEUE_LIMIT = haloBoundedInteger('HALO_REEL_HLS_QUEUE_LIMIT', 8, 1, 64);
+const HALO_REEL_HLS_RETRY_DELAY_MS = haloBoundedInteger('HALO_REEL_HLS_RETRY_DELAY_MS', 30000, 5000, 300000);
 function reelHlsDirectory(reelId) { return path.join(reelHlsRoot, String(reelId)); }
 function reelHlsReady(reelId) {
   try { return fs.statSync(path.join(reelHlsDirectory(reelId), 'master.m3u8')).isFile(); }
@@ -11555,40 +11568,24 @@ function haloMemorySnapshot() {
 // Stream stored source video to a temporary file in 1 MiB database chunks.
 // This avoids holding a complete 60 MiB Reel Buffer while FFmpeg is running.
 async function writeReelHlsSourceFile(reelId, tempDir) {
-  const metaResult=await pool.query(
-    `SELECT mime_type,octet_length(video_data) AS byte_length
+  const metaResult = await pool.query(
+    `SELECT mime_type,storage_key,byte_length
        FROM reel_video_variants
-      WHERE reel_id=$1 AND variant='source' LIMIT 1`,[reelId]
+      WHERE reel_id=$1 AND variant='source' LIMIT 1`, [reelId]
   );
-  const meta=metaResult.rows[0];
-  // Legacy Reels without a source variant continue to use the existing MP4
-  // playback fallback; do not load their entire legacy payload for HLS work.
-  if(!meta)return null;
-  const total=Number(meta.byte_length||0);
-  if(!Number.isSafeInteger(total)||total<=0)throw new Error('Stored Reel source has an invalid byte length.');
-  const mimeType=String(meta.mime_type||'video/mp4');
-  const ext=mimeType.includes('webm')?'.webm':'.mp4';
-  const inputPath=path.join(tempDir,'source'+ext);
-  const chunkSize=1024*1024;
-  let written=0;
-  async function* readSourceChunks() {
-    for(let offset=0;offset<total;offset+=chunkSize) {
-      const length=Math.min(chunkSize,total-offset);
-      const part=await pool.query(
-        `SELECT substring(video_data from $3 for $4) AS data
-           FROM reel_video_variants
-          WHERE reel_id=$1 AND variant=$2 LIMIT 1`,
-        [reelId,'source',offset+1,length]
-      );
-      const chunk=part.rows[0]&&part.rows[0].data;
-      if(!Buffer.isBuffer(chunk)||chunk.length!==length)throw new Error(`Could not read Reel source chunk at byte ${offset}.`);
-      written+=chunk.length;
-      yield chunk;
-    }
+  const meta = metaResult.rows[0];
+  if (!meta) return null;
+  const storageKey = safePostStorageKey(meta.storage_key);
+  if (!storageKey) return null;
+
+  const mimeType = String(meta.mime_type || 'video/mp4');
+  const ext = mimeType.includes('webm') ? '.webm' : '.mp4';
+  const inputPath = path.join(tempDir, 'source' + ext);
+  const byteLength = await streamPostAssetToFile(storageKey, inputPath);
+  if (!Number.isSafeInteger(byteLength) || byteLength <= 0) {
+    throw new Error('Stored Reel object has an invalid byte length.');
   }
-  await pipeline(Readable.from(readSourceChunks()),fs.createWriteStream(inputPath,{flags:'wx'}));
-  if(written!==total)throw new Error(`Reel source length mismatch: expected ${total}, wrote ${written}.`);
-  return {inputPath,mimeType,byteLength:total};
+  return { inputPath, mimeType, byteLength };
 }
 
 async function buildReelHls(reelId) {
@@ -11603,16 +11600,16 @@ async function buildReelHls(reelId) {
     if(!source){console.warn(`[HaloReelHLS] skipped reel=${reelId}: no stored source variant; MP4 fallback remains available`);return false;}
     console.log(`[HaloReelHLS] source-ready reel=${reelId} bytes=${source.byteLength} ${haloMemorySnapshot()}`);
     const renditions=[
-      {name:'360',height:360,v:'450k',max:'600k',buf:'1200k',a:'64k',bandwidth:600000},
-      {name:'720',height:720,v:'1200k',max:'1600k',buf:'3200k',a:'96k',bandwidth:1600000},
-      {name:'1080',height:1080,v:'2500k',max:'3200k',buf:'6400k',a:'128k',bandwidth:3200000}
+      {name:'360',height:360,v:'450k',max:'600k',buf:'1200k',a:'64k',bandwidth:664000},
+      {name:'720',height:720,v:'1200k',max:'1600k',buf:'3200k',a:'96k',bandwidth:1696000},
+      {name:'1080',height:1080,v:'2500k',max:'3200k',buf:'6400k',a:'128k',bandwidth:3328000}
     ];
     for (const rendition of renditions) {
       const dir=path.join(tempDir,rendition.name);await fs.promises.mkdir(dir,{recursive:true});
       console.log(`[HaloReelHLS] rendition-start reel=${reelId} quality=${rendition.name} ${haloMemorySnapshot()}`);
       await runProcess(ffmpegBinary(),[
         '-hide_banner','-loglevel','error','-y','-threads','1','-filter_threads','1','-filter_complex_threads','1','-i',source.inputPath,
-        '-map','0:v:0','-map','0:a:0?','-vf',`scale=-2:${rendition.height}:force_original_aspect_ratio=decrease`,
+        '-map','0:v:0','-map','0:a:0?','-vf',`scale=-2:${rendition.height}:force_original_aspect_ratio=decrease:force_divisible_by=2`,
         '-c:v','libx264','-threads','1','-preset','veryfast','-profile:v','main','-pix_fmt','yuv420p',
         '-b:v',rendition.v,'-maxrate',rendition.max,'-bufsize',rendition.buf,
         '-force_key_frames','expr:gte(t,n_forced*2)','-sc_threshold','0',
@@ -11623,6 +11620,8 @@ async function buildReelHls(reelId) {
       ]);
       console.log(`[HaloReelHLS] rendition-done reel=${reelId} quality=${rendition.name} ${haloMemorySnapshot()}`);
     }
+    await fs.promises.unlink(source.inputPath);
+    console.log(`[HaloReelHLS] source-cleaned reel=${reelId}`);
     const master=['#EXTM3U','#EXT-X-VERSION:7'];
     for(const rendition of renditions){master.push(`#EXT-X-STREAM-INF:BANDWIDTH=${rendition.bandwidth}`);master.push(`${rendition.name}/index.m3u8`);}
     await fs.promises.writeFile(path.join(tempDir,'master.m3u8'),master.join('\n')+'\n');
@@ -11638,6 +11637,8 @@ function ensureReelHls(reelId) {
   if(reelHlsReady(key))return Promise.resolve(true);
   if(reelHlsUnavailable.has(key))return Promise.resolve(false);
   if(reelHlsJobs.has(key))return reelHlsJobs.get(key);
+  const retryAt = reelHlsRetryAfter.get(key) || 0;
+  if (retryAt > Date.now()) return Promise.resolve(false);
   if(reelHlsQueueWaiting>=HALO_REEL_HLS_QUEUE_LIMIT){
     console.warn(`[HaloReelHLS] queue-rejected reel=${key} waiting=${reelHlsQueueWaiting} limit=${HALO_REEL_HLS_QUEUE_LIMIT}; MP4 fallback remains available`);
     return Promise.resolve(false);
@@ -11650,10 +11651,12 @@ function ensureReelHls(reelId) {
     try {
       const ready=await buildReelHls(key);
       if(!ready)reelHlsUnavailable.add(key);
+      else reelHlsRetryAfter.delete(key);
       console.log(`[HaloReelHLS] job-finish reel=${key} ready=${ready} ${haloMemorySnapshot()}`);
       return ready;
     } catch(error) {
-      console.error(`[HaloReelHLS] job-error reel=${key}: ${error.message} ${haloMemorySnapshot()}`);
+      reelHlsRetryAfter.set(key, Date.now() + HALO_REEL_HLS_RETRY_DELAY_MS);
+      console.error(`[HaloReelHLS] job-error reel=${key}: ${error.message}; retry-after-ms=${HALO_REEL_HLS_RETRY_DELAY_MS} ${haloMemorySnapshot()}`);
       return false;
     }
   }).finally(()=>reelHlsJobs.delete(key));
@@ -11707,32 +11710,32 @@ async function reelViewerAccess(reelId, viewerId) {
   return {exists:true,allowed:owns||!(row.visibility==='only-me'||(row.account_private&&!row.viewer_is_friend))};
 }
 
-async function sendReelVariantRange(request,response,reelId,variantName) {
-  const meta=await pool.query(`SELECT mime_type,byte_length,created_at FROM reel_video_variants WHERE reel_id=$1 AND variant=$2 LIMIT 1`,[reelId,variantName]);
-  if(!meta.rows[0])return false;
-  const total=Math.max(0,Number(meta.rows[0].byte_length)||0);
-  const mime=meta.rows[0].mime_type||'video/mp4';
-  const createdAt=meta.rows[0].created_at?new Date(meta.rows[0].created_at):null;
-  const versionStamp=createdAt&&Number.isFinite(createdAt.getTime())?createdAt.getTime():0;
-  const etag=`"reel-${reelId}-${variantName}-${total}-${versionStamp}"`;
-  response.setHeader('Accept-Ranges','bytes');
-  response.setHeader('Cache-Control','private, max-age=31536000, immutable');
-  response.setHeader('ETag',etag);
-  if(createdAt)response.setHeader('Last-Modified',createdAt.toUTCString());
-  if(!request.headers.range&&String(request.headers['if-none-match']||'')===etag){response.status(304).end();return true;}
-  const range=String(request.headers.range||'');const match=/^bytes=(\d*)-(\d*)$/i.exec(range);
-  if(match&&total>0){
-    const start=match[1]?Math.max(0,Number(match[1])):0;
-    const end=match[2]?Math.min(total-1,Number(match[2])):total-1;
-    if(!Number.isFinite(start)||!Number.isFinite(end)||start>end||start>=total){response.setHeader('Content-Range',`bytes */${total}`);response.status(416).end();return true;}
-    const length=end-start+1;
-    const chunk=await pool.query(`SELECT substring(video_data from $3 for $4) AS data FROM reel_video_variants WHERE reel_id=$1 AND variant=$2 LIMIT 1`,[reelId,variantName,start+1,length]);
-    if(!chunk.rows[0])return false;
-    response.status(206);response.setHeader('Content-Type',mime);response.setHeader('Content-Length',length);response.setHeader('Content-Range',`bytes ${start}-${end}/${total}`);response.end(chunk.rows[0].data);return true;
+async function sendReelVariantRange(request, response, reelId, variantName) {
+  const meta = await pool.query(
+    `SELECT mime_type,byte_length,created_at,storage_key
+       FROM reel_video_variants WHERE reel_id=$1 AND variant=$2 LIMIT 1`,
+    [reelId, variantName]
+  );
+  const row = meta.rows[0];
+  if (!row) return false;
+  const storageKey = safePostStorageKey(row.storage_key);
+  if (!storageKey) return false;
+
+  const total = Math.max(0, Number(row.byte_length) || 0);
+  const mime = row.mime_type || 'video/mp4';
+  const createdAt = row.created_at ? new Date(row.created_at) : null;
+  const versionStamp = createdAt && Number.isFinite(createdAt.getTime()) ? createdAt.getTime() : 0;
+  const etag = `"reel-${reelId}-${variantName}-${total}-${versionStamp}"`;
+  response.setHeader('Accept-Ranges', 'bytes');
+  response.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+  response.setHeader('ETag', etag);
+  if (createdAt) response.setHeader('Last-Modified', createdAt.toUTCString());
+  if (!request.headers.range && String(request.headers['if-none-match'] || '') === etag) {
+    response.status(304).end();
+    return true;
   }
-  const full=await pool.query(`SELECT video_data FROM reel_video_variants WHERE reel_id=$1 AND variant=$2 LIMIT 1`,[reelId,variantName]);
-  if(!full.rows[0])return false;
-  response.setHeader('Content-Type',mime);response.setHeader('Content-Length',total||full.rows[0].video_data.length);response.end(full.rows[0].video_data);return true;
+  await sendPostAssetRange(request, response, storageKey, mime, 'private, max-age=31536000, immutable');
+  return true;
 }
 
 const reelVariantJobs = new Map();
@@ -11744,25 +11747,62 @@ function sendFileRange(request,response,filePath,mimeType,cacheControl) {
   let stat;
   try { stat=fs.statSync(filePath); } catch (_error) { return response.status(404).end(); }
   if(!stat.isFile() || stat.size<=0) return response.status(404).end();
-  const total=stat.size, range=String(request.headers.range || '');
-  response.set('Accept-Ranges','bytes'); response.set('Content-Type',mimeType || 'application/octet-stream');
+
+  const total=stat.size;
+  const range=String(request.headers.range || '').trim();
+
+  response.set('Accept-Ranges','bytes');
+  response.set('Content-Type',mimeType || 'application/octet-stream');
   response.set('Cache-Control',cacheControl || 'private, max-age=31536000, immutable');
+
   if(range){
     const match=range.match(/^bytes=(\d*)-(\d*)$/);
-    if(!match)return response.status(416).set('Content-Range',`bytes */${total}`).end();
-    const start=match[1]?Number(match[1]):0,end=match[2]?Math.min(Number(match[2]),total-1):total-1;
-    if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<start||start>=total)return response.status(416).set('Content-Range',`bytes */${total}`).end();
-    response.status(206);response.set('Content-Range',`bytes ${start}-${end}/${total}`);response.set('Content-Length',String(end-start+1));
+    if(!match || (!match[1] && !match[2])){
+      return response.status(416).set('Content-Range',`bytes */${total}`).end();
+    }
+
+    let start;
+    let end;
+
+    if(!match[1]){
+      const suffixLength=Number(match[2]);
+      if(!Number.isSafeInteger(suffixLength) || suffixLength<=0){
+        return response.status(416).set('Content-Range',`bytes */${total}`).end();
+      }
+      start=Math.max(0,total-suffixLength);
+      end=total-1;
+    } else {
+      start=Number(match[1]);
+      end=match[2] ? Number(match[2]) : total-1;
+
+      if(!Number.isSafeInteger(start) || !Number.isSafeInteger(end) ||
+         start<0 || end<start || start>=total){
+        return response.status(416).set('Content-Range',`bytes */${total}`).end();
+      }
+
+      end=Math.min(end,total-1);
+    }
+
+    if(start<0 || end<start || start>=total){
+      return response.status(416).set('Content-Range',`bytes */${total}`).end();
+    }
+
+    response.status(206);
+    response.set('Content-Range',`bytes ${start}-${end}/${total}`);
+    response.set('Content-Length',String(end-start+1));
     return fs.createReadStream(filePath,{start,end}).pipe(response);
   }
-  response.set('Content-Length',String(total));return fs.createReadStream(filePath).pipe(response);
-}
 
+  response.set('Content-Length',String(total));
+  return fs.createReadStream(filePath).pipe(response);
+}
 // HALO_R2_POST_MEDIA_V264B
 async function sendPostAssetRange(request,response,storageKey,mimeType,cacheControl){
   const key=safePostStorageKey(storageKey);
   if(!key)return response.status(404).end();
+
   const range=String(request.headers.range||'').trim();
+
   if(r2PostMediaEnabled){
     try{
       const object=await getPostAssetR2(key,range);
@@ -11773,62 +11813,121 @@ async function sendPostAssetRange(request,response,storageKey,mimeType,cacheCont
         if(object.ETag)response.set('ETag',object.ETag);
         if(object.ContentRange)response.set('Content-Range',object.ContentRange);
         if(Number.isFinite(Number(object.ContentLength)))response.set('Content-Length',String(object.ContentLength));
-        response.status(range||object.ContentRange?206:200);
-        for await(const chunk of object.Body)response.write(chunk);
-        response.end();
+        response.status(object.ContentRange?206:200);
+        await pipeline(object.Body,response);
         return;
       }
     }catch(error){
       const status=Number(error&&error.$metadata&&error.$metadata.httpStatusCode||0);
-      if(status===416)return response.status(416).end();
+      if(status===416){
+        try{
+          const head=await r2PostMedia.send(new HeadObjectCommand({
+            Bucket:r2Bucket,
+            Key:postR2ObjectKey(key)
+          }));
+          const total=Number(head.ContentLength||0);
+          if(Number.isSafeInteger(total)&&total>0){
+            response.set('Content-Range',`bytes */${total}`);
+          }
+        }catch(_headError){}
+        return response.status(416).end();
+      }
       throw error;
     }
   }
-  return await sendPostAssetRange(request,response,key,mimeType,cacheControl);
+
+  return sendFileRange(request,response,postAssetPath(key),mimeType,cacheControl);
 }
 
 function acquireReelThumbnailSlot(){return new Promise(resolve=>{if(reelThumbnailActive<2){reelThumbnailActive+=1;resolve();}else reelThumbnailWaiters.push(resolve);});}
 function releaseReelThumbnailSlot(){reelThumbnailActive=Math.max(0,reelThumbnailActive-1);const next=reelThumbnailWaiters.shift();if(next){reelThumbnailActive+=1;next();}}
 async function reelLegacySource(reelId) {
-  const storedSource = await pool.query(`SELECT mime_type,video_data FROM reel_video_variants WHERE reel_id=$1 AND variant='source' LIMIT 1`,[reelId]);
-  if (storedSource.rows[0]) return { mimeType:storedSource.rows[0].mime_type || 'video/mp4', bytes:storedSource.rows[0].video_data, editData:{} };
   const result = await pool.query(
-    `SELECT r.video_data, r.mime_type, r.source_post_id, r.source_media_index, r.edit_data,
-            p.media_items, p.image_data
-       FROM reels r LEFT JOIN posts p ON p.id = r.source_post_id
-      WHERE r.id = $1 LIMIT 1`, [reelId]
+    `SELECT mime_type,storage_key,byte_length
+       FROM reel_video_variants
+      WHERE reel_id=$1 AND variant='source' AND storage_key IS NOT NULL
+      LIMIT 1`, [reelId]
   );
   const row = result.rows[0];
   if (!row) return null;
-  let data = row.video_data || '';
-  let mimeType = row.mime_type || '';
-  if (row.source_post_id) {
-    const media = normalizeStoredPostMedia(row.media_items, row.image_data || '');
-    const item = media[Number(row.source_media_index || 0)];
-    if (item && item.type === 'video' && item.data) {
-      data = item.data;
-      mimeType = item.mimeType || mimeType;
-    }
-  }
-  const decoded = dataUrlBuffer(data, 'video');
-  return decoded ? { ...decoded, editData: row.edit_data || {} } : null;
+  const storageKey = safePostStorageKey(row.storage_key);
+  if (!storageKey) return null;
+  return {
+    mimeType: row.mime_type || 'video/mp4',
+    storageKey,
+    byteLength: Number(row.byte_length || 0),
+    editData: {}
+  };
 }
 
 async function storeReelVariant(queryable, reelId, variant, mimeType, bytes) {
   await queryable.query(
-    `INSERT INTO reel_video_variants (reel_id, variant, mime_type, byte_length, video_data)
-     VALUES ($1,$2,$3,$4,$5)
+    `INSERT INTO reel_video_variants (reel_id, variant, mime_type, byte_length, video_data, storage_key)
+     VALUES ($1,$2,$3,$4,$5,NULL)
      ON CONFLICT (reel_id, variant) DO UPDATE
-       SET mime_type=EXCLUDED.mime_type, byte_length=EXCLUDED.byte_length, video_data=EXCLUDED.video_data, created_at=NOW()`,
+       SET mime_type=EXCLUDED.mime_type, byte_length=EXCLUDED.byte_length, video_data=EXCLUDED.video_data, storage_key=NULL, created_at=NOW()`,
     [reelId, variant, mimeType || 'video/mp4', bytes.length, bytes]
   );
 }
 
+async function storeReelVariantReference(queryable, reelId, variant, mimeType, byteLength, storageKey) {
+  const key=safePostStorageKey(storageKey);
+  if(!key)throw new Error('Invalid Reel media storage key.');
+  const rawLength=Number(byteLength||0);
+  const length=Number.isSafeInteger(rawLength)&&rawLength>0?rawLength:0;
+  await queryable.query(
+    `INSERT INTO reel_video_variants (reel_id, variant, mime_type, byte_length, video_data, storage_key)
+     VALUES ($1,$2,$3,$4,NULL,$5)
+     ON CONFLICT (reel_id, variant) DO UPDATE
+       SET mime_type=EXCLUDED.mime_type, byte_length=EXCLUDED.byte_length, video_data=NULL, storage_key=EXCLUDED.storage_key, created_at=NOW()`,
+    [reelId,variant,mimeType||'video/mp4',length,key]
+  );
+}
+
+async function streamPostAssetToFile(storageKey,destination) {
+  const key=safePostStorageKey(storageKey);
+  if(!key)throw new Error('Invalid stored Reel media key.');
+  if(r2PostMediaEnabled) {
+    const object=await getPostAssetR2(key,'');
+    if(object&&object.Body) {
+      await pipeline(object.Body,fs.createWriteStream(destination,{flags:'wx'}));
+      return Number(object.ContentLength||0)|| (await fs.promises.stat(destination)).size;
+    }
+  }
+  const file=postAssetPath(key);
+  await pipeline(fs.createReadStream(file),fs.createWriteStream(destination,{flags:'wx'}));
+  return (await fs.promises.stat(file)).size;
+}
+
+async function storePostAssetFileFromPath(storageKey,sourcePath,mimeType,contentLength) {
+  const key=safePostStorageKey(storageKey);
+  if(!key)throw new Error('Invalid Reel upload storage key.');
+  if(r2PostMediaEnabled) {
+    await putPostAssetR2(key,fs.createReadStream(sourcePath),mimeType||'video/mp4',contentLength);
+    return;
+  }
+  fs.mkdirSync(postMediaAssetRoot,{recursive:true});
+  await pipeline(fs.createReadStream(sourcePath),fs.createWriteStream(postAssetPath(key),{flags:'wx'}));
+}
+
+async function cleanupStoredPostAsset(storageKey) {
+  const key=safePostStorageKey(storageKey);
+  if(!key)return;
+  if(r2PostMediaEnabled)await deletePostAssetR2(key);
+  try{await fs.promises.unlink(postAssetPath(key));}catch(error){if(error.code!=='ENOENT')throw error;}
+}
+
+// HALO_REEL_R2_VARIANTS_STREAMING_V1
 async function transcodeReelFile(reelId, inputPath, sourceMimeType) {
   const tempDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'facebook-reel-encode-'));
   const lowPath = path.join(tempDirectory, 'low.mp4');
   const highPath = path.join(tempDirectory, 'high.mp4');
   const thumbPath = path.join(tempDirectory, 'thumb.jpg');
+  let lowStorageKey = '';
+  let highStorageKey = '';
+  let persisted = false;
+  let cleanupSafe = true;
+  let commitAttempted = false;
   try {
     const ffmpeg = ffmpegBinary();
     await runProcess(ffmpeg, [
@@ -11847,46 +11946,111 @@ async function transcodeReelFile(reelId, inputPath, sourceMimeType) {
       '-frames:v','1','-vf',"scale=w='min(360,iw)':h='min(640,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
       '-q:v','5',thumbPath
     ]);
-    const [low, high, thumb] = await Promise.all([
-      fs.promises.readFile(lowPath), fs.promises.readFile(highPath), fs.promises.readFile(thumbPath)
+
+    // Keep only the small thumbnail in memory. Video renditions stay file-backed.
+    const [lowStat, highStat, thumb] = await Promise.all([
+      fs.promises.stat(lowPath), fs.promises.stat(highPath), fs.promises.readFile(thumbPath)
     ]);
+    if (!lowStat.isFile() || !highStat.isFile() || lowStat.size <= 0 || highStat.size <= 0) {
+      throw new Error('Reel transcoding produced an empty video rendition.');
+    }
+
+    lowStorageKey = crypto.randomBytes(24).toString('hex');
+    highStorageKey = crypto.randomBytes(24).toString('hex');
+    await storePostAssetFileFromPath(lowStorageKey, lowPath, 'video/mp4', lowStat.size);
+    await storePostAssetFileFromPath(highStorageKey, highPath, 'video/mp4', highStat.size);
+
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      await storeReelVariant(client, reelId, 'low', 'video/mp4', low);
-      await storeReelVariant(client, reelId, 'high', 'video/mp4', high);
+      await storeReelVariantReference(client, reelId, 'low', 'video/mp4', lowStat.size, lowStorageKey);
+      await storeReelVariantReference(client, reelId, 'high', 'video/mp4', highStat.size, highStorageKey);
       await client.query(
         `INSERT INTO reel_thumbnails (reel_id,mime_type,image_data) VALUES ($1,'image/jpeg',$2)
          ON CONFLICT (reel_id) DO UPDATE SET mime_type=EXCLUDED.mime_type,image_data=EXCLUDED.image_data,created_at=NOW()`,
         [reelId, thumb]
       );
-      await client.query(`DELETE FROM reel_video_variants WHERE reel_id=$1 AND variant='source'`, [reelId]);
       await client.query(`UPDATE reels SET mime_type='video/mp4', video_data=NULL WHERE id=$1`, [reelId]);
+      commitAttempted = true;
       await client.query('COMMIT');
-    } catch (error) { await client.query('ROLLBACK'); throw error; }
-    finally { client.release(); }
-    return { lowBytes:low.length, highBytes:high.length };
+      persisted = true;
+    } catch (error) {
+      // Once COMMIT has been attempted, its outcome may be uncertain even if
+      // a subsequent ROLLBACK succeeds. Keep R2 objects to avoid dangling DB refs.
+      if (commitAttempted) cleanupSafe = false;
+      try {
+        await client.query('ROLLBACK');
+      } catch (_rollbackError) {
+        // A failed rollback also leaves the transaction outcome uncertain.
+        cleanupSafe = false;
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    // Intentionally retain the source variant: HLS generation and linked-post
+    // Reels may still depend on it. Do not delete shared source objects here.
+    return { lowBytes: lowStat.size, highBytes: highStat.size };
   } finally {
-    await fs.promises.rm(tempDirectory, { recursive:true, force:true }).catch(()=>{});
+    if (!persisted && cleanupSafe) {
+      for (const key of [lowStorageKey, highStorageKey]) {
+        if (!key) continue;
+        try {
+          await cleanupStoredPostAsset(key);
+        } catch (cleanupError) {
+          console.error('Reel rendition object cleanup failed:', cleanupError.message);
+        }
+      }
+    }
+    await fs.promises.rm(tempDirectory, { recursive: true, force: true }).catch(() => {});
   }
 }
-
 async function ensureReelVariants(reelId) {
-  const existing = await pool.query(`SELECT variant FROM reel_video_variants WHERE reel_id=$1 AND variant IN ('low','high')`, [reelId]);
-  if (existing.rows.some(row => row.variant === 'low') && existing.rows.some(row => row.variant === 'high')) return true;
+  const existing = await pool.query(`SELECT variant,storage_key FROM reel_video_variants WHERE reel_id=$1 AND variant IN ('low','high')`, [reelId]);
+  const hasStoredVariant = name => existing.rows.some(row => row.variant === name && safePostStorageKey(row.storage_key));
+  if (hasStoredVariant('low') && hasStoredVariant('high')) return true;
   if (reelVariantJobs.has(String(reelId))) return reelVariantJobs.get(String(reelId));
   const task = async () => {
     const source = await reelLegacySource(reelId);
-    if (!source || !source.bytes.length) return false;
+    if (!source || !source.storageKey) return false;
     const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'facebook-reel-source-'));
     const ext = source.mimeType.includes('webm') ? '.webm' : '.mp4';
     const input = path.join(dir, 'input' + ext);
-    try { await fs.promises.writeFile(input, source.bytes); await transcodeReelFile(reelId, input, source.mimeType); return true; }
+    try {
+      await streamPostAssetToFile(source.storageKey,input);
+      await transcodeReelFile(reelId,input,source.mimeType); return true;
+    }
     finally { await fs.promises.rm(dir, { recursive:true, force:true }).catch(()=>{}); }
   };
   const job = reelVariantBackfillQueue.then(task,task).finally(() => reelVariantJobs.delete(String(reelId)));
   reelVariantBackfillQueue = job.catch(()=>{});
   reelVariantJobs.set(String(reelId), job);
+  return job;
+}
+
+const reelMediaProcessingJobs = new Map();
+let reelMediaProcessingQueue = Promise.resolve();
+let reelMediaProcessingQueueWaiting = 0;
+const HALO_REEL_MEDIA_QUEUE_LIMIT = haloBoundedInteger('HALO_REEL_MEDIA_QUEUE_LIMIT', 12, 1, 64);
+function processReelMedia(reelId) {
+  const key = String(reelId);
+  const active = reelMediaProcessingJobs.get(key);
+  if (active) return active;
+
+  if (reelMediaProcessingQueueWaiting >= HALO_REEL_MEDIA_QUEUE_LIMIT) {
+    return Promise.reject(haloMediaGuardError('Reel media processing is busy. Please try again shortly.'));
+  }
+
+  reelMediaProcessingQueueWaiting += 1;
+  const job = reelMediaProcessingQueue.then(async () => {
+    reelMediaProcessingQueueWaiting = Math.max(0, reelMediaProcessingQueueWaiting - 1);
+    await ensureReelHls(key);
+    return ensureReelVariants(key);
+  }).finally(() => reelMediaProcessingJobs.delete(key));
+
+  reelMediaProcessingQueue = job.catch(() => {});
+  reelMediaProcessingJobs.set(key, job);
   return job;
 }
 
@@ -11913,11 +12077,11 @@ async function ensureReelThumbnail(reelId) {
       const ready=await pool.query('SELECT mime_type,image_data FROM reel_thumbnails WHERE reel_id=$1 LIMIT 1',[reelId]);
       if(ready.rows[0])return ready.rows[0];
       source=await reelLegacySource(reelId);
-      if(!source||!source.bytes.length)return null;
+      if(!source||!source.storageKey)return null;
       dir=await fs.promises.mkdtemp(path.join(os.tmpdir(),'facebook-reel-thumb-'));
       const input=path.join(dir,source.mimeType.includes('webm')?'input.webm':'input.mp4');
       const output=path.join(dir,'thumb.jpg');
-      await fs.promises.writeFile(input,source.bytes);
+      await streamPostAssetToFile(source.storageKey,input);
       await runProcess(ffmpegBinary(),['-hide_banner','-loglevel','error','-y','-ss','0.15','-i',input,'-frames:v','1','-vf',"scale=w='min(360,iw)':h='min(640,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",'-q:v','5',output]);
       const bytes=await fs.promises.readFile(output);
       await pool.query(`INSERT INTO reel_thumbnails (reel_id,mime_type,image_data) VALUES ($1,'image/jpeg',$2)
@@ -11930,7 +12094,7 @@ async function ensureReelThumbnail(reelId) {
 }
 
 
-function receiveRequestToFile(request, destination, maximumBytes) {
+function receiveRequestToFile(request, destination, maximumBytes, options = {}) {
   return new Promise((resolve, reject) => {
     let received = 0;
     let settled = false;
@@ -11945,10 +12109,21 @@ function receiveRequestToFile(request, destination, maximumBytes) {
     request.once('aborted', () => fail(new Error('Upload was cancelled.')));
     request.once('error', fail);
     request.on('data', chunk => {
+      if (settled) return;
       received += chunk.length;
       if (received > maximumBytes) {
-        fail(Object.assign(new Error('The selected clip is too large.'), { statusCode: 413 }));
-        try { request.destroy(); } catch (_) {}
+        const error = Object.assign(new Error('The selected clip is too large.'), { statusCode: 413 });
+        if (options.drainOnLimit) {
+          // Stop writing the oversized body, but keep the connection alive so
+          // the route can return HTTP 413 while the remaining request is drained.
+          try { request.unpipe(output); } catch (_) {}
+          fail(error);
+          try { request.resume(); } catch (_) {}
+        } else {
+          // Preserve existing behavior for non-Reel upload endpoints.
+          fail(error);
+          try { request.destroy(); } catch (_) {}
+        }
       }
     });
     output.once('finish', () => {
@@ -11969,6 +12144,8 @@ const HALO_REVERSE_QUEUE_LIMIT = haloBoundedInteger('HALO_REVERSE_QUEUE_LIMIT', 
 const HALO_CAPTION_QUEUE_LIMIT = haloBoundedInteger('HALO_CAPTION_QUEUE_LIMIT', 2, 1, 16);
 let captionTranscriberPromise = null;
 const captionSpeechCache = new Map();
+let captionSpeechCacheBytes = 0;
+const HALO_CAPTION_SPEECH_CACHE_MAX_BYTES = haloBoundedInteger('HALO_CAPTION_SPEECH_CACHE_MAX_BYTES', 24 * 1024 * 1024, 4 * 1024 * 1024, 128 * 1024 * 1024);
 const captionSpeechVoices = new Map([
   ['sol', { edgeVoice: 'en-US-GuyNeural', streamVoice: 'Matthew' }],
   ['breeze', { edgeVoice: 'en-US-JennyNeural', streamVoice: 'Joanna' }]
@@ -12000,7 +12177,8 @@ function stripLeadingId3(buffer) {
 
 async function generatePublicCaptionSpeech(text, voice) {
   const chunks = splitCaptionSpeechText(text);
-  const audioParts = await Promise.all(chunks.map(async (chunk) => {
+  const audioParts = [];
+  for (const chunk of chunks) {
     const url = new URL('https://api.streamelements.com/kappa/v2/speech');
     url.searchParams.set('voice', voice);
     url.searchParams.set('text', chunk);
@@ -12008,11 +12186,11 @@ async function generatePublicCaptionSpeech(text, voice) {
       headers: { Accept: 'audio/mpeg', 'User-Agent': 'Mozilla/5.0' },
       signal: AbortSignal.timeout(30000)
     });
-    if (!speechResponse.ok) throw new Error(`Backup voice service returned ${speechResponse.status}.`);
+    if (!speechResponse.ok) throw new Error('Backup voice service returned ' + speechResponse.status + '.');
     const audio = Buffer.from(await speechResponse.arrayBuffer());
     if (!audio.length) throw new Error('Backup voice service returned empty audio.');
-    return audio;
-  }));
+    audioParts.push(audio);
+  }
   return Buffer.concat(audioParts.map((part, index) => index ? stripLeadingId3(part) : part));
 }
 
@@ -12259,29 +12437,53 @@ app.post('/api/generate-caption-speech', async (request, response) => {
   const cacheKey = crypto.createHash('sha256').update(`distinct-neural-v3\n${presetId}\n${text}`).digest('hex');
   const cached = captionSpeechCache.get(cacheKey);
   if (cached) {
+    captionSpeechCache.delete(cacheKey);
+    captionSpeechCache.set(cacheKey, cached);
     response.setHeader('Cache-Control', 'private, max-age=86400');
     response.type('audio/mpeg').send(cached);
     return;
   }
 
   try {
-    let audio;
-    try {
-      audio = await generatePublicCaptionSpeech(text, preset.streamVoice);
-    } catch (publicVoiceError) {
-      console.warn('Primary caption voice unavailable; trying the secondary neural service.', publicVoiceError?.message || publicVoiceError);
-      const edgeTts = await import('@bestcodes/edge-tts/dist/index.mjs');
-      audio = Buffer.from(await edgeTts.generateSpeech({
-        text,
-        voice: preset.edgeVoice,
-        volume: '+0%',
-        rate: '+0%',
-        pitch: '+0Hz'
-      }));
-    }
-    if (!audio.length) throw new Error('The AI voice service returned empty audio.');
-    captionSpeechCache.set(cacheKey, audio);
-    if (captionSpeechCache.size > 120) captionSpeechCache.delete(captionSpeechCache.keys().next().value);
+    const audio = await runCaptionJobExclusively(async () => {
+      const queuedCached = captionSpeechCache.get(cacheKey);
+      if (queuedCached) {
+        captionSpeechCache.delete(cacheKey);
+        captionSpeechCache.set(cacheKey, queuedCached);
+        return queuedCached;
+      }
+
+      let generatedAudio;
+      try {
+        generatedAudio = await generatePublicCaptionSpeech(text, preset.streamVoice);
+      } catch (publicVoiceError) {
+        console.warn('Primary caption voice unavailable; trying the secondary neural service.', publicVoiceError?.message || publicVoiceError);
+        const edgeTts = await import('@bestcodes/edge-tts/dist/index.mjs');
+        generatedAudio = Buffer.from(await edgeTts.generateSpeech({
+          text,
+          voice: preset.edgeVoice,
+          volume: '+0%',
+          rate: '+0%',
+          pitch: '+0Hz'
+        }));
+      }
+
+      if (!generatedAudio.length) throw new Error('The AI voice service returned empty audio.');
+      captionSpeechCache.set(cacheKey, generatedAudio);
+      captionSpeechCacheBytes += generatedAudio.length;
+
+      while (captionSpeechCache.size > 120 ||
+             captionSpeechCacheBytes > HALO_CAPTION_SPEECH_CACHE_MAX_BYTES) {
+        const oldestKey = captionSpeechCache.keys().next().value;
+        if (oldestKey === undefined) break;
+        const oldestAudio = captionSpeechCache.get(oldestKey);
+        captionSpeechCacheBytes = Math.max(0, captionSpeechCacheBytes -
+          (Buffer.isBuffer(oldestAudio) ? oldestAudio.length : 0));
+        captionSpeechCache.delete(oldestKey);
+      }
+
+      return generatedAudio;
+    });
     response.setHeader('Cache-Control', 'private, max-age=86400');
     response.type('audio/mpeg').send(audio);
   } catch (error) {
@@ -14631,20 +14833,19 @@ app.get('/api/admin/activity/media/reel/:reelId', requireApiAuth, requireOwnerAp
   try {
     await ensureDatabase();
     const result = await pool.query(
-      `SELECT r.video_data, r.mime_type, r.source_post_id, r.source_media_index, p.media_items, p.image_data
-         FROM reels r LEFT JOIN posts p ON p.id=r.source_post_id WHERE r.id=$1 LIMIT 1`,
-      [request.params.reelId]);
+      `SELECT r.id, COALESCE(v.mime_type, r.mime_type, 'video/mp4') AS mime_type, v.storage_key
+         FROM reels r
+         LEFT JOIN reel_video_variants v ON v.reel_id = r.id AND v.variant = 'source'
+        WHERE r.id = $1 LIMIT 1`,
+      [request.params.reelId]
+    );
     if (!result.rowCount) return response.status(404).json({ error: 'Reel not found.' });
-    const row = result.rows[0];
-    let data = row.video_data || '';
-    let mime = row.mime_type || 'video/mp4';
-    if (row.source_post_id) {
-      const media = normalizeStoredPostMedia(row.media_items, row.image_data || '');
-      const item = media[Number(row.source_media_index || 0)];
-      data = item?.data || '';
-      mime = item?.mimeType || mime;
-    }
-    return sendAdminActivityDataUri(request, response, data, mime);
+    const storageKey = safePostStorageKey(result.rows[0].storage_key);
+    if (!storageKey) return response.status(404).json({ error: 'Media not found.' });
+    return await sendPostAssetRange(
+      request, response, storageKey, result.rows[0].mime_type || 'video/mp4',
+      'private, max-age=3600'
+    );
   } catch (error) {
     console.error('Admin reel activity media failed:', error.message);
     return response.status(500).json({ error: 'Could not load reel.' });
@@ -14831,15 +15032,28 @@ app.get('/api/manage-posts/media/post/:postId/:mediaIndex', requireApiAuth, asyn
   }catch(error){console.error('Manage post media failed:',error.message);return response.status(500).end();}
 });
 app.get('/api/manage-posts/media/reel/:reelId', requireApiAuth, async (request,response)=>{
-  if(!validNumericId(request.params.reelId))return response.status(400).end();
-  try{
-    const result=await pool.query(`SELECT r.video_data,r.mime_type,r.source_post_id,r.source_media_index,p.media_items,p.image_data FROM reels r LEFT JOIN posts p ON p.id=r.source_post_id WHERE r.id=$1 AND r.user_id=$2 LIMIT 1`,[request.params.reelId,request.user.id]);
-    if(!result.rowCount)return response.status(404).end();
-    const row=result.rows[0];let data=row.video_data || '';let mime=row.mime_type || 'video/mp4';
-    if(row.source_post_id){const media=normalizeStoredPostMedia(row.media_items,row.image_data || '');const item=media[Number(row.source_media_index||0)];data=item?.data||'';mime=item?.mimeType||mime;}
-    return sendAdminActivityDataUri(request,response,data,mime);
-  }catch(error){console.error('Manage reel media failed:',error.message);return response.status(500).end();}
+  if (!validNumericId(request.params.reelId)) return response.status(400).end();
+  try {
+    const result = await pool.query(
+      `SELECT COALESCE(v.mime_type, r.mime_type, 'video/mp4') AS mime_type, v.storage_key
+         FROM reels r
+         LEFT JOIN reel_video_variants v ON v.reel_id = r.id AND v.variant = 'source'
+        WHERE r.id = $1 AND r.user_id = $2 LIMIT 1`,
+      [request.params.reelId, request.user.id]
+    );
+    if (!result.rowCount) return response.status(404).end();
+    const storageKey = safePostStorageKey(result.rows[0].storage_key);
+    if (!storageKey) return response.status(404).end();
+    return await sendPostAssetRange(
+      request, response, storageKey, result.rows[0].mime_type || 'video/mp4',
+      'private, max-age=3600'
+    );
+  } catch (error) {
+    console.error('Manage Reel media failed:', error.message);
+    return response.status(500).end();
+  }
 });
+
 app.get('/api/manage-posts/media/story/:storyId', requireApiAuth, async (request,response)=>{
   if(!validNumericId(request.params.storyId))return response.status(400).end();
   try{const result=await pool.query('SELECT image_data FROM stories WHERE id=$1 AND user_id=$2 LIMIT 1',[request.params.storyId,request.user.id]);if(!result.rowCount)return response.status(404).end();return sendAdminActivityDataUri(request,response,result.rows[0].image_data,'image/jpeg');}
@@ -16378,6 +16592,11 @@ app.post('/api/posts', requireApiAuth, async (request, response) => {
       await client.query('COMMIT');
     }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
     await createMentionNotifications(pool,request.user.id,body,post.id);
+    for (const linked of post._linkedReels || []) {
+      processReelMedia(linked.id).catch(error => console.error(
+        `[HaloReel] linked-post processing failed reel=${linked.id}: ${error.message}`
+      ));
+    }
     response.status(201).json({ok:true,post:{...post,image:'',contentKey:`post:${post.id}`,media:normalizeStoredPostMedia(post.media_items,'').map((item,index)=>({type:item.type||'',mimeType:item.mimeType||'',name:item.name||'',caption:item.caption||'',url:`/api/posts/${encodeURIComponent(String(post.id))}/media/${index}`,...(item.editData&&typeof item.editData==='object'?{editData:item.editData}:{}),reelId:post._linkedReels?.find(link=>link.mediaIndex===index)?.id||'',contentKey:`post:${post.id}:media:${index}`})),extras:publicPostExtras(post.post_extras,post.id)}});
   }catch(error){console.error('Post creation failed:',error.message);response.status(500).json({error:error.message&&error.message.includes('upload')?error.message:'Could not save the post.'});}
 });
@@ -16464,6 +16683,11 @@ app.patch('/api/posts/:postId', requireApiAuth, async (request, response) => {
       client.release();
     }
 
+    for (const linked of post._linkedReels || []) {
+      processReelMedia(linked.id).catch(error => console.error(
+        `[HaloReel] linked-post processing failed reel=${linked.id}: ${error.message}`
+      ));
+    }
     response.json({ ok: true, post: {
       ...post,
       image: '',
@@ -18974,7 +19198,7 @@ app.get('/api/reels/:reelId/hls/status', requireApiAuth, async (request,response
 app.get('/api/reels/:reelId/hls/master.m3u8', requireApiAuth, async (request,response)=>{
   const reelId=request.params.reelId;if(!validNumericId(reelId))return response.status(400).end();
   try{await ensureDatabase();const access=await reelViewerAccess(reelId,request.user.id);if(!access.exists)return response.status(404).end();if(!access.allowed)return response.status(403).end();
-    const file=path.join(reelHlsDirectory(reelId),'master.m3u8');if(!fs.existsSync(file)){ensureReelHls(reelId).catch(()=>{});return response.status(404).end();}
+    const file=path.join(reelHlsDirectory(reelId),'master.m3u8');if(!fs.existsSync(file)){processReelMedia(reelId).catch(error => console.error(`[HaloReel] media processing failed reel=${reelId}: ${error.message}`));return response.status(404).end();}
     response.setHeader('Content-Type','application/vnd.apple.mpegurl');response.setHeader('Cache-Control','private, max-age=31536000, immutable');return response.sendFile(file);
   }catch(error){console.error('Reel HLS master failed:',error.message);response.status(500).end();}
 });
@@ -19001,10 +19225,7 @@ app.get('/api/reels/:reelId/video', requireApiAuth, async (request, response) =>
     if(await sendReelVariantRange(request,response,reelId,quality))return;
     if(quality==='high'&&await sendReelVariantRange(request,response,reelId,'low'))return;
     if(await sendReelVariantRange(request,response,reelId,'source'))return;
-    /* Pre-v55 legacy rows can still be served, but never trigger FFmpeg here. */
-    const source=await reelLegacySource(reelId);
-    if(!source)return response.status(404).json({error:'Video media not found.'});
-    return sendBufferRange(request,response,source.bytes,source.mimeType,'private, max-age=31536000, immutable');
+    return response.status(404).json({error:'Video media not found.'});
   }catch(error){console.error('Reel video load failed:',error.message);response.status(500).json({error:'Could not load the reel video.'});}
 });
 
@@ -19072,30 +19293,56 @@ app.post('/api/reel-uploads', requireApiAuth, async (request,response)=>{
   }catch(error){console.error('Reel upload init failed:',error.message);response.status(500).json({error:'Could not start the Reel upload.'});}
 });
 
-app.put('/api/reel-uploads/:uploadId', requireApiAuth, express.raw({type:['video/*','application/octet-stream'],limit:'60mb'}), async (request,response)=>{
+app.put('/api/reel-uploads/:uploadId', requireApiAuth, async (request,response)=>{
   const uploadId=String(request.params.uploadId||'');
-  if(!/^[a-f0-9]{48}$/.test(uploadId))return response.status(400).json({error:'Invalid Reel upload.'});
-  const bytes=Buffer.isBuffer(request.body)?request.body:Buffer.from(request.body||'');
-  if(bytes.length<1024||bytes.length>60*1024*1024)return response.status(400).json({error:'The posted Reel must be 60 MB or smaller.'});
+  if(!/^[a-f0-9]{48}$/.test(uploadId)){request.resume();return response.status(400).json({error:'Invalid Reel upload.'});}
+  const contentType=String(request.headers['content-type']||'').toLowerCase().split(';')[0].trim();
+  if(!(contentType.startsWith('video/')||contentType==='application/octet-stream')){request.resume();return response.status(415).json({error:'Choose a supported video upload.'});}
+  const declaredLength=Number(request.headers['content-length']||0);
+  if(Number.isFinite(declaredLength)&&declaredLength>60*1024*1024){request.resume();return response.status(413).json({error:'The posted Reel must be 60 MB or smaller.'});}
+  let tempDir='',inputPath='',storageKey='',persisted=false,commitAttempted=false,cleanupSafe=true;
   try{
     await ensureDatabase();
+    const preflight=await pool.query('SELECT mime_type FROM reel_upload_sessions WHERE id=$1 AND user_id=$2 AND expires_at>NOW() LIMIT 1',[uploadId,request.user.id]);
+    if(!preflight.rowCount){request.resume();return response.status(404).json({error:'This Reel upload expired. Try posting again.'});}
+    assertHaloMediaMemoryAvailable('Reel upload');
+    tempDir=await fs.promises.mkdtemp(path.join(os.tmpdir(),'halo-reel-upload-'));
+    inputPath=path.join(tempDir,'source.upload');
+    const byteLength=await receiveRequestToFile(request,inputPath,60*1024*1024,{drainOnLimit:true});
+    const mimeType=String(preflight.rows[0].mime_type||'video/mp4');
+    storageKey=crypto.randomBytes(24).toString('hex');
+    await storePostAssetFileFromPath(storageKey,inputPath,mimeType,byteLength);
+
     const client=await pool.connect();
     try{
       await client.query('BEGIN');
       const sessionResult=await client.query('SELECT * FROM reel_upload_sessions WHERE id=$1 AND user_id=$2 AND expires_at>NOW() FOR UPDATE',[uploadId,request.user.id]);
       const session=sessionResult.rows[0];
-      if(!session){await client.query('ROLLBACK');return response.status(404).json({error:'This Reel upload expired. Try posting again.'});}
+      if(!session)throw Object.assign(new Error('This Reel upload expired. Try posting again.'),{statusCode:404});
       const result=await client.query(`INSERT INTO reels (user_id,caption,video_data,mime_type,visibility,allow_comments,edit_data)
         VALUES ($1,$2,NULL,$3,$4,$5,$6) RETURNING id,user_id,caption,mime_type,visibility,allow_comments,edit_data,created_at`,
         [request.user.id,session.caption,session.mime_type,session.visibility,session.allow_comments,session.edit_data]);
       const reel=result.rows[0];
-      await storeReelVariant(client,reel.id,'source',session.mime_type,bytes);
+      await storeReelVariantReference(client,reel.id,'source',session.mime_type,byteLength,storageKey);
       await client.query('DELETE FROM reel_upload_sessions WHERE id=$1',[uploadId]);
+      commitAttempted=true;
       await client.query('COMMIT');
+      persisted=true;
       response.status(201).json({ok:true,reel:{...reel,contentKey:`reel:${reel.id}`,video:reelVideoUrl(reel.id,'high'),videoHigh:reelVideoUrl(reel.id,'high'),videoLow:reelVideoUrl(reel.id,'low'),thumbnailUrl:reelThumbnailUrl(reel.id),hlsReady:false,hls:''}});
-      ensureReelHls(reel.id).catch(()=>{});
-    }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
-  }catch(error){console.error('Reel binary upload failed:',error.message);response.status(500).json({error:'Could not upload the Reel. Try again.'});}
+      processReelMedia(reel.id).catch(error => console.error(`[HaloReel] media processing failed reel=${reel.id}: ${error.message}`));
+    }catch(error){try{await client.query('ROLLBACK');}catch(_rollbackError){cleanupSafe=false;}if(commitAttempted)cleanupSafe=false;throw error;}finally{client.release();}
+  }catch(error){
+    if(storageKey&&!persisted&&cleanupSafe){try{await cleanupStoredPostAsset(storageKey);}catch(cleanupError){console.error('Reel upload object cleanup failed:',cleanupError.message);}}
+    const status=Number(error.statusCode||error.status||0);
+    console.error('Reel binary upload failed:',error.message);
+    if(!request.complete&& !request.destroyed)request.resume();
+    if(status===404)return response.status(404).json({error:'This Reel upload expired. Try posting again.'});
+    if(status===413)return response.status(413).json({error:'The posted Reel must be 60 MB or smaller.'});
+    if(status>=400&&status<600)return response.status(status).json({error:error.message||'Could not upload the Reel. Try again.'});
+    response.status(500).json({error:'Could not upload the Reel. Try again.'});
+  }finally{
+    if(tempDir)await fs.promises.rm(tempDir,{recursive:true,force:true}).catch(()=>{});
+  }
 });
 
 app.put('/api/reels/:reelId/thumbnail', requireApiAuth, express.raw({type:'image/*',limit:'1mb'}), async (request,response)=>{
@@ -19116,52 +19363,8 @@ app.put('/api/reels/:reelId/thumbnail', requireApiAuth, express.raw({type:'image
 });
 
 app.post('/api/reels', requireApiAuth, async (request, response) => {
-  let caption='',visibility='public',allowComments=true,editData={},mimeType='',sourceBytes=null,thumbnailBytes=null,thumbnailMimeType='image/jpeg';
-  try{
-    const contentType=String(request.headers['content-type']||'');
-    if(contentType.startsWith('multipart/form-data')){
-      const webRequest=new Request('http://localhost/api/reels',{method:'POST',headers:{'content-type':contentType},body:Readable.toWeb(request),duplex:'half'});
-      const form=await webRequest.formData();
-      const file=form.get('video');
-      if(!file||typeof file.arrayBuffer!=='function')return response.status(400).json({error:'Choose a video.'});
-      sourceBytes=Buffer.from(await file.arrayBuffer());
-      if(sourceBytes.length<1024||sourceBytes.length>60*1024*1024)return response.status(400).json({error:'The posted Reel must be 60 MB or smaller.'});
-      mimeType=String(file.type||form.get('mimeType')||'video/mp4').toLowerCase();
-      const thumbnail=form.get('thumbnail');
-      if(thumbnail&&typeof thumbnail.arrayBuffer==='function'){
-        const thumbnailType=String(thumbnail.type||'image/jpeg').toLowerCase();
-        if(/^image\/(jpeg|png|webp)$/.test(thumbnailType)){
-          const bytes=Buffer.from(await thumbnail.arrayBuffer());
-          if(bytes.length>0&&bytes.length<=768*1024){thumbnailBytes=bytes;thumbnailMimeType=thumbnailType;}
-        }
-      }
-      caption=String(form.get('caption')||'').trim();visibility=String(form.get('visibility')||'public').toLowerCase();
-      allowComments=String(form.get('allowComments')||'true')!=='false';
-      try{editData=JSON.parse(String(form.get('editData')||'{}'));}catch(_error){editData={};}
-    }else{
-      const video=request.body?.video||'';const decoded=dataUrlBuffer(video,'video');
-      if(!decoded||decoded.bytes.length>60*1024*1024)return response.status(400).json({error:'The posted Reel must be 60 MB or smaller.'});
-      sourceBytes=decoded.bytes;mimeType=String(request.body?.mimeType||decoded.mimeType).toLowerCase();caption=String(request.body?.caption||'').trim();
-      visibility=String(request.body?.visibility||'public').toLowerCase();allowComments=request.body?.allowComments!==false;editData=request.body?.editData||{};
-    }
-    if(caption.length>500)return response.status(400).json({error:'Reel caption is too long.'});
-    if(!['public','followers','friends','only-me'].includes(visibility))return response.status(400).json({error:'Choose a valid Reel audience.'});
-    await ensureDatabase();
-    const normalized=normalizeReelEdits(editData);normalized.previewPoster='';
-    const result=await pool.query(`INSERT INTO reels (user_id,caption,video_data,mime_type,visibility,allow_comments,edit_data)
-      VALUES ($1,$2,NULL,$3,$4,$5,$6) RETURNING id,user_id,caption,mime_type,visibility,allow_comments,edit_data,created_at`,
-      [request.user.id,caption,mimeType,visibility,allowComments,normalized]);
-    const reel=result.rows[0];
-    await storeReelVariant(pool,reel.id,'source',mimeType,sourceBytes);
-    if(thumbnailBytes){
-      await pool.query(`INSERT INTO reel_thumbnails (reel_id,mime_type,image_data) VALUES ($1,$2,$3)
-        ON CONFLICT (reel_id) DO UPDATE SET mime_type=EXCLUDED.mime_type,image_data=EXCLUDED.image_data,created_at=NOW()`,
-        [reel.id,thumbnailMimeType,thumbnailBytes]);
-    }
-    sourceBytes=null;thumbnailBytes=null;
-    response.status(201).json({ok:true,processing:false,reel:{...reel,contentKey:`reel:${reel.id}`,video:reelVideoUrl(reel.id,'high'),videoHigh:reelVideoUrl(reel.id,'high'),videoLow:reelVideoUrl(reel.id,'low'),thumbnailUrl:reelThumbnailUrl(reel.id),hlsReady:false,hls:''}});
-    ensureReelHls(reel.id).catch(()=>{});
-  }catch(error){console.error('Reel creation failed:',error);response.status(500).json({error:'Could not publish the reel.'});}
+  request.resume();
+  return response.status(410).json({ error: 'This upload endpoint is retired. Use /api/reel-uploads.' });
 });
 
 app.patch('/api/reels/:reelId', requireApiAuth, async (request, response) => {
