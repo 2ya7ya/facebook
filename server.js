@@ -11513,11 +11513,14 @@ function runProcess(command, args, options = {}) {
     if (child.stderr) {
       child.stderr.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-65536); });
     }
-    child.once('error', error => finish(
-      memoryPressureTriggered
-        ? haloMediaGuardError('FFmpeg was stopped because server memory pressure became critical. MP4 fallback remains available.', 'MEDIA_MEMORY_PRESSURE', 503)
-        : error
-    ));
+    let processError = null;
+    child.once('error', error => {
+      if (!processError) processError = error;
+      console.error(
+        `[HaloMediaProcess] child error command=${String(command)}: ${error && error.message ? error.message : error}`
+      );
+      // Wait for "close" before settling; it confirms the child has stopped.
+    });
     child.once('close', (code, signal) => {
       closed = true;
       if (memoryPressureTriggered) {
@@ -11531,7 +11534,7 @@ function runProcess(command, args, options = {}) {
       } else if (code === 0) {
         finish();
       } else {
-        finish(new Error(stderr || `Process exited with code ${code}${signal ? ` (${signal})` : ''}`));
+        finish(processError || new Error(stderr || `Process exited with code ${code}${signal ? ` (${signal})` : ''}`));
       }
     });
 
@@ -12031,13 +12034,15 @@ async function transcodeReelFile(reelId, inputPath, sourceMimeType) {
     const ffmpeg = ffmpegBinary();
     assertReelVariantMemoryAvailable('Reel MP4 rendition encoding');
     await runProcess(ffmpeg, [
-      '-hide_banner','-loglevel','error','-y','-i',inputPath,
+      '-hide_banner','-loglevel','error','-y',
+      '-threads','1','-filter_threads','1','-filter_complex_threads','1',
+      '-i',inputPath,
       '-filter_complex',
       "[0:v]split=2[vlo0][vhi0];[vlo0]scale=w='min(960,iw)':h='min(960,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2[vlo];[vhi0]scale=w='min(1280,iw)':h='min(1280,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2[vhi]",
-      '-map','[vlo]','-map','0:a:0?','-c:v','libx264','-preset','veryfast','-profile:v','main','-pix_fmt','yuv420p',
+      '-map','[vlo]','-map','0:a:0?','-threads:v','1','-c:v','libx264','-preset','veryfast','-profile:v','main','-pix_fmt','yuv420p',
       '-b:v','320k','-maxrate','420k','-bufsize','840k','-force_key_frames','expr:gte(t,n_forced*2)',
       '-c:a','aac','-b:a','64k','-ac','2','-movflags','+faststart', lowPath,
-      '-map','[vhi]','-map','0:a:0?','-c:v','libx264','-preset','veryfast','-profile:v','main','-pix_fmt','yuv420p',
+      '-map','[vhi]','-map','0:a:0?','-threads:v','1','-c:v','libx264','-preset','veryfast','-profile:v','main','-pix_fmt','yuv420p',
       '-b:v','720k','-maxrate','900k','-bufsize','1800k','-force_key_frames','expr:gte(t,n_forced*2)',
       '-c:a','aac','-b:a','96k','-ac','2','-movflags','+faststart', highPath
     ], { memoryPressureRatio: 0.82, memoryPollIntervalMs: 500, killGraceMs: 1000 });
