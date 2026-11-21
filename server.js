@@ -19225,7 +19225,17 @@ app.get('/api/reels/:reelId/video', requireApiAuth, async (request, response) =>
     if(quality==='high'&&await sendReelVariantRange(request,response,reelId,'low'))return;
     if(await sendReelVariantRange(request,response,reelId,'source'))return;
     return response.status(404).json({error:'Video media not found.'});
-  }catch(error){console.error('Reel video load failed:',error.message);response.status(500).json({error:'Could not load the reel video.'});}
+  } catch (error) {
+    console.error('Reel video load failed:', error && error.message ? error.message : error);
+
+    // Do not send a second response after streaming has started or the client disconnected.
+    if (request.aborted || response.headersSent || response.writableEnded || response.destroyed) {
+      if (!response.destroyed && !response.writableEnded) response.destroy();
+      return;
+    }
+
+    return response.status(500).json({error:'Could not load the reel video.'});
+  }
 });
 
 
