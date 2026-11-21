@@ -11416,6 +11416,26 @@ function haloMediaGuardError(message, code = 'MEDIA_QUEUE_FULL', statusCode = 50
   return error;
 }
 
+const HALO_REEL_HLS_MEMORY_START_RATIO = (() => {
+  const value = Number(process.env.HALO_REEL_HLS_MEMORY_START_RATIO);
+  return Number.isFinite(value) ? Math.max(0.55, Math.min(0.84, value)) : 0.72;
+})();
+
+function assertReelHlsMemoryAvailable(workLabel) {
+  const snapshot = haloMemoryLimitSnapshot();
+  const threshold = HALO_REEL_HLS_MEMORY_START_RATIO;
+  if (snapshot.ratio !== null && snapshot.ratio >= threshold) {
+    const percent = (snapshot.ratio * 100).toFixed(1);
+    console.warn(`[HaloReelHLS] deferring ${workLabel}: memory pressure ${percent}% (limit ${(threshold * 100).toFixed(0)}%)`);
+    throw haloMediaGuardError(
+      'Reel HLS generation was deferred because server memory is under pressure. MP4 fallback remains available.',
+      'MEDIA_MEMORY_PRESSURE',
+      503
+    );
+  }
+  return snapshot;
+}
+
 function assertHaloMediaMemoryAvailable(workLabel) {
   const snapshot = haloMemoryLimitSnapshot();
   if (snapshot.ratio !== null && snapshot.ratio >= HALO_MEDIA_MEMORY_PRESSURE_RATIO) {
@@ -11443,6 +11463,14 @@ function runProcess(command, args, options = {}) {
   const killGraceMs = Number.isFinite(requestedKillGrace) && requestedKillGrace > 0
     ? Math.max(10, Math.min(30 * 1000, Math.floor(requestedKillGrace)))
     : HALO_MEDIA_PROCESS_KILL_GRACE_MS;
+  const requestedMemoryRatio = Number(options && options.memoryPressureRatio);
+  const memoryPressureRatio = Number.isFinite(requestedMemoryRatio)
+    ? Math.max(0.50, Math.min(0.97, requestedMemoryRatio))
+    : null;
+  const requestedMemoryPoll = Number(options && options.memoryPollIntervalMs);
+  const memoryPollIntervalMs = Number.isFinite(requestedMemoryPoll)
+    ? Math.max(250, Math.min(5000, Math.floor(requestedMemoryPoll)))
+    : 1000;
   const queuedAt = Date.now();
   const execute = () => new Promise((resolve, reject) => {
     haloChildProcessQueueWaiting = Math.max(0, haloChildProcessQueueWaiting - 1);
@@ -11462,12 +11490,15 @@ function runProcess(command, args, options = {}) {
     let closed = false;
     let timeoutTimer = null;
     let killTimer = null;
+    let memoryMonitorTimer = null;
+    let memoryPressureTriggered = false;
 
     const finish = error => {
       if (settled) return;
       settled = true;
       if (timeoutTimer) clearTimeout(timeoutTimer);
       if (killTimer) clearTimeout(killTimer);
+      if (memoryMonitorTimer) clearInterval(memoryMonitorTimer);
       if (error) reject(error);
       else resolve();
     };
@@ -11482,10 +11513,20 @@ function runProcess(command, args, options = {}) {
     if (child.stderr) {
       child.stderr.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-65536); });
     }
-    child.once('error', error => finish(error));
+    child.once('error', error => finish(
+      memoryPressureTriggered
+        ? haloMediaGuardError('FFmpeg was stopped because server memory pressure became critical. MP4 fallback remains available.', 'MEDIA_MEMORY_PRESSURE', 503)
+        : error
+    ));
     child.once('close', (code, signal) => {
       closed = true;
-      if (timedOut) {
+      if (memoryPressureTriggered) {
+        finish(haloMediaGuardError(
+          'FFmpeg was stopped because server memory pressure became critical. MP4 fallback remains available.',
+          'MEDIA_MEMORY_PRESSURE',
+          503
+        ));
+      } else if (timedOut) {
         finish(haloMediaGuardError(`FFmpeg exceeded its ${Math.round(timeoutMs / 1000)} second time limit and was stopped. ${stderr}`.trim(), 'MEDIA_PROCESS_TIMEOUT', 504));
       } else if (code === 0) {
         finish();
@@ -11507,6 +11548,37 @@ function runProcess(command, args, options = {}) {
       if (killTimer.unref) killTimer.unref();
     }, timeoutMs);
     if (timeoutTimer.unref) timeoutTimer.unref();
+
+    if (memoryPressureRatio !== null) {
+      memoryMonitorTimer = setInterval(() => {
+        if (settled || closed || memoryPressureTriggered) return;
+
+        const snapshot = haloMemoryLimitSnapshot();
+        if (snapshot.ratio === null || snapshot.ratio < memoryPressureRatio) return;
+
+        memoryPressureTriggered = true;
+        if (timeoutTimer) {
+          clearTimeout(timeoutTimer);
+          timeoutTimer = null;
+        }
+
+        console.error(
+          `[HaloMediaProcess] memory pressure ${(snapshot.ratio * 100).toFixed(1)}%; stopping command=${String(command)}`
+        );
+
+        try { child.kill('SIGTERM'); } catch (_error) {}
+
+        killTimer = setTimeout(() => {
+          if (closed || settled) return;
+          console.error('[HaloMediaProcess] memory-pressure force-kill after grace period');
+          try { child.kill('SIGKILL'); } catch (_error) {}
+        }, killGraceMs);
+
+        if (killTimer.unref) killTimer.unref();
+      }, memoryPollIntervalMs);
+
+      if (memoryMonitorTimer.unref) memoryMonitorTimer.unref();
+    }
   });
 
   haloChildProcessQueueWaiting += 1;
@@ -11604,6 +11676,7 @@ async function buildReelHls(reelId) {
       {name:'720',height:720,v:'1200k',max:'1600k',buf:'3200k',a:'96k',bandwidth:1696000},
     ];
     for (const rendition of renditions) {
+      assertReelHlsMemoryAvailable(`Reel HLS ${rendition.name}p rendition`);
       const dir=path.join(tempDir,rendition.name);await fs.promises.mkdir(dir,{recursive:true});
       console.log(`[HaloReelHLS] rendition-start reel=${reelId} quality=${rendition.name} ${haloMemorySnapshot()}`);
       await runProcess(ffmpegBinary(),[
@@ -11616,7 +11689,7 @@ async function buildReelHls(reelId) {
         '-f','hls','-hls_time','2','-hls_playlist_type','vod','-hls_flags','independent_segments',
         '-hls_segment_type','fmp4','-hls_fmp4_init_filename','init.mp4',
         '-hls_segment_filename',path.join(dir,'seg_%05d.m4s'),path.join(dir,'index.m3u8')
-      ]);
+      ], { memoryPressureRatio: 0.82, memoryPollIntervalMs: 500, killGraceMs: 1000 });
       console.log(`[HaloReelHLS] rendition-done reel=${reelId} quality=${rendition.name} ${haloMemorySnapshot()}`);
     }
     await fs.promises.unlink(source.inputPath);
@@ -11738,6 +11811,7 @@ async function sendReelVariantRange(request, response, reelId, variantName) {
 }
 
 const reelVariantJobs = new Map();
+const reelVariantRetryAfter = new Map();
 const reelThumbnailJobs = new Map();
 let reelVariantBackfillQueue = Promise.resolve();
 let reelThumbnailActive = 0;
@@ -11916,6 +11990,32 @@ async function cleanupStoredPostAsset(storageKey) {
   try{await fs.promises.unlink(postAssetPath(key));}catch(error){if(error.code!=='ENOENT')throw error;}
 }
 
+
+const HALO_REEL_VARIANT_MEMORY_START_RATIO = (() => {
+  const value = Number(process.env.HALO_REEL_VARIANT_MEMORY_START_RATIO);
+  return Number.isFinite(value) ? Math.max(0.55, Math.min(0.84, value)) : 0.72;
+})();
+
+const HALO_REEL_VARIANT_RETRY_DELAY_MS = 60000;
+
+function assertReelVariantMemoryAvailable(workLabel) {
+  const snapshot = haloMemoryLimitSnapshot();
+  const threshold = HALO_REEL_VARIANT_MEMORY_START_RATIO;
+
+  if (snapshot.ratio !== null && snapshot.ratio >= threshold) {
+    const percent = (snapshot.ratio * 100).toFixed(1);
+    console.warn(
+      `[HaloReelVariants] deferring ${workLabel}: memory pressure ${percent}% (limit ${(threshold * 100).toFixed(0)}%)`
+    );
+    throw haloMediaGuardError(
+      'Reel MP4 conversion was deferred because server memory is under pressure. Original video remains available.',
+      'MEDIA_MEMORY_PRESSURE',
+      503
+    );
+  }
+  return snapshot;
+}
+
 // HALO_REEL_R2_VARIANTS_STREAMING_V1
 async function transcodeReelFile(reelId, inputPath, sourceMimeType) {
   const tempDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'facebook-reel-encode-'));
@@ -11929,6 +12029,7 @@ async function transcodeReelFile(reelId, inputPath, sourceMimeType) {
   let commitAttempted = false;
   try {
     const ffmpeg = ffmpegBinary();
+    assertReelVariantMemoryAvailable('Reel MP4 rendition encoding');
     await runProcess(ffmpeg, [
       '-hide_banner','-loglevel','error','-y','-i',inputPath,
       '-filter_complex',
@@ -11939,12 +12040,13 @@ async function transcodeReelFile(reelId, inputPath, sourceMimeType) {
       '-map','[vhi]','-map','0:a:0?','-c:v','libx264','-preset','veryfast','-profile:v','main','-pix_fmt','yuv420p',
       '-b:v','720k','-maxrate','900k','-bufsize','1800k','-force_key_frames','expr:gte(t,n_forced*2)',
       '-c:a','aac','-b:a','96k','-ac','2','-movflags','+faststart', highPath
-    ]);
+    ], { memoryPressureRatio: 0.82, memoryPollIntervalMs: 500, killGraceMs: 1000 });
+    assertReelVariantMemoryAvailable('Reel thumbnail extraction');
     await runProcess(ffmpeg, [
       '-hide_banner','-loglevel','error','-y','-ss','0.15','-i',lowPath,
       '-frames:v','1','-vf',"scale=w='min(360,iw)':h='min(640,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
       '-q:v','5',thumbPath
-    ]);
+    ], { memoryPressureRatio: 0.82, memoryPollIntervalMs: 500, killGraceMs: 1000 });
 
     // Keep only the small thumbnail in memory. Video renditions stay file-backed.
     const [lowStat, highStat, thumb] = await Promise.all([
@@ -12006,25 +12108,73 @@ async function transcodeReelFile(reelId, inputPath, sourceMimeType) {
   }
 }
 async function ensureReelVariants(reelId) {
-  const existing = await pool.query(`SELECT variant,storage_key FROM reel_video_variants WHERE reel_id=$1 AND variant IN ('low','high')`, [reelId]);
-  const hasStoredVariant = name => existing.rows.some(row => row.variant === name && safePostStorageKey(row.storage_key));
-  if (hasStoredVariant('low') && hasStoredVariant('high')) return true;
-  if (reelVariantJobs.has(String(reelId))) return reelVariantJobs.get(String(reelId));
+  const key = String(reelId);
+  const existing = await pool.query(
+    `SELECT variant,storage_key FROM reel_video_variants
+      WHERE reel_id=$1 AND variant IN ('low','high')`,
+    [reelId]
+  );
+
+  const hasStoredVariant = name =>
+    existing.rows.some(row =>
+      row.variant === name && safePostStorageKey(row.storage_key)
+    );
+
+  if (hasStoredVariant('low') && hasStoredVariant('high')) {
+    reelVariantRetryAfter.delete(key);
+    return true;
+  }
+
+  if ((reelVariantRetryAfter.get(key) || 0) > Date.now()) {
+    return false;
+  }
+
+  if (reelVariantJobs.has(key)) {
+    return reelVariantJobs.get(key);
+  }
+
   const task = async () => {
+    assertReelVariantMemoryAvailable('Reel MP4 variant generation');
+
     const source = await reelLegacySource(reelId);
     if (!source || !source.storageKey) return false;
-    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'facebook-reel-source-'));
+
+    const dir = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'facebook-reel-source-')
+    );
     const ext = source.mimeType.includes('webm') ? '.webm' : '.mp4';
     const input = path.join(dir, 'input' + ext);
+
     try {
-      await streamPostAssetToFile(source.storageKey,input);
-      await transcodeReelFile(reelId,input,source.mimeType); return true;
+      await streamPostAssetToFile(source.storageKey, input);
+      assertReelVariantMemoryAvailable('Reel MP4 conversion');
+      await transcodeReelFile(reelId, input, source.mimeType);
+      reelVariantRetryAfter.delete(key);
+      return true;
+    } finally {
+      await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
     }
-    finally { await fs.promises.rm(dir, { recursive:true, force:true }).catch(()=>{}); }
   };
-  const job = reelVariantBackfillQueue.then(task,task).finally(() => reelVariantJobs.delete(String(reelId)));
-  reelVariantBackfillQueue = job.catch(()=>{});
-  reelVariantJobs.set(String(reelId), job);
+
+  const job = reelVariantBackfillQueue
+    .then(task, task)
+    .catch(error => {
+      if (error && error.code === 'MEDIA_MEMORY_PRESSURE') {
+        reelVariantRetryAfter.set(
+          key,
+          Date.now() + HALO_REEL_VARIANT_RETRY_DELAY_MS
+        );
+        console.warn(
+          `[HaloReelVariants] retry deferred reel=${key} delayMs=${HALO_REEL_VARIANT_RETRY_DELAY_MS} ${haloMemorySnapshot()}`
+        );
+        return false;
+      }
+      throw error;
+    })
+    .finally(() => reelVariantJobs.delete(key));
+
+  reelVariantBackfillQueue = job.catch(() => {});
+  reelVariantJobs.set(key, job);
   return job;
 }
 
